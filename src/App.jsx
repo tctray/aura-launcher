@@ -1060,8 +1060,10 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       <div className="ss">
         <div className="ss-t">ABOUT</div>
         <div className="ss-card">
-          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.0.0</div></div></div>
-          <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
+<div className="sr">
+  <div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.0.0</div></div>
+  <UpdateButton/>
+</div>          <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>
     </div>
@@ -1091,7 +1093,7 @@ function UpdateButton() {
   if (status === "latest") return <span style={{fontSize:11,color:"var(--ac)"}}>Up to date ✓</span>;
   if (status === "error") return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Retry</button>;
   if (status === "update") return (
-    <button className="btn-p" onClick={()=>window.electronAPI.openExternal("https://github.com/YOUR_GITHUB_USERNAME/aura/releases/latest")}
+    <button className="btn-p" onClick={()=>window.electronAPI.openExternal("https://github.com/tctray/aura-launcher/releases/latest")}
       style={{fontSize:11,padding:"5px 14px",animation:"pulse 2s infinite"}}>
       v{latest} Available ↓
     </button>
@@ -1301,14 +1303,7 @@ export default function App(){
           <div className="splash-logo">AURA</div>
           <div className="splash-sub">Your Game Library</div>
           <div className="splash-sub">Developed By: Taurrean Traylor</div>
-          <div className="sr">
-  <div>
-    <div className="sr-l">App Version</div>
-    <div className="sr-s">AURA v1.0.0</div>
-  </div>
-  <UpdateButton/>
-  
-</div>
+
           <div className="splash-bar"><div className="splash-fill"/></div>
         </div>
       )}

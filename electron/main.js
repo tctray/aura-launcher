@@ -1,4 +1,11 @@
-process.on('uncaughtException', (e) => {
+// Load .env manually
+const _env = require("fs").readFileSync(require("path").join(__dirname, "../.env"), "utf8");
+_env.split("\n").forEach(line => {
+  const [key, ...vals] = line.trim().split("=");
+  if (key && !key.startsWith("#")) process.env[key.trim()] = vals.join("=").trim();
+});
+
+process.on('uncaughtException', (e) => {  
   console.error('CRASH:', e.message, e.stack);
 });
 const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
@@ -10,9 +17,11 @@ const axios = require("axios");
 const DiscordRPC = require("discord-rpc");
 const { spawn } = require("child_process");
 
-const DISCORD_CLIENT_ID = "1490124739669266664";
-const DISCORD_CLIENT_SECRET = "YZ70KCbWHiaybEFMpZyAob6RSIxFwqeh";
 const DISCORD_REDIRECT_URI = "http://localhost:3000/callback";
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const IGDB_CLIENT_ID = process.env.TWITCH_CLIENT_ID;
+const IGDB_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET;
 
 let discordToken = null;
 let authServer = null;
@@ -141,8 +150,7 @@ ipcMain.handle("pick-image", async () => {
 /*Update Button*/
 ipcMain.handle("check-update", async () => {
   try {
-    const res = await axios.get(
-      "https://api.github.com/repos/YOUR_GITHUB_USERNAME/aura/releases/latest",
+    const res = await axios.get("https://api.github.com/repos/tctray/aura-launcher/releases/latest",
       { headers: { "User-Agent": "AURA-Launcher" } }
     );
     const latest = res.data.tag_name.replace("v","");
@@ -448,8 +456,6 @@ ipcMain.handle("discord-invite-friend", async (_event, friendId, gameName) => {
 
 // ── IGDB Cover Art ─────────────────────────────────────────────────────────────
 // Add these constants at the top of main.js with your other credentials
-const IGDB_CLIENT_ID = "y9xxdzlpi39g9w9foduakv1lom0qaz";
-const IGDB_CLIENT_SECRET = "fjim185mrnk4nvm3z8kxydax100kdo";
 
 let igdbToken = null;
 let igdbTokenExpiry = null;
