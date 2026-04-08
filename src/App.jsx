@@ -46,6 +46,27 @@ const saveAccent = (a) => { try { localStorage.setItem("aura_accent",a); } catch
 const loadCustomTheme = () => { try { const s=localStorage.getItem("aura_custom_theme"); return s?JSON.parse(s):null; } catch { return null; } };
 const saveCustomTheme = (t) => { try { localStorage.setItem("aura_custom_theme",JSON.stringify(t)); } catch {} };
 
+// ── Achievements ──────────────────────────────────────────────────────────────
+const ACHIEVEMENTS = [
+  { id:"first_launch",    title:"First Launch",   description:"Launch your first game",        icon:"🎮", condition:(s)=>s.totalLaunches>=1 },
+  { id:"five_games_added",title:"Collector I",    description:"Add 5 games to your library",   icon:"📚", condition:(s)=>s.gamesAdded>=5 },
+  { id:"ten_games_added", title:"Collector II",   description:"Add 10 games to your library",  icon:"📚", condition:(s)=>s.gamesAdded>=10 },
+  { id:"one_hour",        title:"Getting Started",description:"Play for 1 hour total",         icon:"⏱", condition:(s)=>s.totalPlaytimeHours>=1 },
+  { id:"ten_hours",       title:"Dedicated",      description:"Play for 10 hours total",       icon:"🔥", condition:(s)=>s.totalPlaytimeHours>=10 },
+  { id:"fifty_hours",     title:"No Life",        description:"Play for 50 hours total",       icon:"💀", condition:(s)=>s.totalPlaytimeHours>=50 },
+  { id:"first_favorite",  title:"First Pick",     description:"Favorite a game",               icon:"⭐", condition:(s)=>s.favoritesCount>=1 },
+  { id:"five_favorites",  title:"Top Tier",       description:"Favorite 5 games",              icon:"🌟", condition:(s)=>s.favoritesCount>=5 },
+  { id:"three_day_streak",title:"On a Roll",      description:"Play 3 days in a row",          icon:"🔥", condition:(s)=>s.streakDays>=3 },
+  { id:"seven_day_streak",title:"Unstoppable",    description:"Play 7 days in a row",          icon:"⚡", condition:(s)=>s.streakDays>=7 },
+  { id:"five_games_played",title:"Explorer",      description:"Play 5 different games",        icon:"🧭", condition:(s)=>s.gamesPlayedCount>=5 },
+  { id:"ten_games_played",title:"Adventurer",     description:"Play 10 different games",       icon:"🌍", condition:(s)=>s.gamesPlayedCount>=10 },
+];
+
+const loadAchievements = () => { try { const s=localStorage.getItem("aura_achievements"); return s?JSON.parse(s):{}; } catch { return {}; } };
+const saveAchievements = (a) => { try { localStorage.setItem("aura_achievements",JSON.stringify(a)); } catch {} };
+const loadStats = () => { try { const s=localStorage.getItem("aura_stats"); return s?JSON.parse(s):{totalLaunches:0,gamesAdded:0,totalPlaytimeHours:0,favoritesCount:0,streakDays:0,gamesPlayedCount:0,lastPlayedDate:null,playedGameIds:[]}; } catch { return {totalLaunches:0,gamesAdded:0,totalPlaytimeHours:0,favoritesCount:0,streakDays:0,gamesPlayedCount:0,lastPlayedDate:null,playedGameIds:[]}; } };
+const saveStats = (s) => { try { localStorage.setItem("aura_stats",JSON.stringify(s)); } catch {} };
+
 const fmtTime = (ms) => {
   if (!ms) return null;
   const h = Math.floor(ms / 3600000);
@@ -285,6 +306,32 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .cust-dot{width:24px;height:24px;border-radius:50%;}
 .cust-name{font-size:9px;font-weight:600;color:var(--t2);text-align:center;}
 
+/* ACHIEVEMENTS */
+.ach-screen{flex:1;overflow-y:auto;padding:22px;}
+.ach-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
+.ach-title{font-family:'Rajdhani',sans-serif;font-size:20px;font-weight:700;letter-spacing:1.5px;}
+.ach-progress{font-size:11px;color:var(--t3);}
+.ach-bar-wrap{height:4px;background:var(--border);border-radius:2px;margin-bottom:24px;overflow:hidden;}
+.ach-bar-fill{height:100%;background:linear-gradient(90deg,var(--ac),var(--ac2));border-radius:2px;transition:width .5s ease;}
+.ach-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;}
+.ach-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:8px;transition:all .2s;position:relative;overflow:hidden;}
+.ach-card.unlocked{border-color:var(--acg);background:linear-gradient(135deg,var(--card),var(--acd));}
+.ach-card.locked{opacity:.5;filter:grayscale(.4);}
+.ach-card-icon{font-size:28px;line-height:1;}
+.ach-card-title{font-size:15px;font-weight:700;color:var(--t1);font-family:'Rajdhani',sans-serif;letter-spacing:.5px;}
+.ach-card-desc{font-size:12px;color:var(--t3);}
+.ach-card-date{font-size:9px;color:var(--ac);margin-top:2px;font-weight:600;}
+.ach-card-lock{position:absolute;top:10px;right:10px;font-size:14px;opacity:.3;}
+.ach-card.unlocked .ach-card-lock{display:none;}
+.ach-glow{position:absolute;inset:0;background:linear-gradient(135deg,var(--acg),transparent);opacity:.08;pointer-events:none;}
+
+/* ACHIEVEMENT TOAST */
+.ach-toast{background:linear-gradient(135deg,var(--panel),var(--card));border:1px solid var(--ac);border-radius:12px;padding:12px 16px;font-size:11.5px;color:var(--t1);animation:fadeUp .3s ease;box-shadow:0 8px 28px var(--acg);max-width:280px;display:flex;align-items:center;gap:10px;}
+.ach-toast-icon{font-size:24px;flex-shrink:0;}
+.ach-toast-body{}
+.ach-toast-label{font-size:9px;color:var(--ac);font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:2px;}
+.ach-toast-title{font-size:13px;font-weight:700;font-family:'Rajdhani',sans-serif;letter-spacing:.5px;}
+
 /* HERO VIEW */
 .hero{flex:1;display:flex;overflow:hidden;position:relative;}
 .hero-bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(20px) brightness(0.4);transform:scale(1.1);z-index:0;}
@@ -353,6 +400,7 @@ const Ic = {
   Steam:()=><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.991 3.657 9.128 8.438 9.879L12 22l1.562-.121C18.343 21.128 22 16.991 22 12c0-5.523-4.477-10-10-10zm0 2c4.418 0 8 3.582 8 8 0 4.072-3.05 7.443-7 7.938V18h-2v1.938C7.05 19.443 4 16.072 4 12c0-4.418 3.582-8 8-8zm-4 7v2h2v2h2v-2h2v-2h-2V9h-2v2H8z"/></svg>,
   User:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>,
   Palette:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><circle cx="12" cy="12" r="10"/><circle cx="8.5" cy="14.5" r="1.5" fill="currentColor"/><circle cx="15.5" cy="14.5" r="1.5" fill="currentColor"/><circle cx="12" cy="9" r="1.5" fill="currentColor"/></svg>,
+  Trophy:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M6 9H4a2 2 0 0 1-2-2V5h4"/><path d="M18 9h2a2 2 0 0 0 2-2V5h-4"/><path d="M12 17v4"/><path d="M8 21h8"/><path d="M6 5h12v6a6 6 0 0 1-12 0V5z"/></svg>,
 };
 
 // ── Profile Setup Screen ───────────────────────────────────────────────────────
@@ -998,7 +1046,65 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
   );
 }
 
+// ── Achievements Screen ───────────────────────────────────────────────────────
+function AchievementsScreen({ unlockedMap }) {
+  const unlocked = ACHIEVEMENTS.filter(a => unlockedMap[a.id]);
+  const locked = ACHIEVEMENTS.filter(a => !unlockedMap[a.id]);
+  const pct = Math.round((unlocked.length / ACHIEVEMENTS.length) * 100);
+
+  return (
+    <div className="ach-screen">
+      <div className="ach-header">
+        <div className="ach-title">ACHIEVEMENTS</div>
+        <div className="ach-progress">{unlocked.length} / {ACHIEVEMENTS.length} unlocked</div>
+      </div>
+      <div className="ach-bar-wrap">
+        <div className="ach-bar-fill" style={{width:`${pct}%`}}/>
+      </div>
+      <div className="ach-grid">
+        {[...unlocked, ...locked].map(a => {
+          const isUnlocked = !!unlockedMap[a.id];
+          const date = unlockedMap[a.id] ? new Date(unlockedMap[a.id]).toLocaleDateString() : null;
+          return (
+            <div key={a.id} className={`ach-card ${isUnlocked?"unlocked":"locked"}`}>
+              {isUnlocked && <div className="ach-glow"/>}
+              <div className="ach-card-icon">{a.icon}</div>
+              <div className="ach-card-title">{a.title}</div>
+              <div className="ach-card-desc">{a.description}</div>
+              {date && <div className="ach-card-date">Unlocked {date}</div>}
+              {!isUnlocked && <div className="ach-card-lock">🔒</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Settings ──────────────────────────────────────────────────────────────────
+function UpdateButton() {
+  const [status, setStatus] = useState("idle");
+  const [latest, setLatest] = useState(null);
+  const check = async () => {
+    if (!window.electronAPI?.isElectron) return;
+    setStatus("checking");
+    const res = await window.electronAPI.checkUpdate();
+    if (res.success) { setLatest(res.latest); setStatus(res.hasUpdate ? "update" : "latest"); }
+    else setStatus("error");
+  };
+  useEffect(() => { check(); }, []);
+  if (status === "checking") return <span style={{fontSize:11,color:"var(--t3)"}}>Checking...</span>;
+  if (status === "latest") return <span style={{fontSize:11,color:"var(--ac)"}}>Up to date ✓</span>;
+  if (status === "error") return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Retry</button>;
+  if (status === "update") return (
+    <button className="btn-p" onClick={()=>window.electronAPI.openExternal("https://github.com/tctray/aura-launcher/releases/latest")}
+      style={{fontSize:11,padding:"5px 14px",animation:"pulse 2s infinite"}}>
+      v{latest} Available ↓
+    </button>
+  );
+  return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Check</button>;
+}
+
 function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetchCovers}){
   const [s,setS]=useState(()=>{try{return JSON.parse(localStorage.getItem("aura_settings")||"{}")}catch{return{}}});
   const tog=k=>{const n={...s,[k]:!s[k]};setS(n);try{localStorage.setItem("aura_settings",JSON.stringify(n))}catch{}};
@@ -1060,45 +1166,12 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       <div className="ss">
         <div className="ss-t">ABOUT</div>
         <div className="ss-card">
-<div className="sr">
-  <div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.0.0</div></div>
-  <UpdateButton/>
-</div>          <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
+          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.0.0</div></div><UpdateButton/></div>
+          <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>
     </div>
   );
-}
-
-/*Update Button*/
-function UpdateButton() {
-  const [status, setStatus] = useState("idle"); // idle | checking | update | latest | error
-  const [latest, setLatest] = useState(null);
-
-  const check = async () => {
-    if (!window.electronAPI?.isElectron) return;
-    setStatus("checking");
-    const res = await window.electronAPI.checkUpdate();
-    if (res.success) {
-      setLatest(res.latest);
-      setStatus(res.hasUpdate ? "update" : "latest");
-    } else {
-      setStatus("error");
-    }
-  };
-
-  useEffect(() => { check(); }, []);
-
-  if (status === "checking") return <span style={{fontSize:11,color:"var(--t3)"}}>Checking...</span>;
-  if (status === "latest") return <span style={{fontSize:11,color:"var(--ac)"}}>Up to date ✓</span>;
-  if (status === "error") return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Retry</button>;
-  if (status === "update") return (
-    <button className="btn-p" onClick={()=>window.electronAPI.openExternal("https://github.com/tctray/aura-launcher/releases/latest")}
-      style={{fontSize:11,padding:"5px 14px",animation:"pulse 2s infinite"}}>
-      v{latest} Available ↓
-    </button>
-  );
-  return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Check</button>;
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -1108,6 +1181,9 @@ export default function App(){
   const [theme,setTheme]=useState(()=>loadTheme());
   const [accent,setAccent]=useState(()=>loadAccent());
   const [customColors,setCustomColors]=useState(()=>loadCustomTheme());
+  const [unlockedAch,setUnlockedAch]=useState(()=>loadAchievements());
+  const [stats,setStats]=useState(()=>loadStats());
+  const [achToasts,setAchToasts]=useState([]);
   const [view,setView]=useState("library");
   const [srch,setSrch]=useState("");
   const [heroGame,setHeroGame]=useState(null);
@@ -1133,6 +1209,26 @@ export default function App(){
     return()=>{clearTimeout(t1);clearTimeout(t2);}
   },[]);
 
+  const checkAchievements = useCallback((newStats, currentUnlocked) => {
+    const newlyUnlocked = [];
+    ACHIEVEMENTS.forEach(a => {
+      if (!currentUnlocked[a.id] && a.condition(newStats)) {
+        newlyUnlocked.push(a);
+      }
+    });
+    if (newlyUnlocked.length > 0) {
+      const updated = { ...currentUnlocked };
+      newlyUnlocked.forEach(a => { updated[a.id] = Date.now(); });
+      setUnlockedAch(updated);
+      saveAchievements(updated);
+      newlyUnlocked.forEach(a => {
+        const id = uid();
+        setAchToasts(t => [...t, { id, achievement: a }]);
+        setTimeout(() => setAchToasts(t => t.filter(x => x.id !== id)), 4000);
+      });
+    }
+  }, []);
+
   useEffect(()=>{
     if(!window.electronAPI?.isElectron) return;
     window.electronAPI.onGameSessionEnded((_event,data)=>{
@@ -1142,8 +1238,15 @@ export default function App(){
         }
         return g;
       }));
+      setStats(prev=>{
+        const totalMs = (prev.totalPlaytimeMs||0) + data.sessionMs;
+        const updated = {...prev, totalPlaytimeMs: totalMs, totalPlaytimeHours: totalMs/3600000};
+        saveStats(updated);
+        checkAchievements(updated, unlockedAch);
+        return updated;
+      });
     });
-  },[]);
+  },[checkAchievements, unlockedAch]);
 
   const handleThemeChange = useCallback((key) => {
     setTheme(key);
@@ -1163,6 +1266,15 @@ export default function App(){
     applyTheme("custom", accent, colors);
   }, [accent]);
 
+  const updateStats = useCallback((patch) => {
+    setStats(prev => {
+      const updated = { ...prev, ...patch };
+      saveStats(updated);
+      checkAchievements(updated, unlockedAch);
+      return updated;
+    });
+  }, [checkAchievements, unlockedAch]);
+
   const toast=useCallback((msg,type="ok")=>{
     const id=uid();
     setToasts(t=>[...t,{id,msg,type}]);
@@ -1173,6 +1285,20 @@ export default function App(){
     setHeroGame(null);
     setLaunching(game);
     setGames(gs=>gs.map(g=>g.id===game.id?{...g,lastPlayed:Date.now(),playCount:(g.playCount||0)+1}:g));
+
+    // Update stats
+    setStats(prev => {
+      const today = new Date().toDateString();
+      const lastDate = prev.lastPlayedDate;
+      const yesterday = new Date(Date.now()-86400000).toDateString();
+      const streak = lastDate === today ? prev.streakDays : lastDate === yesterday ? prev.streakDays + 1 : 1;
+      const playedIds = prev.playedGameIds.includes(game.id) ? prev.playedGameIds : [...prev.playedGameIds, game.id];
+      const updated = { ...prev, totalLaunches: prev.totalLaunches+1, streakDays: streak, lastPlayedDate: today, gamesPlayedCount: playedIds.length, playedGameIds: playedIds };
+      saveStats(updated);
+      checkAchievements(updated, unlockedAch);
+      return updated;
+    });
+
     if(window.electronAPI?.isElectron){
       const result=await window.electronAPI.launchGame(game.exePath);
       setLaunching(null);
@@ -1181,17 +1307,32 @@ export default function App(){
     } else {
       setTimeout(()=>{setLaunching(null);toast(`${game.title} launched!`)},2200);
     }
-  },[toast]);
+  },[toast, checkAchievements, unlockedAch]);
 
   const doFav=useCallback(id=>{
-    setGames(gs=>gs.map(g=>g.id===id?{...g,favorite:!g.favorite}:g));
+    setGames(gs=>{
+      const updated=gs.map(g=>g.id===id?{...g,favorite:!g.favorite}:g);
+      const favCount=updated.filter(g=>g.favorite).length;
+      setStats(prev=>{
+        const s={...prev,favoritesCount:favCount};
+        saveStats(s);checkAchievements(s,unlockedAch);return s;
+      });
+      return updated;
+    });
     setHeroGame(h=>h&&h.id===id?{...h,favorite:!h.favorite}:h);
-  },[]);
+  },[checkAchievements,unlockedAch]);
 
   const doAdd=useCallback(f=>{
-    setGames(gs=>[{id:uid(),title:f.title.trim(),exePath:f.exePath.trim(),cover:f.cover.trim(),category:f.category||"Other",favorite:false,playCount:0,lastPlayed:null,addedAt:Date.now()},...gs]);
+    setGames(gs=>{
+      const updated=[{id:uid(),title:f.title.trim(),exePath:f.exePath.trim(),cover:f.cover.trim(),category:f.category||"Other",favorite:false,playCount:0,lastPlayed:null,addedAt:Date.now()},...gs];
+      setStats(prev=>{
+        const s={...prev,gamesAdded:updated.length};
+        saveStats(s);checkAchievements(s,unlockedAch);return s;
+      });
+      return updated;
+    });
     setModal(null);toast(`"${f.title.trim()}" added`);
-  },[toast]);
+  },[toast,checkAchievements,unlockedAch]);
 
   const doEdit=useCallback(f=>{
     setGames(gs=>gs.map(g=>g.id===editT.id?{...g,title:f.title.trim(),exePath:f.exePath.trim(),cover:f.cover.trim(),category:f.category}:g));
@@ -1280,10 +1421,11 @@ export default function App(){
   const recent=useMemo(()=>[...games].filter(g=>g.lastPlayed).sort((a,b)=>b.lastPlayed-a.lastPlayed).slice(0,20),[games]);
   const favs=useMemo(()=>games.filter(g=>g.favorite),[games]);
   const totalPlaytime=useMemo(()=>games.reduce((s,g)=>s+(g.totalTime||0),0),[games]);
+  const unlockedCount = useMemo(()=>Object.keys(unlockedAch).length,[unlockedAch]);
   const sorts=["title","recent","plays","added"];
   const openEdit=g=>{setEditT(g);setModal("edit");};
   const openDel=g=>{setDelT(g);setModal("delete");};
-  const vt={library:"LIBRARY",recent:"RECENTLY PLAYED",favorites:"FAVORITES",customize:"CUSTOMIZE",settings:"SETTINGS"};
+  const vt={library:"LIBRARY",recent:"RECENTLY PLAYED",favorites:"FAVORITES",achievements:"ACHIEVEMENTS",customize:"CUSTOMIZE",settings:"SETTINGS"};
 
   // Show profile setup on first launch
   if(!profile){
@@ -1303,7 +1445,6 @@ export default function App(){
           <div className="splash-logo">AURA</div>
           <div className="splash-sub">Your Game Library</div>
           <div className="splash-sub">Developed By: Taurrean Traylor</div>
-
           <div className="splash-bar"><div className="splash-fill"/></div>
         </div>
       )}
@@ -1332,6 +1473,7 @@ export default function App(){
               {id:"library",icon:<Ic.Lib/>,label:"Library",badge:games.length},
               {id:"recent",icon:<Ic.Clock/>,label:"Recently Played"},
               {id:"favorites",icon:<Ic.Heart/>,label:"Favorites",badge:favs.length||null},
+              {id:"achievements",icon:<Ic.Trophy/>,label:"Achievements",badge:unlockedCount||null},
               {id:"customize",icon:<Ic.Palette/>,label:"Customize"},
               {id:"settings",icon:<Ic.Gear/>,label:"Settings"},
             ].map(it=>(
@@ -1399,6 +1541,10 @@ export default function App(){
             </div>
           )}
 
+          {view==="achievements"&&(
+            <AchievementsScreen unlockedMap={unlockedAch}/>
+          )}
+
           {view==="customize"&&(
             <Customize
               theme={theme}
@@ -1446,6 +1592,15 @@ export default function App(){
       )}
 
       <div className="tc">
+        {achToasts.map(t=>(
+          <div key={t.id} className="ach-toast">
+            <div className="ach-toast-icon">{t.achievement.icon}</div>
+            <div className="ach-toast-body">
+              <div className="ach-toast-label">Achievement Unlocked!</div>
+              <div className="ach-toast-title">{t.achievement.title}</div>
+            </div>
+          </div>
+        ))}
         {toasts.map(t=>(
           <div key={t.id} className={`toast ${t.type}`}>
             <div className="tdot"/><span>{t.msg}</span>
