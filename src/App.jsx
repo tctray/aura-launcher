@@ -700,17 +700,39 @@ function Card({game,onPlay,onFav,onEdit,onDel,onSelect,style}){
 
 // ── Hero View ─────────────────────────────────────────────────────────────────
 function HeroView({ game, onBack, onPlay, onFav }) {
+  const [videoId, setVideoId] = useState(null);
+  const [loadingTrailer, setLoadingTrailer] = useState(false);
+  const [showTrailer, setShowTrailer] = useState(false);
+
+  const fetchTrailer = async () => {
+    if (!window.electronAPI?.isElectron) return;
+    setLoadingTrailer(true);
+    const res = await window.electronAPI.fetchTrailer(game.title);
+    if (res.success) { setVideoId(res.videoId); setShowTrailer(true); }
+    setLoadingTrailer(false);
+  };
+
   return (
     <div className="hero">
       <div className="hero-bg" style={{backgroundImage:`url(${game.cover})`}}/>
       <div className="hero-content">
-        {game.cover&&<img src={game.cover} alt={game.title} className="hero-cover"/>}
+        {showTrailer && videoId ? (
+          <div style={{width:"100%",maxWidth:640,aspectRatio:"16/9",borderRadius:12,overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,0.6)"}}>
+            <iframe width="100%" height="100%" src={`https://www.youtube.com/embed/${videoId}?autoplay=1`} allow="autoplay; encrypted-media" allowFullScreen style={{border:"none"}}/>
+          </div>
+        ):(
+          game.cover&&<img src={game.cover} alt={game.title} className="hero-cover"/>
+        )}
         <div className="hero-title">{game.title}</div>
         <div className="hero-cat">{game.category}</div>
         <div className="hero-plays">{game.playCount||0} sessions{game.totalTime ? ` · ${fmtTime(game.totalTime)} played` : ""}</div>
         <div className="hero-actions">
           <button className="hero-back" onClick={onBack}>← Back</button>
           <button className={`hero-fav ${game.favorite?"on":""}`} onClick={()=>onFav(game.id)}><Ic.Heart f={game.favorite}/></button>
+          {showTrailer
+            ? <button className="hero-back" onClick={()=>setShowTrailer(false)}>✕ Close Trailer</button>
+            : <button className="hero-back" onClick={fetchTrailer} disabled={loadingTrailer}>{loadingTrailer?"Loading...":"▶ Trailer"}</button>
+          }
           <button className="hero-play" onClick={()=>onPlay(game)}><Ic.Play/> LAUNCH</button>
         </div>
       </div>
@@ -1294,18 +1316,18 @@ export default function App(){
               <div className="gm-srch"><Ic.Search/><input value={srch} onChange={e=>setSrch(e.target.value)} placeholder="Search games…"/></div>
               <button className="btn-p" onClick={()=>setModal("add")} style={{borderRadius:10}}><Ic.Plus/> Add</button>
             </div>
-            {!srch&&<GMBanner games={[...games].filter(g=>g.cover).sort((a,b)=>(b.lastPlayed||0)-(a.lastPlayed||0))} onPlay={doPlay} onFav={doFav} onSelect={setHeroGame}/>}
+            {!srch&&<GMBanner games={[...games].filter(g=>g.cover).sort((a,b)=>(b.lastPlayed||0)-(a.lastPlayed||0))} onPlay={doPlay} onFav={doFav} onSelect={g=>{setHeroGame(g);goTo("library");}}/>}
             <div className="gm-content">
               {srch?(
-                <GMShelf title="SEARCH RESULTS" games={sorted} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}} count={`${sorted.length} games`}/>
+                <GMShelf title="SEARCH RESULTS" games={sorted} onPlay={doPlay} onFav={doFav} onSelect={g=>{setHeroGame(g);goTo("library");}} count={`${sorted.length} games`}/>
               ):(
                 <>
-                  {recent.length>0&&<GMShelf title="RECENTLY PLAYED" games={recent.slice(0,12)} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}}/>}
-                  {favs.length>0&&<GMShelf title="FAVORITES" games={favs} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}}/>}
+                  {recent.length>0&&<GMShelf title="RECENTLY PLAYED" games={recent.slice(0,12)} onPlay={doPlay} onFav={doFav} onSelect={g=>{setHeroGame(g);goTo("library");}}/>}
+                  {favs.length>0&&<GMShelf title="FAVORITES" games={favs} onPlay={doPlay} onFav={doFav} onSelect={g=>{setHeroGame(g);goTo("library");}}/>}
                   {CATEGORIES.filter(c=>c!=="All").map(c=>{
                     const cGames=games.filter(g=>g.category===c);
                     if(!cGames.length) return null;
-                    return <GMShelf key={c} title={c.toUpperCase()} games={cGames} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}} count={`${cGames.length} games`}/>;
+                    return <GMShelf key={c} title={c.toUpperCase()} games={cGames} onPlay={doPlay} onFav={doFav} onSelect={g=>{setHeroGame(g);goTo("library");}} count={`${cGames.length} games`}/>;
                   })}
                 </>
               )}
