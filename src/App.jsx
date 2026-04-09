@@ -492,7 +492,15 @@ function FriendsPanel({ launching, toast }) {
   const [friends,setFriends]=useState([]);
   const [loading,setLoading]=useState(false);
   const [loggedIn,setLoggedIn]=useState(false);
-
+  const [steamId,setSteamId]=useState(()=>localStorage.getItem("aura_steam_id")||"");
+  const [steamProfile,setSteamProfile]=useState(null);
+  const [steamGames,setSteamGames]=useState([]);
+  const [steamTab,setSteamTab]=useState("discord");
+  const [steamFriends, setSteamFriends] = useState([]);
+  const [xboxTab, setXboxTab] = useState("discord");
+  const [xboxProfile, setXboxProfile] = useState(null);
+  const [xboxGames, setXboxGames] = useState([]);
+  
   useEffect(()=>{
     if(!window.electronAPI?.isElectron) return;
     window.electronAPI.onDiscordAuthSuccess(async()=>{
@@ -548,51 +556,199 @@ function FriendsPanel({ launching, toast }) {
         <span className="fp-title">FRIENDS</span>
         {loggedIn&&<button className="fp-refresh" onClick={loadFriends} title="Refresh"><Ic.Refresh/></button>}
       </div>
-      <div className="fp-body">
-        {!loggedIn?(
-          <div className="fp-login">
-            <div className="fp-login-icon">💬</div>
-            <div className="fp-login-t">Connect Discord</div>
-            <div className="fp-login-s">See friends, their status, and invite them to games</div>
-            <button className="btn-p" onClick={handleLogin} style={{fontSize:11,padding:"7px 16px",gap:"6px"}}>
-              <Ic.Discord/> Login with Discord
-            </button>
-          </div>
-        ):(
+<div className="fp-body">
+        {/* Tab switcher */}
+        <div style={{display:"flex",borderBottom:"1px solid var(--border)",marginBottom:12}}>
+{["discord","steam","xbox"].map(t=>(
+              <button key={t} onClick={()=>setSteamTab(t)} style={{
+              flex:1,padding:"8px 0",border:"none",background:"transparent",
+              color:steamTab===t?"var(--ac)":"var(--t3)",
+              fontSize:10,fontWeight:700,cursor:"pointer",
+              borderBottom:steamTab===t?"2px solid var(--ac)":"2px solid transparent",
+              textTransform:"uppercase",letterSpacing:1,
+            }}>{t}</button>
+          ))}
+        </div>
+
+        {steamTab==="discord"&&(
           <>
-            {user&&(
-              <div className="fp-user">
-                <img className="fp-avatar"
-                  src={user.avatar?`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`:`https://cdn.discordapp.com/embed/avatars/0.png`}
-                  alt={user.username}/>
-                <div style={{flex:1,minWidth:0}}>
-                  <div className="fp-username">{user.username}</div>
-                  <div className="fp-tag">Connected</div>
-                </div>
-                <button className="btn-gh" onClick={handleLogout} style={{fontSize:10,padding:"4px 8px"}}>Logout</button>
+            {!loggedIn?(
+              <div className="fp-login">
+                <div className="fp-login-icon">💬</div>
+                <div className="fp-login-t">Connect Discord</div>
+                <div className="fp-login-s">See friends, their status, and invite them to games</div>
+                <button className="btn-p" onClick={handleLogin} style={{fontSize:11,padding:"7px 16px",gap:"6px"}}>
+                  <Ic.Discord/> Login with Discord
+                </button>
               </div>
-            )}
-            {loading?(
-              <div className="fp-empty">Loading friends...</div>
-            ):friends.length===0?(
-              <div className="fp-empty">No friends found</div>
             ):(
               <>
-                {online.length>0&&(
-                  <>
-                    <div className="fp-section-label">Online — {online.length}</div>
-                    {online.map(f=><FriendItem key={f.id} friend={f} onInvite={handleInvite}/>)}
-                  </>
+                {user&&(
+                  <div className="fp-user">
+                    <img className="fp-avatar"
+                      src={user.avatar?`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`:`https://cdn.discordapp.com/embed/avatars/0.png`}
+                      alt={user.username}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div className="fp-username">{user.username}</div>
+                      <div className="fp-tag">Connected</div>
+                    </div>
+                    <button className="btn-gh" onClick={handleLogout} style={{fontSize:10,padding:"4px 8px"}}>Logout</button>
+                  </div>
                 )}
-                {offline.length>0&&(
+                {loading?(
+                  <div className="fp-empty">Loading friends...</div>
+                ):friends.length===0?(
+                  <div className="fp-empty">No friends found</div>
+                ):(
                   <>
-                    <div className="fp-section-label">Offline — {offline.length}</div>
-                    {offline.map(f=><FriendItem key={f.id} friend={f} onInvite={handleInvite}/>)}
+                    {friends.filter(f=>f.status!=="offline").length>0&&(
+                      <>
+                        <div className="fp-section-label">Online — {friends.filter(f=>f.status!=="offline").length}</div>
+                        {friends.filter(f=>f.status!=="offline").map(f=><FriendItem key={f.id} friend={f} onInvite={handleInvite}/>)}
+                      </>
+                    )}
+                    {friends.filter(f=>f.status==="offline").length>0&&(
+                      <>
+                        <div className="fp-section-label">Offline — {friends.filter(f=>f.status==="offline").length}</div>
+                        {friends.filter(f=>f.status==="offline").map(f=><FriendItem key={f.id} friend={f} onInvite={handleInvite}/>)}
+                      </>
+                    )}
                   </>
                 )}
               </>
             )}
           </>
+        )}
+
+     {steamTab==="steam"&&(
+          <div>
+            {!steamProfile?(
+              <div style={{padding:"12px 0"}}>
+                <div className="fp-login-t" style={{marginBottom:8}}>Enter Steam ID</div>
+                <div className="fp-login-s" style={{marginBottom:10}}>Find it at steamcommunity.com/id/yourname</div>
+                <input className="fi" value={steamId} onChange={e=>setSteamId(e.target.value)} placeholder="76561198xxxxxxxxx" style={{marginBottom:8}}/>
+                <button className="btn-p" style={{width:"100%",justifyContent:"center"}} onClick={async()=>{
+                  if(!steamId.trim()) return;
+                  localStorage.setItem("aura_steam_id", steamId.trim());
+                  const res = await window.electronAPI.steamGetProfile(steamId.trim());
+                  if(res.success) setSteamProfile(res.player);
+                  else toast("Steam profile not found","err");
+                }}>Connect Steam</button>
+              </div>
+            ):(
+              <div>
+                <div className="fp-user" style={{marginBottom:12}}>
+                  <img className="fp-avatar" src={steamProfile.avatarmedium} alt={steamProfile.personaname}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div className="fp-username">{steamProfile.personaname}</div>
+                    <div className="fp-tag">Steam Connected</div>
+                  </div>
+                  <button className="btn-gh" onClick={()=>{setSteamProfile(null);localStorage.removeItem("aura_steam_id");}} style={{fontSize:10,padding:"4px 8px"}}>Logout</button>
+                </div>
+                <div style={{display:"flex",gap:6,marginBottom:10}}>
+                  <button className="btn-p" style={{flex:1,justifyContent:"center",fontSize:10,padding:"6px"}} onClick={async()=>{
+                    const res = await window.electronAPI.steamGetPlaytime(steamId);
+                    if(res.success){setSteamGames(res.games.sort((a,b)=>b.playtime_forever-a.playtime_forever).slice(0,10));setSteamFriends([]);}
+                  }}>Top Games</button>
+                  <button className="btn-p" style={{flex:1,justifyContent:"center",fontSize:10,padding:"6px"}} onClick={async()=>{
+                    const res = await window.electronAPI.steamGetFriendsProfiles(steamId);
+                    if(res.success){setSteamFriends(res.friends);setSteamGames([]);}
+                    else toast("Friends list is private or empty","err");
+                  }}>Friends</button>
+                </div>
+                {steamGames.length>0&&(
+                  <div>
+                    <div className="fp-section-label">Top Played Games</div>
+                    {steamGames.map(g=>(
+                      <div key={g.appid} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid var(--border)"}}>
+                        <img src={`https://media.steampowered.com/steamcommunity/public/images/apps/${g.appid}/${g.img_icon_url}.jpg`} alt={g.name} style={{width:32,height:32,borderRadius:4}}/>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:11,fontWeight:600,color:"var(--t1)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</div>
+                          <div style={{fontSize:9,color:"var(--t3)"}}>{Math.round(g.playtime_forever/60)}h played</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {steamFriends.length>0&&(
+                  <div>
+                    <div className="fp-section-label">Online — {steamFriends.filter(f=>f.status==="online").length}</div>
+                    {steamFriends.filter(f=>f.status==="online").map(f=>(
+                      <div key={f.id} className="friend-item">
+                        <div className="friend-avatar-wrap">
+                          <img className="friend-avatar" src={f.avatar} alt={f.username}/>
+                          <div className="friend-status-dot online"/>
+                        </div>
+                        <div className="friend-info">
+                          <div className="friend-name">{f.username}</div>
+                          <div className="friend-activity">{f.activity?`Playing ${f.activity}`:"Online"}</div>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="fp-section-label">Offline — {steamFriends.filter(f=>f.status==="offline").length}</div>
+                    {steamFriends.filter(f=>f.status==="offline").map(f=>(
+                      <div key={f.id} className="friend-item">
+                        <div className="friend-avatar-wrap">
+                          <img className="friend-avatar" src={f.avatar} alt={f.username}/>
+                          <div className="friend-status-dot offline"/>
+                        </div>
+                        <div className="friend-info">
+                          <div className="friend-name">{f.username}</div>
+                          <div className="friend-activity">Offline</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {steamTab==="xbox"&&(
+          <div>
+            {!xboxProfile?(
+              <div className="fp-login">
+                <div className="fp-login-icon">🎮</div>
+                <div className="fp-login-t">Connect Xbox</div>
+                <div className="fp-login-s">Shows your Xbox achievements and recent games</div>
+                <button className="btn-p" style={{fontSize:11,padding:"7px 16px"}} onClick={async()=>{
+                  const res = await window.electronAPI.xboxGetProfile();
+                  if(res.success) setXboxProfile(res.profile);
+                  else toast("Xbox connection failed — check your API key","err");
+                }}>Connect Xbox</button>
+              </div>
+            ):(
+              <div>
+                <div className="fp-user" style={{marginBottom:12}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div className="fp-username">Xbox Connected</div>
+                    <div className="fp-tag">OpenXBL</div>
+                  </div>
+                  <button className="btn-gh" onClick={()=>setXboxProfile(null)} style={{fontSize:10,padding:"4px 8px"}}>Logout</button>
+                </div>
+                <button className="btn-p" style={{width:"100%",justifyContent:"center",marginBottom:8}} onClick={async()=>{
+                  const res = await window.electronAPI.xboxGetRecentGames();
+                  if(res.success) setXboxGames(res.games.titles||[]);
+                  else toast("Could not load Xbox games","err");
+                }}>Load Recent Games</button>
+                {xboxGames.length>0&&(
+                  <div>
+                    <div className="fp-section-label">Recent Games</div>
+                    {xboxGames.slice(0,10).map(g=>(
+                      <div key={g.titleId} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid var(--border)"}}>
+                        {g.displayImage&&<img src={g.displayImage} alt={g.name} style={{width:32,height:32,borderRadius:4}}/>}
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:11,fontWeight:600,color:"var(--t1)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</div>
+                          <div style={{fontSize:9,color:"var(--t3)"}}>{g.achievement?.currentAchievements||0} / {g.achievement?.totalAchievements||0} achievements</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -633,11 +789,39 @@ function Card({game,onPlay,onFav,onEdit,onDel,onSelect,style}){
 
 // ── Hero View ─────────────────────────────────────────────────────────────────
 function HeroView({ game, onBack, onPlay, onFav }) {
+  const [videoId, setVideoId] = useState(null);
+  const [loadingTrailer, setLoadingTrailer] = useState(false);
+  const [showTrailer, setShowTrailer] = useState(false);
+
+  const fetchTrailer = async () => {
+    if (!window.electronAPI?.isElectron) return;
+    setLoadingTrailer(true);
+    const res = await window.electronAPI.fetchTrailer(game.title);
+    if (res.success) {
+      setVideoId(res.videoId);
+      setShowTrailer(true);
+    }
+    setLoadingTrailer(false);
+  };
+
   return (
     <div className="hero">
       <div className="hero-bg" style={{backgroundImage:`url(${game.cover})`}}/>
       <div className="hero-content">
-        {game.cover&&<img src={game.cover} alt={game.title} className="hero-cover"/>}
+        {showTrailer && videoId ? (
+          <div style={{width:"100%",maxWidth:640,aspectRatio:"16/9",borderRadius:12,overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,0.6)"}}>
+            <iframe
+              width="100%"
+              height="100%"
+              src={`https://www.youtube.com/embed/${videoId}?autoplay=1`}
+              allow="autoplay; encrypted-media"
+              allowFullScreen
+              style={{border:"none"}}
+            />
+          </div>
+        ) : (
+          game.cover&&<img src={game.cover} alt={game.title} className="hero-cover"/>
+        )}
         <div className="hero-title">{game.title}</div>
         <div className="hero-cat">{game.category}</div>
         <div className="hero-plays">{game.playCount||0} sessions{game.totalTime ? ` · ${fmtTime(game.totalTime)} played` : ""}</div>
@@ -646,6 +830,12 @@ function HeroView({ game, onBack, onPlay, onFav }) {
           <button className={`hero-fav ${game.favorite?"on":""}`} onClick={()=>onFav(game.id)}>
             <Ic.Heart f={game.favorite}/>
           </button>
+          {showTrailer
+            ? <button className="hero-back" onClick={()=>setShowTrailer(false)}>✕ Close Trailer</button>
+            : <button className="hero-back" onClick={fetchTrailer} disabled={loadingTrailer}>
+                {loadingTrailer ? "Loading..." : "▶ Trailer"}
+              </button>
+          }
           <button className="hero-play" onClick={()=>onPlay(game)}>
             <Ic.Play/> LAUNCH
           </button>
@@ -654,7 +844,6 @@ function HeroView({ game, onBack, onPlay, onFav }) {
     </div>
   );
 }
-
 // ── Grid ──────────────────────────────────────────────────────────────────────
 function Grid({games,onPlay,onFav,onEdit,onDel,onSelect}){
   if(!games.length) return(

@@ -122,6 +122,137 @@ ipcMain.handle("launch-game", async (_event, exePath) => {
   }
 });
 
+/*Youtube API*/
+ipcMain.handle("fetch-trailer", async (_event, gameTitle) => {
+  try {
+    const res = await axios.get("https://www.googleapis.com/youtube/v3/search", {
+      params: {
+        key: process.env.YOUTUBE_API_KEY,
+        q: `${gameTitle} official trailer`,
+        part: "snippet",
+        type: "video",
+        maxResults: 1,
+      }
+    });
+    const item = res.data.items[0];
+    if (!item) return { success: false, error: "No trailer found" };
+    return { success: true, videoId: item.id.videoId, title: item.snippet.title };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+/*Steam API*/
+ipcMain.handle("steam-get-profile", async (_event, steamId) => {
+  try {
+    const res = await axios.get("https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/", {
+      params: {
+        key: process.env.STEAM_API_KEY,
+        steamids: steamId,
+      }
+    });
+    const player = res.data.response.players[0];
+    if (!player) return { success: false, error: "Player not found" };
+    return { success: true, player };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("steam-get-friends", async (_event, steamId) => {
+  try {
+    const res = await axios.get("https://api.steampowered.com/ISteamUser/GetFriendList/v1/", {
+      params: {
+        key: process.env.STEAM_API_KEY,
+        steamid: steamId,
+        relationship: "friend",
+      }
+    });
+    const friends = res.data.friendslist.friends;
+    return { success: true, friends };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("steam-get-playtime", async (_event, steamId) => {
+  try {
+    const res = await axios.get("https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/", {
+      params: {
+        key: process.env.STEAM_API_KEY,
+        steamid: steamId,
+        include_appinfo: true,
+        include_played_free_games: true,
+      }
+    });
+    const games = res.data.response.games || [];
+    return { success: true, games };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+
+ipcMain.handle("steam-get-friends-profiles", async (_event, steamId) => {
+  console.log("steam-get-friends-profiles called with:", steamId);
+  try {
+    const friendsRes = await axios.get("https://api.steampowered.com/ISteamUser/GetFriendList/v1/", {
+      params: { key: process.env.STEAM_API_KEY, steamid: steamId, relationship: "friend" }
+    });
+    console.log("Friends API response:", JSON.stringify(friendsRes.data));
+    const friendIds = friendsRes.data.friendslist.friends.map(f => f.steamid).slice(0, 100);
+    if (friendIds.length === 0) return { success: true, friends: [] };
+
+    const profilesRes = await axios.get("https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/", {
+      params: { key: process.env.STEAM_API_KEY, steamids: friendIds.join(",") }
+    });
+    const friends = profilesRes.data.response.players.map(p => ({
+      id: p.steamid,
+      username: p.personaname,
+      avatar: p.avatarmedium,
+      status: p.personastate === 0 ? "offline" : "online",
+      activity: p.gameextrainfo || null,
+    })).sort((a,b) => a.status === "online" ? -1 : 1);
+
+    return { success: true, friends };
+  } catch(e) {
+    console.log("Steam friends error:", e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("xbox-get-profile", async () => {
+  try {
+    const res = await axios.get("https://xbl.io/api/v2/account", {
+      headers: { "x-authorization": process.env.OPENXBL_API_KEY }
+    });
+    return { success: true, profile: res.data };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("xbox-get-achievements", async (_event, titleId) => {
+  try {
+    const res = await axios.get(`https://xbl.io/api/v2/achievements/title/${titleId}`, {
+      headers: { "x-authorization": process.env.OPENXBL_API_KEY }
+    });
+    return { success: true, achievements: res.data };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("xbox-get-recent-games", async () => {
+  try {
+    const res = await axios.get("https://xbl.io/api/v2/achievements", {
+      headers: { "x-authorization": process.env.OPENXBL_API_KEY }
+    });
+    return { success: true, games: res.data };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
 // ── File Picker ────────────────────────────────────────────────────────────────
 ipcMain.handle("pick-exe", async () => {
   const result = await dialog.showOpenDialog({

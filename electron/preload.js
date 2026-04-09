@@ -18,7 +18,19 @@ onGameSessionEnded: (callback) => ipcRenderer.on("game-session-ended", callback)
 
   checkUpdate: () => ipcRenderer.invoke("check-update"),
 openExternal: (url) => ipcRenderer.invoke("open-external", url),
-  
+
+fetchTrailer: (title) => ipcRenderer.invoke("fetch-trailer", title),
+
+steamGetProfile: (steamId) => ipcRenderer.invoke("steam-get-profile", steamId),
+steamGetFriends: (steamId) => ipcRenderer.invoke("steam-get-friends", steamId),
+steamGetPlaytime: (steamId) => ipcRenderer.invoke("steam-get-playtime", steamId),
+
+steamGetFriendsProfiles: (steamId) => ipcRenderer.invoke("steam-get-friends-profiles", steamId),
+
+xboxGetProfile: () => ipcRenderer.invoke("xbox-get-profile"),
+xboxGetAchievements: (titleId) => ipcRenderer.invoke("xbox-get-achievements", titleId),
+xboxGetRecentGames: () => ipcRenderer.invoke("xbox-get-recent-games"),
+
   // Steam import
   importSteam: () => ipcRenderer.invoke("import-steam"),
   importEpic: () => ipcRenderer.invoke("import-epic"),
