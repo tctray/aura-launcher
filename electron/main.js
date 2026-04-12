@@ -686,6 +686,50 @@ ipcMain.handle("fetch-covers-bulk", async (_event, games) => {
   }
 });
 
+// ── Twitch Live Streams ────────────────────────────────────────────────────────
+ipcMain.handle("fetch-twitch-streams", async (_event, { gameNames, userLogins }) => {
+  try {
+    const token = await getIGDBToken();
+
+    // If game names provided, look up their Twitch game IDs first
+    let gameIds = [];
+    if (gameNames && gameNames.length > 0) {
+      const gamesRes = await axios.get("https://api.twitch.tv/helix/games", {
+        headers: { "Client-ID": IGDB_CLIENT_ID, "Authorization": `Bearer ${token}` },
+        params: { name: gameNames.slice(0, 10) },
+      });
+      gameIds = (gamesRes.data?.data || []).map(g => g.id);
+    }
+
+    // Build params for streams endpoint
+    const params = new URLSearchParams();
+    params.append("first", "20");
+    gameIds.forEach(id => params.append("game_id", id));
+    if (userLogins && userLogins.length > 0) {
+      userLogins.slice(0, 10).forEach(u => params.append("user_login", u.trim()));
+    }
+
+    const streamsRes = await axios.get(`https://api.twitch.tv/helix/streams?${params.toString()}`, {
+      headers: { "Client-ID": IGDB_CLIENT_ID, "Authorization": `Bearer ${token}` },
+    });
+
+    const streams = (streamsRes.data?.data || []).map(s => ({
+      id: s.id,
+      user: s.user_name,
+      title: s.title,
+      game: s.game_name,
+      viewers: s.viewer_count,
+      thumbnail: s.thumbnail_url.replace("{width}", "440").replace("{height}", "248"),
+      url: `https://twitch.tv/${s.user_login}`,
+    }));
+
+    return { success: true, streams };
+  } catch (e) {
+    console.log("Twitch streams error:", e.message);
+    return { success: false, error: e.message };
+  }
+});
+
 
 // ── Local OAuth Callback Server ────────────────────────────────────────────────
 function startAuthServer() {

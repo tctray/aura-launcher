@@ -3,7 +3,7 @@
  * Full app with profile, themes, Discord, playtime tracking
  */
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
 const CATEGORIES = ["All","FPS","RPG","Strategy","Action","Adventure","Sports","Simulation","Indie","Other"];
 
@@ -84,7 +84,7 @@ const applyTheme = (themeKey, customAccent, customColors) => {
   root.style.setProperty("--card", t.card);
   root.style.setProperty("--hover", t.hover);
   const ac = customAccent || t.ac;
-  const ac2 = customAccent || t.ac2;
+  const ac2 = t.ac2 || ac;
   root.style.setProperty("--ac", ac);
   root.style.setProperty("--ac2", ac2);
   const hex2rgb = (hex) => {
@@ -146,7 +146,8 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 
 /* SIDEBAR — used in Library view */
 .sb{width:var(--sw);min-width:var(--sw);background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column}
-.sb-logo{padding:22px 20px 18px;display:flex;align-items:center;gap:12px}
+.sb-logo{padding:16px 12px 14px;display:flex;align-items:center;gap:10px;min-height:64px;}
+.sb.collapsed .sb-logo{justify-content:center;padding:16px 0 14px;flex-direction:column;gap:8px;}
 .sb-li{width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,var(--ac),var(--ac2));display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;box-shadow:0 4px 12px var(--acg)}
 .sb-lt{font-family:'Rajdhani',sans-serif;font-size:20px;font-weight:700;letter-spacing:4px;background:linear-gradient(90deg,var(--ac),var(--ac2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
 .sb-profile{padding:14px 16px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:11px;cursor:pointer;transition:all .15s;margin:0 0 6px;}
@@ -404,7 +405,58 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .gm-srch input{background:none;border:none;outline:none;color:var(--t1);font-size:12px;width:100%;font-family:'DM Sans',sans-serif;}
 .gm-srch input::placeholder{color:var(--t3);}
 
-/* HERO VIEW */
+/* MADE FOR SHELF */
+.gm-made-for{margin-bottom:28px;}
+.gm-made-for-hdr{padding:0 40px;margin-bottom:4px;}
+.gm-made-for-label{font-size:11px;color:var(--t2);letter-spacing:.5px;}
+.gm-made-for-title{font-family:'Rajdhani',sans-serif;font-size:22px;font-weight:700;letter-spacing:1.5px;color:var(--t1);}
+.gm-made-for-row{display:flex;gap:12px;padding:12px 40px 8px;overflow-x:auto;scrollbar-width:none;}
+.gm-made-for-row::-webkit-scrollbar{display:none;}
+.gm-mf-card{flex-shrink:0;width:180px;height:60px;border-radius:10px;overflow:hidden;cursor:pointer;display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--border);padding:0 12px 0 0;transition:all .2s;position:relative;}
+.gm-mf-card:hover{background:var(--hover);border-color:var(--borderb);transform:translateY(-2px);}
+.gm-mf-card-img{width:60px;height:60px;object-fit:cover;flex-shrink:0;}
+.gm-mf-card-info{flex:1;min-width:0;}
+.gm-mf-card-title{font-size:12px;font-weight:700;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'Rajdhani',sans-serif;letter-spacing:.3px;}
+.gm-mf-card-sub{font-size:10px;color:var(--t2);margin-top:2px;}
+.gm-mf-card-play{position:absolute;right:12px;width:32px;height:32px;border-radius:50%;background:var(--ac);border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;opacity:0;transition:all .15s;box-shadow:0 4px 12px var(--acg);}
+.gm-mf-card:hover .gm-mf-card-play{opacity:1;}
+
+/* CURRENTLY PLAYING BAR */
+.now-playing{position:fixed;bottom:0;left:0;right:0;height:72px;background:rgba(10,10,12,.92);backdrop-filter:blur(20px);border-top:1px solid var(--border);z-index:500;display:flex;align-items:center;padding:0 24px;gap:16px;animation:fadeUp .3s ease;}
+.np-cover{width:48px;height:48px;border-radius:8px;object-fit:cover;border:1px solid var(--border);flex-shrink:0;}
+.np-cover-ph{width:48px;height:48px;border-radius:8px;background:var(--card);border:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px;}
+.np-info{flex:1;min-width:0;}
+.np-title{font-size:13px;font-weight:700;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'Rajdhani',sans-serif;letter-spacing:.5px;}
+.np-status{font-size:10px;color:var(--ac);margin-top:2px;display:flex;align-items:center;gap:5px;}
+.np-dot{width:6px;height:6px;border-radius:50%;background:var(--ac);animation:pulse 2s infinite;}
+.np-timer{font-family:'Rajdhani',sans-serif;font-size:22px;font-weight:700;color:var(--t1);letter-spacing:2px;flex-shrink:0;}
+.np-close{background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:8px;padding:6px 14px;font-size:11px;font-weight:600;color:var(--t2);cursor:pointer;transition:all .15s;font-family:'DM Sans',sans-serif;flex-shrink:0;}
+.np-close:hover{background:rgba(255,77,109,.15);border-color:rgba(255,77,109,.3);color:var(--danger);}
+
+/* SIDEBAR COLLAPSED */
+.sb.collapsed{width:64px;min-width:64px;}
+.sb.collapsed .sb-lt{display:none;}
+.sb.collapsed .sb-profile{justify-content:center;padding:12px 0;}
+.sb.collapsed .sb-pname,.sb.collapsed .sb-pedit{display:none;}
+.sb.collapsed .sb-sl{display:none;}
+.sb.collapsed .sb-item{justify-content:center;padding:10px 0;}
+.sb.collapsed .sb-item span{display:none;}
+.sb.collapsed .sb-badge{display:none;}
+.sb.collapsed .sb-stat{display:none;}
+.sb.collapsed .sb-foot{padding:12px 10px;}
+.sb-toggle{background:var(--acd);border:1px solid var(--acg);color:var(--ac);cursor:pointer;padding:6px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;}
+.sb-toggle:hover{background:var(--ac);color:#fff;}
+.sb,.gm-rail{transition:width .2s ease,min-width .2s ease;}
+
+/* GM RAIL EXPANDED */
+.gm-rail.expanded{width:200px;min-width:200px;align-items:flex-start;padding:16px 10px;}
+.gm-rail.expanded .gm-rail-logo{margin-left:4px;}
+.gm-rail.expanded .gm-rail-item{width:100%;border-radius:10px;padding:0 12px;gap:10px;justify-content:flex-start;}
+.gm-rail.expanded .gm-rail-item-label{display:block;font-size:13px;font-weight:500;font-family:'DM Sans',sans-serif;}
+.gm-rail-item-label{display:none;}
+.gm-rail.expanded .gm-rail-avatar,.gm-rail.expanded .gm-rail-avatar-ph{margin-left:4px;}
+.gm-rail-toggle{background:var(--acd);border:1px solid var(--acg);color:var(--ac);cursor:pointer;padding:6px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:all .15s;margin-bottom:8px;}
+.gm-rail-toggle:hover{background:var(--ac);color:#fff;}
 .hero{flex:1;display:flex;overflow:hidden;position:relative;}
 .hero-bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(20px) brightness(0.4);transform:scale(1.1);z-index:0;}
 .hero-content{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;gap:20px;padding:40px;}
@@ -420,6 +472,30 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .hero-fav{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;cursor:pointer;color:var(--t2);transition:all .15s;display:flex;align-items:center;}
 .hero-fav:hover{color:var(--danger);}
 .hero-fav.on{color:var(--danger);border-color:rgba(255,77,109,.3);}
+
+/* TWITCH SHELF */
+.twitch-shelf{margin-bottom:28px;}
+.twitch-shelf-hdr{display:flex;align-items:center;justify-content:space-between;padding:0 40px;margin-bottom:16px;}
+.twitch-shelf-title{font-family:'Rajdhani',sans-serif;font-size:22px;font-weight:700;letter-spacing:1px;color:var(--t1);display:flex;align-items:center;gap:10px;}
+.twitch-live-dot{width:10px;height:10px;border-radius:50%;background:#eb0400;flex-shrink:0;box-shadow:0 0 8px #eb0400;animation:pulse 2s infinite;}
+.twitch-row{display:flex;gap:14px;padding:4px 40px 12px;overflow-x:auto;scrollbar-width:none;}
+.twitch-row::-webkit-scrollbar{display:none;}
+.twitch-card{flex-shrink:0;width:200px;height:200px;border-radius:14px;overflow:hidden;cursor:pointer;position:relative;border:1px solid rgba(255,255,255,.07);transition:transform .22s,box-shadow .22s;}
+.twitch-card:hover{transform:translateY(-6px) scale(1.04);box-shadow:0 20px 48px rgba(0,0,0,.8),0 0 0 2px #9147ff;}
+.twitch-thumb{width:100%;height:100%;object-fit:cover;display:block;transition:transform .35s;}
+.twitch-card:hover .twitch-thumb{transform:scale(1.08);}
+.twitch-thumb-ph{width:100%;height:100%;background:linear-gradient(135deg,#1a1a2e,#2d1b69);display:flex;align-items:center;justify-content:center;font-size:42px;}
+.twitch-badge{position:absolute;top:10px;left:10px;background:linear-gradient(90deg,#eb0400,#9147ff);color:#fff;font-size:9px;font-weight:800;padding:3px 9px;border-radius:20px;letter-spacing:1.5px;display:flex;align-items:center;gap:4px;z-index:2;}
+.twitch-badge-dot{width:5px;height:5px;border-radius:50%;background:#fff;}
+.twitch-ov{position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.92) 0%,rgba(0,0,0,.3) 55%,transparent 100%);opacity:0;transition:opacity .2s;display:flex;flex-direction:column;justify-content:flex-end;padding:14px;z-index:3;}
+.twitch-card:hover .twitch-ov{opacity:1;}
+.twitch-user{font-family:'Rajdhani',sans-serif;font-size:15px;font-weight:700;color:#fff;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.twitch-game{font-size:10px;color:#9147ff;font-weight:700;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.twitch-viewers-row{display:flex;align-items:center;gap:5px;font-size:10px;color:rgba(255,255,255,.7);font-weight:600;margin-top:3px;}
+.twitch-viewer-dot{width:6px;height:6px;border-radius:50%;background:#eb0400;flex-shrink:0;}
+.twitch-watch-btn{width:100%;background:rgba(145,71,255,.85);border:none;color:#fff;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;letter-spacing:.3px;transition:all .15s;margin-top:8px;backdrop-filter:blur(4px);}
+.twitch-watch-btn:hover{background:#9147ff;}
+.twitch-empty{padding:0 40px;font-size:11px;color:var(--t3);}
 
 /* FRIENDS PANEL */
 .fp{width:var(--fw);min-width:var(--fw);background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;}
@@ -455,6 +531,8 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 `;
 
 const Ic = {
+  Menu:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>,
+  MenuClose:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
   Home:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
   Lib:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M4 19V5a2 2 0 0 1 2-2h11a1 1 0 0 1 1 1v14"/><path d="M4 17h14"/><path d="M9 3v14"/></svg>,
   Clock:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
@@ -700,39 +778,17 @@ function Card({game,onPlay,onFav,onEdit,onDel,onSelect,style}){
 
 // ── Hero View ─────────────────────────────────────────────────────────────────
 function HeroView({ game, onBack, onPlay, onFav }) {
-  const [videoId, setVideoId] = useState(null);
-  const [loadingTrailer, setLoadingTrailer] = useState(false);
-  const [showTrailer, setShowTrailer] = useState(false);
-
-  const fetchTrailer = async () => {
-    if (!window.electronAPI?.isElectron) return;
-    setLoadingTrailer(true);
-    const res = await window.electronAPI.fetchTrailer(game.title);
-    if (res.success) { setVideoId(res.videoId); setShowTrailer(true); }
-    setLoadingTrailer(false);
-  };
-
   return (
     <div className="hero">
       <div className="hero-bg" style={{backgroundImage:`url(${game.cover})`}}/>
       <div className="hero-content">
-        {showTrailer && videoId ? (
-          <div style={{width:"100%",maxWidth:640,aspectRatio:"16/9",borderRadius:12,overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,0.6)"}}>
-            <iframe width="100%" height="100%" src={`https://www.youtube.com/embed/${videoId}?autoplay=1`} allow="autoplay; encrypted-media" allowFullScreen style={{border:"none"}}/>
-          </div>
-        ):(
-          game.cover&&<img src={game.cover} alt={game.title} className="hero-cover"/>
-        )}
+        {game.cover&&<img src={game.cover} alt={game.title} className="hero-cover"/>}
         <div className="hero-title">{game.title}</div>
         <div className="hero-cat">{game.category}</div>
         <div className="hero-plays">{game.playCount||0} sessions{game.totalTime ? ` · ${fmtTime(game.totalTime)} played` : ""}</div>
         <div className="hero-actions">
           <button className="hero-back" onClick={onBack}>← Back</button>
           <button className={`hero-fav ${game.favorite?"on":""}`} onClick={()=>onFav(game.id)}><Ic.Heart f={game.favorite}/></button>
-          {showTrailer
-            ? <button className="hero-back" onClick={()=>setShowTrailer(false)}>✕ Close Trailer</button>
-            : <button className="hero-back" onClick={fetchTrailer} disabled={loadingTrailer}>{loadingTrailer?"Loading...":"▶ Trailer"}</button>
-          }
           <button className="hero-play" onClick={()=>onPlay(game)}><Ic.Play/> LAUNCH</button>
         </div>
       </div>
@@ -855,6 +911,231 @@ function GMBanner({ games, onPlay, onFav, onSelect }) {
   );
 }
 
+// ── Now Playing Bar ───────────────────────────────────────────────────────────
+function NowPlayingBar({ game, onClose }) {
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setSecs(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const fmt = (s) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+    return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  };
+  return (
+    <div className="now-playing">
+      {game.cover
+        ? <img src={game.cover} alt={game.title} className="np-cover"/>
+        : <div className="np-cover-ph">🎮</div>
+      }
+      <div className="np-info">
+        <div className="np-title">{game.title}</div>
+        <div className="np-status"><div className="np-dot"/>Now Playing</div>
+      </div>
+      <div className="np-timer">{fmt(secs)}</div>
+      <button className="np-close" onClick={onClose}>✕ Stop</button>
+    </div>
+  );
+}
+
+// ── Friend Activity Shelf ─────────────────────────────────────────────────────
+function FriendActivityShelf() {
+  const [friends, setFriends] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!window.electronAPI?.isElectron) { setLoaded(true); return; }
+    const fetch = async () => {
+      const results = [];
+      // Discord RPC friends
+      try {
+        const rpc = await window.electronAPI.rpcGetFriends();
+        if (rpc.success) {
+          rpc.friends.filter(f => f.activity && f.status !== "offline").forEach(f => {
+            results.push({ id:`discord-${f.id}`, name:f.username, avatar:f.avatar, game:f.activity, source:"discord" });
+          });
+        }
+      } catch {}
+      // Steam friends
+      try {
+        const steamId = localStorage.getItem("aura_steam_id");
+        if (steamId) {
+          const res = await window.electronAPI.steamGetFriendsProfiles(steamId);
+          if (res.success) {
+            res.friends.filter(f => f.activity && f.status === "online").forEach(f => {
+              results.push({ id:`steam-${f.id}`, name:f.username, avatar:f.avatar, game:f.activity, source:"steam" });
+            });
+          }
+        }
+      } catch {}
+      setFriends(results);
+      setLoaded(true);
+    };
+    fetch();
+  }, []);
+
+  if (!loaded || !friends.length) return null;
+
+  return (
+    <div className="gm-made-for" style={{marginBottom:28}}>
+      <div className="gm-made-for-hdr">
+        <div className="gm-made-for-label">Friends</div>
+        <div className="gm-made-for-title">Playing Now</div>
+      </div>
+      <div className="gm-made-for-row">
+        {friends.map(f => (
+          <div key={f.id} className="gm-mf-card" style={{cursor:"default"}}>
+            {f.avatar
+              ? <img src={f.avatar} alt={f.name} className="gm-mf-card-img" style={{borderRadius:0}}/>
+              : <div style={{width:60,height:60,background:"var(--hover)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>👤</div>
+            }
+            <div className="gm-mf-card-info">
+              <div className="gm-mf-card-title">{f.name}</div>
+              <div className="gm-mf-card-sub" style={{color:"var(--ac)"}}>
+                <span style={{display:"inline-block",width:6,height:6,borderRadius:"50%",background:"#43b581",marginRight:4,verticalAlign:"middle"}}/>
+                {f.game}
+              </div>
+            </div>
+            <div style={{fontSize:9,color:"var(--t3)",flexShrink:0,paddingRight:4}}>
+              {f.source==="discord"?"DC":"ST"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Made For Shelf ────────────────────────────────────────────────────────────
+function MadeForShelf({ games, username, onPlay, onSelect }) {
+  const picks = useMemo(() => {
+    if (!games.length) return [];
+    // Top category
+    const catCounts = {};
+    games.forEach(g => { catCounts[g.category] = (catCounts[g.category]||0) + (g.playCount||0); });
+    const topCat = Object.entries(catCounts).sort((a,b)=>b[1]-a[1])[0]?.[0];
+    const fromTopCat = games.filter(g=>g.category===topCat).sort((a,b)=>(b.playCount||0)-(a.playCount||0)).slice(0,3);
+    // Favorites
+    const favs = games.filter(g=>g.favorite).slice(0,3);
+    // Recent
+    const recent = [...games].filter(g=>g.lastPlayed).sort((a,b)=>b.lastPlayed-a.lastPlayed).slice(0,3);
+    // Deduplicate
+    const pool = [...new Map([...favs,...recent,...fromTopCat].map(g=>[g.id,g])).values()].slice(0,6);
+    return pool;
+  }, [games]);
+
+  if (!picks.length) return null;
+
+  return (
+    <div className="gm-made-for">
+      <div className="gm-made-for-hdr">
+        <div className="gm-made-for-label">Made For</div>
+        <div className="gm-made-for-title">{username}</div>
+      </div>
+      <div className="gm-made-for-row">
+        {picks.map(g => (
+          <div key={g.id} className="gm-mf-card" onClick={()=>onSelect(g)}>
+            {g.cover
+              ? <img src={g.cover} alt={g.title} className="gm-mf-card-img"/>
+              : <div style={{width:60,height:60,background:"var(--hover)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>🎮</div>
+            }
+            <div className="gm-mf-card-info">
+              <div className="gm-mf-card-title">{g.title}</div>
+              <div className="gm-mf-card-sub">{g.favorite?"⭐ Favorite":g.lastPlayed?`Played ${new Date(g.lastPlayed).toLocaleDateString()}`:g.category}</div>
+            </div>
+            <button className="gm-mf-card-play" onClick={e=>{e.stopPropagation();onPlay(g);}}>
+              <Ic.Play/>
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Twitch Shelf ──────────────────────────────────────────────────────────────
+function TwitchShelf({ games }) {
+  const [streams, setStreams] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [customLogins, setCustomLogins] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
+  const [showInput, setShowInput] = useState(false);
+  const rowRef = useRef(null);
+
+  const scroll = (dir) => {
+    if (rowRef.current) rowRef.current.scrollBy({ left: dir * 440, behavior: "smooth" });
+  };
+
+  const fetchStreams = useCallback(async () => {
+    if (!window.electronAPI?.isElectron) { setLoading(false); return; }
+    setLoading(true);
+    const gameNames = games.filter(g => g.cover).map(g => g.title).slice(0, 10);
+    const userLogins = customLogins.split(",").map(s => s.trim()).filter(Boolean);
+    const res = await window.electronAPI.fetchTwitchStreams({ gameNames, userLogins });
+    if (res.success) setStreams(res.streams);
+    setLoading(false);
+  }, [games, customLogins]);
+
+  useEffect(() => {
+    fetchStreams();
+    const interval = setInterval(fetchStreams, 60000);
+    return () => clearInterval(interval);
+  }, [fetchStreams]);
+
+  const fmtViewers = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
+
+  if (loading) return null;
+  if (!streams.length && !showInput) return null;
+
+  return (
+    <div className="twitch-shelf">
+      <div className="twitch-shelf-hdr">
+        <div className="twitch-shelf-title">
+          <div className="twitch-live-dot"/>
+          LIVE ON TWITCH
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <button onClick={fetchStreams} style={{background:"transparent",border:"none",color:"var(--t3)",cursor:"pointer",fontSize:11}}>↻ Refresh</button>
+          <button onClick={()=>setShowInput(s=>!s)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"3px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>
+            {showInput?"Done":"+ Streamers"}
+          </button>
+        </div>
+      </div>
+      {showInput&&(
+        <div style={{padding:"0 40px",marginBottom:12}}>
+          <input className="fi" value={customLogins} onChange={e=>{setCustomLogins(e.target.value);localStorage.setItem("aura_twitch_logins",e.target.value);}} placeholder="Enter Twitch usernames, comma separated (e.g. shroud, pokimane)" style={{fontSize:11}}/>
+          <div style={{fontSize:10,color:"var(--t3)",marginTop:5}}>Also shows streams for games in your library automatically.</div>
+        </div>
+      )}
+      {streams.length === 0
+        ? <div className="twitch-empty">No live streams found. Add streamer names above to follow specific channels.</div>
+        : (
+          <div style={{position:"relative"}}>
+            <button onClick={()=>scroll(-1)} style={{position:"absolute",left:16,top:"50%",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,.7)",border:"1px solid rgba(255,255,255,.15)",color:"#fff",borderRadius:"50%",width:36,height:36,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:18,backdropFilter:"blur(6px)"}}>‹</button>
+            <div className="twitch-row" ref={rowRef}>
+              {streams.map(s => (
+                <div key={s.id} className="twitch-card">
+                  {s.thumbnail ? <img src={s.thumbnail} alt={s.user} className="twitch-thumb"/> : <div className="twitch-thumb-ph">📺</div>}
+                  <div className="twitch-badge"><div className="twitch-badge-dot"/>LIVE</div>
+                  <div className="twitch-ov">
+                    <div className="twitch-user">{s.user}</div>
+                    <div className="twitch-game">{s.game}</div>
+                    <div className="twitch-viewers-row"><div className="twitch-viewer-dot"/>{fmtViewers(s.viewers)} Viewers</div>
+                    <button className="twitch-watch-btn" onClick={e=>{e.stopPropagation();window.electronAPI?.isElectron&&window.electronAPI.openExternal(s.url);}}>Watch Stream</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button onClick={()=>scroll(1)} style={{position:"absolute",right:16,top:"50%",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,.7)",border:"1px solid rgba(255,255,255,.15)",color:"#fff",borderRadius:"50%",width:36,height:36,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:18,backdropFilter:"blur(6px)"}}>›</button>
+          </div>
+        )
+      }
+    </div>
+  );
+}
+
 // ── Grid ──────────────────────────────────────────────────────────────────────
 function Grid({games,onPlay,onFav,onEdit,onDel,onSelect}){
   if(!games.length) return(
@@ -923,44 +1204,58 @@ function ProfileModal({ profile, onClose, onSave }) {
 }
 
 // ── Customize ─────────────────────────────────────────────────────────────────
-function Customize({ theme, onThemeChange, accent, onAccentChange, customColors, onCustomColorsChange }) {
+function Customize({ theme, onThemeChange, accent, onAccentChange, customColors, onCustomColorsChange, bgImage, onBgChange, savedThemes, onSaveTheme, onDeleteTheme, onLoadTheme }) {
   const [local, setLocal] = useState(customColors || {bg:"#222831",panel:"#1a1f26",card:"#2D4059",hover:"#354d6e",ac:"#FF5722",ac2:"#ff8a65"});
   const [tab, setTab] = useState("presets");
+  const [ac2color, setAc2color] = useState(customColors?.ac2||"#ff8a65");
+  const [saveName, setSaveName] = useState("");
   const updateLocal = (key, val) => { const updated={...local,[key]:val};setLocal(updated);if(theme==="custom") onCustomColorsChange(updated); };
   const applyCustom = () => { onCustomColorsChange(local);onThemeChange("custom"); };
   const activeTheme = theme==="custom"&&customColors ? customColors : (THEMES[theme]||THEMES.midnight);
   const previewAc = accent||activeTheme.ac;
+  const previewAc2 = ac2color||activeTheme.ac2||previewAc;
   const colorRows = [
     {key:"bg",label:"Background",sub:"Main app background"},
     {key:"panel",label:"Panel",sub:"Sidebar and header"},
     {key:"card",label:"Card",sub:"Game cards and modals"},
     {key:"hover",label:"Hover",sub:"Hover and active states"},
     {key:"ac",label:"Accent",sub:"Primary accent color"},
-    {key:"ac2",label:"Accent Light",sub:"Gradient highlights"},
+    {key:"ac2",label:"Accent Light",sub:"Gradient end color"},
   ];
   const quickAccents = ["#FF5722","#cc0000","#1e90ff","#00d4ff","#7c4dff","#43a047","#ffc107","#ff69b4","#00bcd4","#ff6f00","#ffffff","#888888"];
+  const gradientPresets = [
+    {label:"Sunset",a:"#FF5722",b:"#ff8a65"},
+    {label:"Ocean",a:"#1e90ff",b:"#00d4ff"},
+    {label:"Purple",a:"#7c4dff",b:"#e040fb"},
+    {label:"Fire",a:"#cc0000",b:"#ff6f00"},
+    {label:"Forest",a:"#43a047",b:"#00bcd4"},
+    {label:"Gold",a:"#ffc107",b:"#ff6f00"},
+    {label:"Neon",a:"#00d4ff",b:"#7c4dff"},
+    {label:"Rose",a:"#e91e63",b:"#ff5722"},
+    {label:"Matrix",a:"#00e676",b:"#00bcd4"},
+  ];
   return (
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",background:"var(--bg)"}}>
       <div style={{position:"relative",height:200,flexShrink:0,overflow:"hidden",background:`linear-gradient(135deg,${activeTheme.bg} 0%,${activeTheme.panel} 60%,${activeTheme.card} 100%)`}}>
         <div style={{position:"absolute",width:300,height:300,borderRadius:"50%",background:previewAc,opacity:.06,top:-100,right:-80,filter:"blur(40px)"}}/>
         <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",gap:12,padding:"20px 40px"}}>
           <div style={{width:56,height:130,borderRadius:10,background:activeTheme.panel,border:"1px solid rgba(255,255,255,.06)",flexShrink:0,padding:8,display:"flex",flexDirection:"column",gap:5}}>
-            <div style={{width:20,height:20,borderRadius:5,background:`linear-gradient(135deg,${previewAc},${activeTheme.ac2||previewAc})`,marginBottom:4}}/>
+            <div style={{width:20,height:20,borderRadius:5,background:`linear-gradient(135deg,${previewAc},${previewAc2})`,marginBottom:4}}/>
             {[70,55,65,50].map((w,i)=>(<div key={i} style={{width:`${w}%`,height:5,borderRadius:3,background:i===0?previewAc:"rgba(255,255,255,.08)"}}/>))}
           </div>
           <div style={{display:"flex",gap:8,flex:1,justifyContent:"center"}}>
             {[1,2,3,4].map(i=>(<div key={i} style={{width:52,height:72,borderRadius:7,overflow:"hidden",background:activeTheme.card,border:"1px solid rgba(255,255,255,.06)",opacity:i===1?1:i===2?.85:i===3?.65:.4,transform:i===1?"translateY(-4px)":"none"}}><div style={{width:"100%",height:48,background:i===1?`linear-gradient(135deg,${previewAc}44,${activeTheme.hover})`:`linear-gradient(135deg,${activeTheme.hover},${activeTheme.card})`}}/></div>))}
           </div>
           <div style={{flexShrink:0,textAlign:"right"}}>
-            <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:26,fontWeight:700,letterSpacing:5,background:`linear-gradient(90deg,${previewAc},${activeTheme.ac2||previewAc})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>AURA</div>
+            <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:26,fontWeight:700,letterSpacing:5,background:`linear-gradient(90deg,${previewAc},${previewAc2})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>AURA</div>
             <div style={{fontSize:9,color:"rgba(255,255,255,.3)",letterSpacing:2,marginTop:3,textTransform:"uppercase"}}>{THEMES[theme]?.name||"Custom"} Theme</div>
           </div>
         </div>
         <div style={{position:"absolute",bottom:0,left:0,right:0,height:40,background:"linear-gradient(to bottom,transparent,var(--bg))"}}/>
       </div>
-      <div style={{display:"flex",background:"var(--panel)",borderBottom:"1px solid var(--border)",flexShrink:0,padding:"0 4px"}}>
-        {[{id:"presets",label:"🎨 Presets"},{id:"custom",label:"🛠 Builder"},{id:"accent",label:"⚡ Accent"}].map(t=>(
-          <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"13px 0",border:"none",background:"transparent",color:tab===t.id?"var(--ac)":"var(--t3)",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:.5,borderBottom:tab===t.id?"2px solid var(--ac)":"2px solid transparent",transition:"all .15s",fontFamily:"DM Sans,sans-serif"}}>{t.label}</button>
+      <div style={{display:"flex",background:"var(--panel)",borderBottom:"1px solid var(--border)",flexShrink:0,padding:"0 4px",overflowX:"auto"}}>
+        {[{id:"presets",label:"🎨 Presets"},{id:"custom",label:"🛠 Builder"},{id:"accent",label:"⚡ Accent"},{id:"bg",label:"🖼 BG"},{id:"saved",label:"💾 Saved"}].map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{flexShrink:0,padding:"13px 10px",border:"none",background:"transparent",color:tab===t.id?"var(--ac)":"var(--t3)",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:.5,borderBottom:tab===t.id?"2px solid var(--ac)":"2px solid transparent",transition:"all .15s",fontFamily:"DM Sans,sans-serif",whiteSpace:"nowrap"}}>{t.label}</button>
         ))}
       </div>
       <div style={{flex:1,overflowY:"auto",padding:"20px 20px 32px"}}>
@@ -1003,21 +1298,89 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
         )}
         {tab==="accent"&&(
           <div>
-            <div style={{fontSize:11,color:"var(--t3)",marginBottom:16}}>Override the accent color on any preset.</div>
-            <div style={{borderRadius:16,padding:28,marginBottom:18,textAlign:"center",background:`radial-gradient(circle at center,${previewAc}18 0%,transparent 70%)`,border:`1px solid ${previewAc}33`}}>
-              <div style={{width:72,height:72,borderRadius:"50%",background:previewAc,margin:"0 auto 12px",boxShadow:`0 0 0 12px ${previewAc}18,0 0 40px ${previewAc}66`}}/>
-              <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:22,fontWeight:700,color:previewAc,letterSpacing:3}}>{(accent||THEMES[theme]?.ac||"#FF5722").toUpperCase()}</div>
-              <div style={{fontSize:10,color:"var(--t3)",marginTop:4}}>Current accent color</div>
+            <div style={{fontSize:11,color:"var(--t3)",marginBottom:16}}>Pick a start and end color — the gradient applies to buttons, badges, and the logo.</div>
+            <div style={{borderRadius:12,height:48,marginBottom:20,background:`linear-gradient(90deg,${previewAc},${previewAc2})`,boxShadow:`0 4px 20px ${previewAc}55`}}/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
+              <div style={{background:"var(--card)",borderRadius:12,padding:"14px 16px",border:"1px solid var(--border)"}}>
+                <div style={{fontSize:10,color:"var(--t2)",fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>Start Color</div>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{flex:1,height:36,borderRadius:8,background:previewAc,boxShadow:`0 2px 8px ${previewAc}55`}}/>
+                  <input type="color" value={accent||THEMES[theme]?.ac||"#FF5722"} onChange={e=>onAccentChange(e.target.value)} style={{width:40,height:40,borderRadius:8,border:"1px solid rgba(255,255,255,.1)",cursor:"pointer",padding:2,background:"transparent",flexShrink:0}}/>
+                </div>
+              </div>
+              <div style={{background:"var(--card)",borderRadius:12,padding:"14px 16px",border:"1px solid var(--border)"}}>
+                <div style={{fontSize:10,color:"var(--t2)",fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>End Color</div>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{flex:1,height:36,borderRadius:8,background:previewAc2,boxShadow:`0 2px 8px ${previewAc2}55`}}/>
+                  <input type="color" value={ac2color} onChange={e=>{setAc2color(e.target.value);onCustomColorsChange({...local,ac2:e.target.value});}} style={{width:40,height:40,borderRadius:8,border:"1px solid rgba(255,255,255,.1)",cursor:"pointer",padding:2,background:"transparent",flexShrink:0}}/>
+                </div>
+              </div>
             </div>
-            <div style={{background:"var(--card)",borderRadius:12,padding:"14px 16px",border:"1px solid var(--border)",display:"flex",alignItems:"center",gap:14,marginBottom:16}}>
-              <div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:"var(--t1)",fontFamily:"Rajdhani,sans-serif",letterSpacing:1}}>PICK COLOR</div><div style={{fontSize:10,color:"var(--t3)",marginTop:2}}>Applies on top of any preset</div></div>
-              <input type="color" value={accent||THEMES[theme]?.ac||"#FF5722"} onChange={e=>onAccentChange(e.target.value)} style={{width:48,height:48,borderRadius:10,border:`2px solid ${previewAc}66`,cursor:"pointer",padding:2,background:"transparent"}}/>
+            <div style={{fontSize:9,color:"var(--t3)",marginBottom:10,letterSpacing:2,textTransform:"uppercase"}}>Quick gradient presets</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+              {gradientPresets.map(g=>(
+                <div key={g.label} onClick={()=>{onAccentChange(g.a);setAc2color(g.b);onCustomColorsChange({...local,ac2:g.b});}} style={{borderRadius:10,height:44,background:`linear-gradient(90deg,${g.a},${g.b})`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:"#fff",letterSpacing:.5,textShadow:"0 1px 4px rgba(0,0,0,.5)",transition:"transform .15s"}}
+                  onMouseEnter={e=>e.currentTarget.style.transform="scale(1.04)"}
+                  onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
+                  {g.label}
+                </div>
+              ))}
             </div>
-            <div style={{fontSize:9,color:"var(--t3)",marginBottom:10,letterSpacing:2,textTransform:"uppercase"}}>Quick picks</div>
+            <div style={{fontSize:9,color:"var(--t3)",marginBottom:10,letterSpacing:2,textTransform:"uppercase"}}>Single color picks</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8,marginBottom:16}}>
               {quickAccents.map(c=>(<div key={c} onClick={()=>onAccentChange(c)} style={{aspectRatio:"1",borderRadius:10,background:c,cursor:"pointer",border:`2px solid ${(accent||THEMES[theme]?.ac)===c?"white":"rgba(255,255,255,.08)"}`,transition:"all .15s",boxShadow:`0 2px 8px ${c}55`,transform:(accent||THEMES[theme]?.ac)===c?"scale(1.1)":"none"}}/>))}
             </div>
             {accent&&<button className="btn-gh" style={{width:"100%",justifyContent:"center",padding:"10px"}} onClick={()=>onAccentChange(null)}>Reset to Theme Default</button>}
+          </div>
+        )}
+        {tab==="bg"&&(
+          <div>
+            <div style={{fontSize:11,color:"var(--t3)",marginBottom:16}}>Set a custom background image for the launcher.</div>
+            {bgImage&&(
+              <div style={{width:"100%",height:120,borderRadius:12,overflow:"hidden",marginBottom:16,border:"1px solid var(--border)",position:"relative"}}>
+                <img src={bgImage} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.45)",backdropFilter:"blur(4px)"}}/>
+                <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Rajdhani,sans-serif",fontSize:18,fontWeight:700,letterSpacing:3,color:"#fff"}}>PREVIEW</div>
+              </div>
+            )}
+            <div style={{display:"flex",gap:8,marginBottom:12}}>
+              <input className="fi" value={bgImage||""} onChange={e=>onBgChange(e.target.value)} placeholder="https://... image URL" style={{flex:1}}/>
+              <button className="btn-p" style={{flexShrink:0}} onClick={async()=>{
+                if(!window.electronAPI?.isElectron) return;
+                const result=await window.electronAPI.pickImage();
+                if(result) onBgChange(result);
+              }}>Browse</button>
+            </div>
+            {bgImage&&<button className="btn-gh" style={{width:"100%",justifyContent:"center",padding:"10px"}} onClick={()=>onBgChange("")}>Remove Background</button>}
+          </div>
+        )}
+        {tab==="saved"&&(
+          <div>
+            <div style={{fontSize:11,color:"var(--t3)",marginBottom:16}}>Save your current theme settings as a named preset.</div>
+            <div style={{display:"flex",gap:8,marginBottom:20}}>
+              <input className="fi" value={saveName} onChange={e=>setSaveName(e.target.value)} placeholder="Theme name e.g. My Dark Purple" style={{flex:1,fontSize:12}}/>
+              <button className="btn-p" style={{flexShrink:0}} onClick={()=>{
+                if(!saveName.trim()) return;
+                onSaveTheme({name:saveName.trim(),colors:{...local},accent,ac2:ac2color,themeName:theme});
+                setSaveName("");
+              }}>Save</button>
+            </div>
+            {(!savedThemes||savedThemes.length===0)
+              ? <div style={{textAlign:"center",padding:"32px 0",color:"var(--t3)",fontSize:12}}>No saved themes yet. Build a theme and save it above.</div>
+              : <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {savedThemes.map(t=>(
+                    <div key={t.name} style={{display:"flex",alignItems:"center",gap:12,background:"var(--card)",borderRadius:12,padding:"12px 14px",border:"1px solid var(--border)"}}>
+                      <div style={{width:44,height:44,borderRadius:10,background:`linear-gradient(135deg,${t.colors?.ac||t.accent||"#FF5722"},${t.ac2||t.colors?.ac2||"#ff8a65"})`,flexShrink:0}}/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:700,color:"var(--t1)",fontFamily:"Rajdhani,sans-serif",letterSpacing:.5}}>{t.name}</div>
+                        <div style={{fontSize:10,color:"var(--t3)",marginTop:2}}>{t.themeName||"Custom"} base · {t.accent||"#FF5722"}</div>
+                      </div>
+                      <button className="btn-p" style={{fontSize:10,padding:"5px 12px"}} onClick={()=>onLoadTheme(t)}>Load</button>
+                      <button className="btn-d" style={{fontSize:10,padding:"5px 10px"}} onClick={()=>onDeleteTheme(t.name)}>✕</button>
+                    </div>
+                  ))}
+                </div>
+            }
           </div>
         )}
       </div>
@@ -1097,7 +1460,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       <div className="ss">
         <div className="ss-t">ABOUT</div>
         <div className="ss-card">
-          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.0.6</div></div><UpdateButton/></div>
+          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.0.7</div></div><UpdateButton/></div>
           <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>
@@ -1128,6 +1491,13 @@ export default function App(){
   const [splash,setSplash]=useState(true);
   const [splashHide,setSplashHide]=useState(false);
   const [showProfileModal,setShowProfileModal]=useState(false);
+
+  const [nowPlaying, setNowPlaying] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [bgImage, setBgImage] = useState(()=>localStorage.getItem("aura_bg")||"");
+  const [savedThemes, setSavedThemes] = useState(()=>{
+    try { return JSON.parse(localStorage.getItem("aura_saved_themes")||"[]"); } catch { return []; }
+  });
 
   useEffect(()=>{ applyTheme(theme, accent, customColors); },[theme, accent, customColors]);
   useEffect(()=>save(games),[games]);
@@ -1171,6 +1541,19 @@ export default function App(){
   const updateStats = useCallback((patch) => { setStats(prev=>{ const updated={...prev,...patch};saveStats(updated);checkAchievements(updated,unlockedAch);return updated; }); }, [checkAchievements, unlockedAch]);
   const toast=useCallback((msg,type="ok")=>{ const id=uid();setToasts(t=>[...t,{id,msg,type}]);setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),3000); },[]);
 
+  const saveCustomTheme2 = useCallback((named) => {
+    const updated = [...savedThemes.filter(t=>t.name!==named.name), named];
+    setSavedThemes(updated);
+    localStorage.setItem("aura_saved_themes", JSON.stringify(updated));
+    toast(`Theme "${named.name}" saved!`);
+  }, [savedThemes, toast]);
+
+  const deleteCustomTheme2 = useCallback((name) => {
+    const updated = savedThemes.filter(t=>t.name!==name);
+    setSavedThemes(updated);
+    localStorage.setItem("aura_saved_themes", JSON.stringify(updated));
+  }, [savedThemes]);
+
   const doPlay=useCallback(async(game)=>{
     setHeroGame(null);setLaunching(game);
     setGames(gs=>gs.map(g=>g.id===game.id?{...g,lastPlayed:Date.now(),playCount:(g.playCount||0)+1}:g));
@@ -1184,10 +1567,10 @@ export default function App(){
     if(window.electronAPI?.isElectron){
       const result=await window.electronAPI.launchGame(game.exePath);
       setLaunching(null);
-      if(result.success) toast(`${game.title} launched!`);
+      if(result.success){ toast(`${game.title} launched!`); setNowPlaying(game); }
       else toast(`Launch failed: ${result.error}`,"err");
     } else {
-      setTimeout(()=>{setLaunching(null);toast(`${game.title} launched!`)},2200);
+      setTimeout(()=>{setLaunching(null);toast(`${game.title} launched!`);setNowPlaying(game);},2200);
     }
   },[toast,checkAchievements,unlockedAch]);
 
@@ -1296,13 +1679,21 @@ export default function App(){
     return(
       <>
         <style>{S}</style>
+        {bgImage&&<><div className="app-bg" style={{backgroundImage:`url(${bgImage})`}}/><div className="app-bg-overlay"/></>}
         {splash&&(<div className={`splash ${splashHide?"hide":""}`}><div className="splash-logo">AURA</div><div className="splash-sub">Your Game Library</div><div className="splash-sub">Developed By: Taurrean Traylor</div><div className="splash-bar"><div className="splash-fill"/></div></div>)}
         <div className="gm-app">
-          <aside className="gm-rail">
-            <div className="gm-rail-logo"><Ic.Ctrl/></div>
+          <aside className={`gm-rail ${sidebarOpen?"expanded":""}`}>
+            <button className="gm-rail-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu">
+              {sidebarOpen?<Ic.MenuClose/>:<Ic.Menu/>}
+            </button>
+            <div style={{display:"flex",flexDirection:"column",alignItems:sidebarOpen?"flex-start":"center",marginBottom:16,gap:4,width:"100%",paddingLeft:sidebarOpen?4:0}}>
+              <div className="gm-rail-logo"><Ic.Ctrl/></div>
+              {sidebarOpen&&<div style={{fontFamily:"Rajdhani,sans-serif",fontSize:9,fontWeight:700,letterSpacing:3,background:"linear-gradient(90deg,var(--ac),var(--ac2))",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",marginLeft:4}}>AURA</div>}
+            </div>
             {navItems.map(it=>(
               <div key={it.id} className={`gm-rail-item ${view===it.id?"on":""}`} onClick={()=>goTo(it.id)} title={it.label}>
                 {it.icon}
+                {sidebarOpen&&<span className="gm-rail-item-label">{it.label}</span>}
                 {it.badge?<div className="gm-rail-badge"/>:null}
               </div>
             ))}
@@ -1316,18 +1707,21 @@ export default function App(){
               <div className="gm-srch"><Ic.Search/><input value={srch} onChange={e=>setSrch(e.target.value)} placeholder="Search games…"/></div>
               <button className="btn-p" onClick={()=>setModal("add")} style={{borderRadius:10}}><Ic.Plus/> Add</button>
             </div>
-            {!srch&&<GMBanner games={[...games].filter(g=>g.cover).sort((a,b)=>(b.lastPlayed||0)-(a.lastPlayed||0))} onPlay={doPlay} onFav={doFav} onSelect={g=>{setHeroGame(g);goTo("library");}}/>}
+            {!srch&&<GMBanner games={[...games].filter(g=>g.cover).sort((a,b)=>(b.lastPlayed||0)-(a.lastPlayed||0))} onPlay={doPlay} onFav={doFav} onSelect={setHeroGame}/>}
             <div className="gm-content">
               {srch?(
-                <GMShelf title="SEARCH RESULTS" games={sorted} onPlay={doPlay} onFav={doFav} onSelect={g=>{setHeroGame(g);goTo("library");}} count={`${sorted.length} games`}/>
+                <GMShelf title="SEARCH RESULTS" games={sorted} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}} count={`${sorted.length} games`}/>
               ):(
                 <>
-                  {recent.length>0&&<GMShelf title="RECENTLY PLAYED" games={recent.slice(0,12)} onPlay={doPlay} onFav={doFav} onSelect={g=>{setHeroGame(g);goTo("library");}}/>}
-                  {favs.length>0&&<GMShelf title="FAVORITES" games={favs} onPlay={doPlay} onFav={doFav} onSelect={g=>{setHeroGame(g);goTo("library");}}/>}
+                  <FriendActivityShelf/>
+                  <TwitchShelf games={games}/>
+                  <MadeForShelf games={games} username={profile.username} onPlay={doPlay} onSelect={g=>{setHeroGame(g);goTo("library");}}/>
+                  {recent.length>0&&<GMShelf title="RECENTLY PLAYED" games={recent.slice(0,12)} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}}/>}
+                  {favs.length>0&&<GMShelf title="FAVORITES" games={favs} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}}/>}
                   {CATEGORIES.filter(c=>c!=="All").map(c=>{
                     const cGames=games.filter(g=>g.category===c);
                     if(!cGames.length) return null;
-                    return <GMShelf key={c} title={c.toUpperCase()} games={cGames} onPlay={doPlay} onFav={doFav} onSelect={g=>{setHeroGame(g);goTo("library");}} count={`${cGames.length} games`}/>;
+                    return <GMShelf key={c} title={c.toUpperCase()} games={cGames} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}} count={`${cGames.length} games`}/>;
                   })}
                 </>
               )}
@@ -1338,6 +1732,7 @@ export default function App(){
         {modal==="add"&&<Modal mode="add" onClose={()=>setModal(null)} onSave={doAdd}/>}
         {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={(p)=>{setProfile(p);saveProfile(p);setShowProfileModal(false);toast("Profile updated!");}}/>}
         {launching&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
+        {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
         <div className="tc">
           {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
           {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}
@@ -1350,29 +1745,43 @@ export default function App(){
   return(
     <>
       <style>{S}</style>
+      {bgImage&&<><div className="app-bg" style={{backgroundImage:`url(${bgImage})`}}/><div className="app-bg-overlay"/></>}
       {splash&&(<div className={`splash ${splashHide?"hide":""}`}><div className="splash-logo">AURA</div><div className="splash-sub">Your Game Library</div><div className="splash-sub">Developed By: Taurrean Traylor</div><div className="splash-bar"><div className="splash-fill"/></div></div>)}
       <div className="app">
-        <aside className="sb">
-          <div className="sb-logo"><div className="sb-li"><Ic.Ctrl/></div><span className="sb-lt">AURA</span></div>
+        <aside className={`sb ${sidebarOpen?"":"collapsed"}`}>
+          <div className="sb-logo">
+            {sidebarOpen
+              ? <>
+                  <div className="sb-li"><Ic.Ctrl/></div>
+                  <span className="sb-lt">AURA</span>
+                  <button className="sb-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu"><Ic.MenuClose/></button>
+                </>
+              : <>
+                  <button className="sb-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu" style={{margin:"0 auto"}}><Ic.Menu/></button>
+                  <div className="sb-li" style={{margin:"0 auto"}}><Ic.Ctrl/></div>
+                </>
+            }
+          </div>
           <div className="sb-profile" onClick={()=>setShowProfileModal(true)}>
             {profile.avatar?<img src={profile.avatar} alt={profile.username} className="sb-pav"/>:<div className="sb-pav-ph">🎮</div>}
-            <div style={{flex:1,minWidth:0}}><div className="sb-pname">{profile.username}</div><div className="sb-pedit">Edit profile</div></div>
+            {sidebarOpen&&<div style={{flex:1,minWidth:0}}><div className="sb-pname">{profile.username}</div><div className="sb-pedit">Edit profile</div></div>}
           </div>
           <div className="sb-sec">
-            <div className="sb-sl">Navigate</div>
+            {sidebarOpen&&<div className="sb-sl">Navigate</div>}
             {navItems.map(it=>(
-              <div key={it.id} className={`sb-item ${view===it.id?"on":""}`} onClick={()=>goTo(it.id)}>
-                {it.icon}<span>{it.label}</span>
-                {it.badge?<span className="sb-badge">{it.badge}</span>:null}
+              <div key={it.id} className={`sb-item ${view===it.id?"on":""}`} onClick={()=>goTo(it.id)} title={it.label}>
+                {it.icon}
+                {sidebarOpen&&<span>{it.label}</span>}
+                {sidebarOpen&&it.badge?<span className="sb-badge">{it.badge}</span>:null}
               </div>
             ))}
           </div>
           <div className="sb-foot">
-            <div className="sb-stat">
+            {sidebarOpen&&<div className="sb-stat">
               <div className="sb-stat-l">Total Playtime</div>
               <div className="sb-stat-v">{fmtTime(totalPlaytime)||"0m"}</div>
               <div className="sb-stat-s">across {games.length} games</div>
-            </div>
+            </div>}
           </div>
         </aside>
 
@@ -1431,6 +1840,7 @@ export default function App(){
       {modal==="delete"&&delT&&<DelModal game={delT} onClose={()=>{setModal(null);setDelT(null);}} onOk={doDel}/>}
       {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={(p)=>{setProfile(p);saveProfile(p);setShowProfileModal(false);toast("Profile updated!");}}/>}
       {launching&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
+      {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
       <div className="tc">
         {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
         {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}

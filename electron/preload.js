@@ -10,6 +10,8 @@ fetchCoversBulk: (games) => ipcRenderer.invoke("fetch-covers-bulk", games),
 
 onGameSessionEnded: (callback) => ipcRenderer.on("game-session-ended", callback),
 
+fetchTwitchStreams: (opts) => ipcRenderer.invoke("fetch-twitch-streams", opts),
+
   // File picker
   pickExe: () => ipcRenderer.invoke("pick-exe"),
 
