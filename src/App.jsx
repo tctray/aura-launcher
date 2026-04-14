@@ -34,6 +34,25 @@ const THEMES = {
 };
 
 const uid = () => Math.random().toString(36).slice(2,10);
+
+// Works in Electron (native dialog) and browser (file input fallback)
+const pickImageFile = () => new Promise((resolve) => {
+  if (window.electronAPI?.isElectron) {
+    window.electronAPI.pickImage().then(resolve);
+    return;
+  }
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/png,image/jpeg,image/webp,image/gif";
+  input.onchange = () => {
+    const file = input.files[0];
+    if (!file) { resolve(null); return; }
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.readAsDataURL(file);
+  };
+  input.click();
+});
 const load = () => { try { const s=localStorage.getItem("aura_games"); return s?JSON.parse(s):DEMO_GAMES; } catch { return DEMO_GAMES; } };
 const save = (g) => { try { localStorage.setItem("aura_games",JSON.stringify(g)); } catch {} };
 const loadProfile = () => { try { const s=localStorage.getItem("aura_profile"); return s?JSON.parse(s):null; } catch { return null; } };
@@ -125,6 +144,9 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .splash{position:fixed;inset:0;background:var(--bg);z-index:1000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;animation:fadeIn .3s ease;}
 .splash.hide{animation:fadeOut .5s ease forwards;}
 .splash-logo{font-family:'Rajdhani',sans-serif;font-size:56px;font-weight:700;letter-spacing:10px;background:linear-gradient(90deg,var(--ac),var(--ac2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.app-bg{position:fixed;inset:0;background-size:cover;background-position:center;z-index:0;pointer-events:none;}
+.app-bg-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);z-index:0;pointer-events:none;}
+.app,.gm-app{z-index:1;}
 .splash-sub{font-size:11px;color:#00aaff;letter-spacing:4px;text-transform:uppercase;}
 .splash-bar{width:200px;height:2px;background:var(--border);border-radius:2px;overflow:hidden;margin-top:8px;}
 .splash-fill{height:100%;background:linear-gradient(90deg,var(--ac),var(--ac2));border-radius:2px;animation:splash-load 1.8s ease forwards;}
@@ -260,14 +282,15 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .toast.ok .tdot{background:var(--ac)}
 .toast.err .tdot{background:var(--danger)}
 
-.sc{padding:24px;overflow-y:auto;flex:1}
-.ss{margin-bottom:28px}
+.sc{padding:24px;overflow-y:auto;flex:1;}
+.ss{margin-bottom:28px;}
 .ss-t{font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:700;letter-spacing:2px;margin-bottom:12px;color:var(--t2);text-transform:uppercase;}
 .ss-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-.sr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)}
-.sr:last-child{border-bottom:none}
-.sr-l{font-size:13px;font-weight:500}
-.sr-s{font-size:10.5px;color:var(--t3);margin-top:2px}
+.sr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);gap:12px;}
+.sr:last-child{border-bottom:none;}
+.sr>div:first-child{flex:1;min-width:0;}
+.sr-l{font-size:13px;font-weight:500;color:var(--t1);text-align:left;}
+.sr-s{font-size:10.5px;color:var(--t3);margin-top:2px;text-align:left;}
 .tog{width:40px;height:22px;border-radius:11px;background:var(--hover);border:1px solid var(--border);cursor:pointer;position:relative;transition:all .2s;flex-shrink:0}
 .tog.on{background:var(--ac);border-color:var(--ac)}
 .tog::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .2s}
@@ -552,6 +575,7 @@ const Ic = {
   User:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>,
   Trophy:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M6 9H4a2 2 0 0 1-2-2V5h4"/><path d="M18 9h2a2 2 0 0 0 2-2V5h-4"/><path d="M12 17v4"/><path d="M8 21h8"/><path d="M6 5h12v6a6 6 0 0 1-12 0V5z"/></svg>,
   Palette:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><circle cx="12" cy="12" r="10"/><circle cx="8.5" cy="14.5" r="1.5" fill="currentColor"/><circle cx="15.5" cy="14.5" r="1.5" fill="currentColor"/><circle cx="12" cy="9" r="1.5" fill="currentColor"/></svg>,
+  Tv:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>,
 };
 
 // ── Profile Setup ─────────────────────────────────────────────────────────────
@@ -580,11 +604,14 @@ function ProfileSetup({ onComplete }) {
         <div className="setup-w">
           <div className="fg">
             <label className="fl">Username *</label>
-            <input className="fi" value={username} onChange={e=>setUsername(e.target.value)} placeholder="e.g. TaurreanPlays" onKeyDown={e=>e.key==="Enter"&&handleSave()} autoFocus/>
+            <input className="fi" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Enter a username" onKeyDown={e=>e.key==="Enter"&&handleSave()} autoFocus/>
           </div>
           <div className="fg" style={{marginBottom:0}}>
-            <label className="fl">Avatar URL (optional)</label>
-            <input className="fi" value={avatar} onChange={e=>{setAvatar(e.target.value);setAvatarErr(false);}} placeholder="https://... (paste image URL)"/>
+            <label className="fl">Avatar (optional)</label>
+            <div style={{display:"flex",gap:8}}>
+              <input className="fi" value={avatar} onChange={e=>{setAvatar(e.target.value);setAvatarErr(false);}} placeholder="https://... or browse" style={{flex:1}}/>
+              <button className="btn-p" style={{flexShrink:0}} onClick={async()=>{const result=await pickImageFile();if(result){setAvatar(result);setAvatarErr(false);}}}>Browse</button>
+            </div>
           </div>
         </div>
         <button className="btn-p" style={{width:"100%",justifyContent:"center",padding:"11px"}} onClick={handleSave} disabled={!username.trim()}>Enter AURA</button>
@@ -739,7 +766,14 @@ function FriendsPanel({ launching, toast }) {
                   <div style={{flex:1,minWidth:0}}><div className="fp-username">Xbox Connected</div><div className="fp-tag">OpenXBL</div></div>
                   <button className="btn-gh" onClick={()=>setXboxProfile(null)} style={{fontSize:10,padding:"4px 8px"}}>Logout</button>
                 </div>
-                <button className="btn-p" style={{width:"100%",justifyContent:"center",marginBottom:8}} onClick={async()=>{const res=await window.electronAPI.xboxGetRecentGames();if(res.success) setXboxGames(res.games.titles||[]);else toast("Could not load Xbox games","err");}}>Load Recent Games</button>
+                <button className="btn-p" style={{width:"100%",justifyContent:"center",marginBottom:8}} onClick={async()=>{
+                  const res=await window.electronAPI.xboxGetRecentGames();
+                  if(res.success){
+                    const titles=Array.isArray(res.games)?res.games:res.games?.titles||[];
+                    setXboxGames(titles);
+                    if(!titles.length) toast("No recent Xbox games found","err");
+                  } else toast(res.error||"Could not load Xbox games","err");
+                }}>Load Recent Games</button>
                 {xboxGames.length>0&&(<div><div className="fp-section-label">Recent Games</div>{xboxGames.slice(0,10).map(g=>(<div key={g.titleId} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid var(--border)"}}>{g.displayImage&&<img src={g.displayImage} alt={g.name} style={{width:32,height:32,borderRadius:4}}/>}<div style={{flex:1,minWidth:0}}><div style={{fontSize:11,fontWeight:600,color:"var(--t1)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</div><div style={{fontSize:9,color:"var(--t3)"}}>{g.achievement?.currentAchievements||0} / {g.achievement?.totalAchievements||0} achievements</div></div></div>))}</div>)}
               </div>
             )}
@@ -778,17 +812,54 @@ function Card({game,onPlay,onFav,onEdit,onDel,onSelect,style}){
 
 // ── Hero View ─────────────────────────────────────────────────────────────────
 function HeroView({ game, onBack, onPlay, onFav }) {
+  const [videoId, setVideoId] = useState(null);
+  const [loadingTrailer, setLoadingTrailer] = useState(false);
+  const [showTrailer, setShowTrailer] = useState(false);
+
+  const fetchTrailer = async () => {
+    if (videoId) { setShowTrailer(true); return; }
+    setLoadingTrailer(true);
+    if (window.electronAPI?.isElectron) {
+      const res = await window.electronAPI.fetchTrailer(game.title);
+      if (res.success) { setVideoId(res.videoId); setShowTrailer(true); }
+    } else {
+      // Dev: use YouTube search embed — no API key needed
+      setVideoId(`__search__${encodeURIComponent(game.title + " official trailer")}`);
+      setShowTrailer(true);
+    }
+    setLoadingTrailer(false);
+  };
   return (
     <div className="hero">
       <div className="hero-bg" style={{backgroundImage:`url(${game.cover})`}}/>
       <div className="hero-content">
-        {game.cover&&<img src={game.cover} alt={game.title} className="hero-cover"/>}
+        {showTrailer && videoId
+          ? <div style={{width:"100%",maxWidth:640,aspectRatio:"16/9",borderRadius:12,overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,.6)",border:"1px solid rgba(255,255,255,.1)"}}>
+              <iframe
+                width="100%" height="100%"
+                src={videoId.startsWith("__search__")
+                  ? `https://www.youtube.com/embed?listType=search&list=${videoId.replace("__search__","")}`
+                  : `https://www.youtube.com/embed/${videoId}?autoplay=1`
+                }
+                allow="autoplay; encrypted-media"
+                allowFullScreen
+                style={{border:"none",display:"block"}}
+              />
+            </div>
+          : game.cover&&<img src={game.cover} alt={game.title} className="hero-cover"/>
+        }
         <div className="hero-title">{game.title}</div>
         <div className="hero-cat">{game.category}</div>
         <div className="hero-plays">{game.playCount||0} sessions{game.totalTime ? ` · ${fmtTime(game.totalTime)} played` : ""}</div>
         <div className="hero-actions">
           <button className="hero-back" onClick={onBack}>← Back</button>
           <button className={`hero-fav ${game.favorite?"on":""}`} onClick={()=>onFav(game.id)}><Ic.Heart f={game.favorite}/></button>
+          {showTrailer
+            ? <button className="hero-back" onClick={()=>setShowTrailer(false)}>✕ Close Trailer</button>
+            : <button className="hero-back" onClick={fetchTrailer} disabled={loadingTrailer} style={{opacity:loadingTrailer?.6:1}}>
+                {loadingTrailer?"Loading…":"▶ Trailer"}
+              </button>
+          }
           <button className="hero-play" onClick={()=>onPlay(game)}><Ic.Play/> LAUNCH</button>
         </div>
       </div>
@@ -1057,7 +1128,7 @@ function MadeForShelf({ games, username, onPlay, onSelect }) {
 }
 
 // ── Twitch Shelf ──────────────────────────────────────────────────────────────
-function TwitchShelf({ games }) {
+function TwitchShelf({ games, onStreamClick }) {
   const [streams, setStreams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [customLogins, setCustomLogins] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
@@ -1069,7 +1140,17 @@ function TwitchShelf({ games }) {
   };
 
   const fetchStreams = useCallback(async () => {
-    if (!window.electronAPI?.isElectron) { setLoading(false); return; }
+    if (!window.electronAPI?.isElectron) {
+      setStreams([
+        { id:"1", user:"shroud",     title:"Valorant ranked grind",      game:"VALORANT",       viewers:45231, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_shroud-440x248.jpg",     url:"https://twitch.tv/shroud" },
+        { id:"2", user:"pokimane",   title:"Chill games with chat",      game:"Just Chatting",  viewers:28400, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_pokimane-440x248.jpg",   url:"https://twitch.tv/pokimane" },
+        { id:"3", user:"xQc",        title:"!clip variety day",          game:"Minecraft",      viewers:72100, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_xqc-440x248.jpg",        url:"https://twitch.tv/xqc" },
+        { id:"4", user:"Myth",       title:"Fortnite with the squad",    game:"Fortnite",       viewers:9800,  thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_myth-440x248.jpg",        url:"https://twitch.tv/myth" },
+        { id:"5", user:"DisguisedToast", title:"Among Us new update",   game:"Among Us",       viewers:15600, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_disguisedtoast-440x248.jpg", url:"https://twitch.tv/disguisedtoast" },
+      ]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     const gameNames = games.filter(g => g.cover).map(g => g.title).slice(0, 10);
     const userLogins = customLogins.split(",").map(s => s.trim()).filter(Boolean);
@@ -1087,7 +1168,6 @@ function TwitchShelf({ games }) {
   const fmtViewers = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
 
   if (loading) return null;
-  if (!streams.length && !showInput) return null;
 
   return (
     <div className="twitch-shelf">
@@ -1116,14 +1196,14 @@ function TwitchShelf({ games }) {
             <button onClick={()=>scroll(-1)} style={{position:"absolute",left:16,top:"50%",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,.7)",border:"1px solid rgba(255,255,255,.15)",color:"#fff",borderRadius:"50%",width:36,height:36,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:18,backdropFilter:"blur(6px)"}}>‹</button>
             <div className="twitch-row" ref={rowRef}>
               {streams.map(s => (
-                <div key={s.id} className="twitch-card">
+                <div key={s.id} className="twitch-card" onClick={()=>onStreamClick&&onStreamClick(s)}>
                   {s.thumbnail ? <img src={s.thumbnail} alt={s.user} className="twitch-thumb"/> : <div className="twitch-thumb-ph">📺</div>}
                   <div className="twitch-badge"><div className="twitch-badge-dot"/>LIVE</div>
                   <div className="twitch-ov">
                     <div className="twitch-user">{s.user}</div>
                     <div className="twitch-game">{s.game}</div>
                     <div className="twitch-viewers-row"><div className="twitch-viewer-dot"/>{fmtViewers(s.viewers)} Viewers</div>
-                    <button className="twitch-watch-btn" onClick={e=>{e.stopPropagation();window.electronAPI?.isElectron&&window.electronAPI.openExternal(s.url);}}>Watch Stream</button>
+                    <button className="twitch-watch-btn" onClick={e=>{e.stopPropagation();onStreamClick&&onStreamClick(s);}}>Watch Stream</button>
                   </div>
                 </div>
               ))}
@@ -1195,10 +1275,166 @@ function ProfileModal({ profile, onClose, onSave }) {
             }
           </div>
           <div className="fg"><label className="fl">Username *</label><input className="fi" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Your username"/></div>
-          <div className="fg" style={{marginBottom:0}}><label className="fl">Avatar URL</label><input className="fi" value={avatar} onChange={e=>{setAvatar(e.target.value);setAvatarErr(false);}} placeholder="https://..."/></div>
+          <div className="fg" style={{marginBottom:0}}>
+            <label className="fl">Avatar URL</label>
+            <div style={{display:"flex",gap:8}}>
+              <input className="fi" value={avatar} onChange={e=>{setAvatar(e.target.value);setAvatarErr(false);}} placeholder="https://... or browse" style={{flex:1}}/>
+              <button className="btn-p" style={{flexShrink:0}} onClick={async()=>{const result=await pickImageFile();if(result){setAvatar(result);setAvatarErr(false);}}}>Browse</button>
+            </div>
+          </div>
         </div>
         <div className="mf"><button className="btn-gh" onClick={onClose}>Cancel</button><button className="btn-p" onClick={()=>{if(!username.trim()) return;onSave({...profile, username:username.trim(), avatar:avatar.trim()});}}>Save</button></div>
       </div>
+    </div>
+  );
+}
+
+// ── Streams View ──────────────────────────────────────────────────────────────
+function StreamsView({ games, initialStream, onClear }) {
+  const [activeStream, setActiveStream] = useState(initialStream||null);
+  const [streams, setStreams] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [customLogins, setCustomLogins] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
+  const [inputVal, setInputVal] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
+  const [chatOpen, setChatOpen] = useState(true);
+
+  const fetchStreams = useCallback(async () => {
+    setLoading(true);
+    if (window.electronAPI?.isElectron) {
+      const gameNames = games.filter(g => g.cover).map(g => g.title).slice(0, 10);
+      const userLogins = customLogins.split(",").map(s => s.trim()).filter(Boolean);
+      const res = await window.electronAPI.fetchTwitchStreams({ gameNames, userLogins });
+      if (res.success) setStreams(res.streams);
+    } else {
+      setStreams([
+        { id:"1", user:"shroud",     title:"Valorant ranked",     game:"VALORANT",      viewers:45231, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_shroud-440x248.jpg",     url:"https://twitch.tv/shroud" },
+        { id:"2", user:"pokimane",   title:"Chill games",         game:"Just Chatting", viewers:28400, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_pokimane-440x248.jpg",   url:"https://twitch.tv/pokimane" },
+        { id:"3", user:"xQc",        title:"Variety day",         game:"Minecraft",     viewers:72100, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_xqc-440x248.jpg",        url:"https://twitch.tv/xqc" },
+        { id:"4", user:"Myth",       title:"Fortnite squads",     game:"Fortnite",      viewers:9800,  thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_myth-440x248.jpg",        url:"https://twitch.tv/myth" },
+        { id:"5", user:"TimTheTatman",title:"Call of Duty",       game:"Call of Duty",  viewers:18200, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_timthetatman-440x248.jpg",url:"https://twitch.tv/timthetatman" },
+        { id:"6", user:"NICKMERCS",  title:"Warzone",             game:"Warzone",       viewers:22100, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_nickmercs-440x248.jpg",   url:"https://twitch.tv/nickmercs" },
+      ]);
+    }
+    setLoading(false);
+  }, [games, customLogins]);
+
+  useEffect(() => { fetchStreams(); }, [fetchStreams]);
+
+  const fmtViewers = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
+
+  const player = activeStream ? (
+    <div style={{flex:1,display:"flex",flexDirection:"column",background:"#000",minWidth:0}}>
+      {/* Stream player */}
+      <div style={{flex:1,position:"relative",minHeight:0}}>
+        {window.electronAPI?.isElectron
+          ? <webview
+              src={`https://player.twitch.tv/?channel=${activeStream.user}&parent=localhost&autoplay=true`}
+              style={{width:"100%",height:"100%",display:"block"}}
+              allowpopups="true"
+            />
+          : <iframe
+              src={`https://player.twitch.tv/?channel=${activeStream.user}&parent=localhost`}
+              style={{width:"100%",height:"100%",border:"none",display:"block"}}
+              allowFullScreen
+            />
+        }
+      </div>
+      {/* Stream info bar */}
+      <div style={{padding:"10px 16px",background:"#0e0e10",borderTop:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
+        <div style={{width:8,height:8,borderRadius:"50%",background:"#eb0400",boxShadow:"0 0 6px #eb0400",flexShrink:0}}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:14,fontWeight:700,color:"var(--t1)",letterSpacing:.3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeStream.user}</div>
+          <div style={{fontSize:10,color:"var(--t2)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeStream.title}</div>
+        </div>
+        <div style={{fontSize:10,color:"#9147ff",fontWeight:700}}>{activeStream.game}</div>
+        <div style={{fontSize:10,color:"var(--t3)"}}>👁 {fmtViewers(activeStream.viewers)}</div>
+        <button onClick={()=>setChatOpen(o=>!o)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>{chatOpen?"Hide Chat":"Show Chat"}</button>
+        <button onClick={()=>{setActiveStream(null);onClear&&onClear();}} style={{background:"rgba(255,77,109,.1)",border:"1px solid rgba(255,77,109,.3)",color:"var(--danger)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>✕ Close</button>
+      </div>
+    </div>
+  ) : null;
+
+  const chat = activeStream && chatOpen ? (
+    <div style={{width:300,flexShrink:0,borderLeft:"1px solid var(--border)",background:"#0e0e10"}}>
+      {window.electronAPI?.isElectron
+        ? <webview
+            src={`https://www.twitch.tv/embed/${activeStream.user}/chat?parent=localhost&darkpopout`}
+            style={{width:"100%",height:"100%",display:"block"}}
+            allowpopups="true"
+          />
+        : <iframe
+            src={`https://www.twitch.tv/embed/${activeStream.user}/chat?parent=localhost&darkpopout`}
+            style={{width:"100%",height:"100%",border:"none",display:"block"}}
+          />
+      }
+    </div>
+  ) : null;
+
+  return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"var(--bg)"}}>
+      {/* Header */}
+      <div style={{padding:"14px 24px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
+        <div style={{width:8,height:8,borderRadius:"50%",background:"#eb0400",boxShadow:"0 0 8px #eb0400",animation:"pulse 2s infinite"}}/>
+        <span style={{fontFamily:"Rajdhani,sans-serif",fontSize:18,fontWeight:700,letterSpacing:2,color:"var(--t1)"}}>LIVE STREAMS</span>
+        <div style={{flex:1}}/>
+        <input
+          className="fi" value={inputVal}
+          onChange={e=>setInputVal(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter"){ setCustomLogins(inputVal); localStorage.setItem("aura_twitch_logins",inputVal); }}}
+          placeholder="Add streamers (comma separated) — press Enter"
+          style={{fontSize:11,maxWidth:320}}
+        />
+        <button className="btn-p" style={{fontSize:11,padding:"7px 14px"}} onClick={()=>{ setCustomLogins(inputVal); localStorage.setItem("aura_twitch_logins",inputVal); fetchStreams(); }}>↻ Refresh</button>
+      </div>
+
+      {/* Main area */}
+      {activeStream ? (
+        <div style={{flex:1,display:"flex",overflow:"hidden"}}>
+          {player}
+          {chat}
+        </div>
+      ) : (
+        <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
+          {loading ? (
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:200,color:"var(--t3)",fontSize:12}}>Loading streams…</div>
+          ) : streams.length === 0 ? (
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:200,gap:10,color:"var(--t3)"}}>
+              <div style={{fontSize:36}}>📺</div>
+              <div style={{fontSize:14,fontWeight:600,color:"var(--t2)"}}>No live streams found</div>
+              <div style={{fontSize:11}}>Add streamer names above or launch AURA with your game library</div>
+            </div>
+          ) : (
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
+              {streams.map(s => (
+                <div key={s.id} onClick={()=>setActiveStream(s)} style={{borderRadius:12,overflow:"hidden",cursor:"pointer",background:"var(--card)",border:"1px solid var(--border)",transition:"transform .2s,box-shadow .2s",position:"relative"}}
+                  onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-4px)";e.currentTarget.style.boxShadow="0 16px 40px rgba(0,0,0,.6),0 0 0 1px #9147ff55";}}
+                  onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="none";}}>
+                  <div style={{position:"relative",aspectRatio:"16/9",overflow:"hidden"}}>
+                    {s.thumbnail
+                      ? <img src={s.thumbnail} alt={s.user} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                      : <div style={{width:"100%",height:"100%",background:"linear-gradient(135deg,#1a1a2e,#2d1b69)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36}}>📺</div>
+                    }
+                    <div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(0,0,0,.6) 0%,transparent 60%)"}}/>
+                    <div style={{position:"absolute",top:8,left:8,background:"linear-gradient(90deg,#eb0400,#9147ff)",color:"#fff",fontSize:9,fontWeight:800,padding:"3px 8px",borderRadius:20,letterSpacing:1.5,display:"flex",alignItems:"center",gap:4}}>
+                      <div style={{width:5,height:5,borderRadius:"50%",background:"#fff"}}/>LIVE
+                    </div>
+                    <div style={{position:"absolute",top:8,right:8,background:"rgba(0,0,0,.75)",color:"#fff",fontSize:9,fontWeight:700,padding:"3px 8px",borderRadius:20,backdropFilter:"blur(4px)"}}>👁 {fmtViewers(s.viewers)}</div>
+                    <div style={{position:"absolute",bottom:8,left:8,right:8,display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{flex:1}}/>
+                      <div style={{background:"rgba(145,71,255,.9)",color:"#fff",borderRadius:8,padding:"6px 14px",fontSize:11,fontWeight:700,fontFamily:"Rajdhani,sans-serif",letterSpacing:1}}>▶ Watch</div>
+                    </div>
+                  </div>
+                  <div style={{padding:"12px 14px"}}>
+                    <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:15,fontWeight:700,color:"var(--t1)",letterSpacing:.3,marginBottom:3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.user}</div>
+                    <div style={{fontSize:11,color:"var(--t2)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",marginBottom:4}}>{s.title}</div>
+                    <div style={{fontSize:10,color:"#9147ff",fontWeight:700}}>{s.game}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1209,6 +1445,7 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
   const [tab, setTab] = useState("presets");
   const [ac2color, setAc2color] = useState(customColors?.ac2||"#ff8a65");
   const [saveName, setSaveName] = useState("");
+  const [bgInput, setBgInput] = useState(bgImage||"");
   const updateLocal = (key, val) => { const updated={...local,[key]:val};setLocal(updated);if(theme==="custom") onCustomColorsChange(updated); };
   const applyCustom = () => { onCustomColorsChange(local);onThemeChange("custom"); };
   const activeTheme = theme==="custom"&&customColors ? customColors : (THEMES[theme]||THEMES.midnight);
@@ -1299,34 +1536,11 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
         {tab==="accent"&&(
           <div>
             <div style={{fontSize:11,color:"var(--t3)",marginBottom:16}}>Pick a start and end color — the gradient applies to buttons, badges, and the logo.</div>
-            <div style={{borderRadius:12,height:48,marginBottom:20,background:`linear-gradient(90deg,${previewAc},${previewAc2})`,boxShadow:`0 4px 20px ${previewAc}55`}}/>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
-              <div style={{background:"var(--card)",borderRadius:12,padding:"14px 16px",border:"1px solid var(--border)"}}>
-                <div style={{fontSize:10,color:"var(--t2)",fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>Start Color</div>
-                <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <div style={{flex:1,height:36,borderRadius:8,background:previewAc,boxShadow:`0 2px 8px ${previewAc}55`}}/>
-                  <input type="color" value={accent||THEMES[theme]?.ac||"#FF5722"} onChange={e=>onAccentChange(e.target.value)} style={{width:40,height:40,borderRadius:8,border:"1px solid rgba(255,255,255,.1)",cursor:"pointer",padding:2,background:"transparent",flexShrink:0}}/>
-                </div>
-              </div>
-              <div style={{background:"var(--card)",borderRadius:12,padding:"14px 16px",border:"1px solid var(--border)"}}>
-                <div style={{fontSize:10,color:"var(--t2)",fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>End Color</div>
-                <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <div style={{flex:1,height:36,borderRadius:8,background:previewAc2,boxShadow:`0 2px 8px ${previewAc2}55`}}/>
-                  <input type="color" value={ac2color} onChange={e=>{setAc2color(e.target.value);onCustomColorsChange({...local,ac2:e.target.value});}} style={{width:40,height:40,borderRadius:8,border:"1px solid rgba(255,255,255,.1)",cursor:"pointer",padding:2,background:"transparent",flexShrink:0}}/>
-                </div>
-              </div>
+            <div style={{display:"flex",background:"var(--card)",borderRadius:12,padding:"14px 16px",border:"1px solid var(--border)",alignItems:"center",gap:14,marginBottom:20}}>
+              <div style={{flex:1,height:48,borderRadius:10,background:previewAc,boxShadow:`0 4px 16px ${previewAc}55`}}/>
+              <input type="color" value={accent||THEMES[theme]?.ac||"#FF5722"} onChange={e=>onAccentChange(e.target.value)} style={{width:48,height:48,borderRadius:10,border:`2px solid ${previewAc}66`,cursor:"pointer",padding:2,background:"transparent",flexShrink:0}}/>
             </div>
-            <div style={{fontSize:9,color:"var(--t3)",marginBottom:10,letterSpacing:2,textTransform:"uppercase"}}>Quick gradient presets</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
-              {gradientPresets.map(g=>(
-                <div key={g.label} onClick={()=>{onAccentChange(g.a);setAc2color(g.b);onCustomColorsChange({...local,ac2:g.b});}} style={{borderRadius:10,height:44,background:`linear-gradient(90deg,${g.a},${g.b})`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:"#fff",letterSpacing:.5,textShadow:"0 1px 4px rgba(0,0,0,.5)",transition:"transform .15s"}}
-                  onMouseEnter={e=>e.currentTarget.style.transform="scale(1.04)"}
-                  onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
-                  {g.label}
-                </div>
-              ))}
-            </div>
-            <div style={{fontSize:9,color:"var(--t3)",marginBottom:10,letterSpacing:2,textTransform:"uppercase"}}>Single color picks</div>
+            <div style={{fontSize:9,color:"var(--t3)",marginBottom:10,letterSpacing:2,textTransform:"uppercase"}}>Quick picks</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8,marginBottom:16}}>
               {quickAccents.map(c=>(<div key={c} onClick={()=>onAccentChange(c)} style={{aspectRatio:"1",borderRadius:10,background:c,cursor:"pointer",border:`2px solid ${(accent||THEMES[theme]?.ac)===c?"white":"rgba(255,255,255,.08)"}`,transition:"all .15s",boxShadow:`0 2px 8px ${c}55`,transform:(accent||THEMES[theme]?.ac)===c?"scale(1.1)":"none"}}/>))}
             </div>
@@ -1338,20 +1552,19 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
             <div style={{fontSize:11,color:"var(--t3)",marginBottom:16}}>Set a custom background image for the launcher.</div>
             {bgImage&&(
               <div style={{width:"100%",height:120,borderRadius:12,overflow:"hidden",marginBottom:16,border:"1px solid var(--border)",position:"relative"}}>
-                <img src={bgImage} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                <img src={bgImage} alt="bg" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
                 <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.45)",backdropFilter:"blur(4px)"}}/>
                 <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Rajdhani,sans-serif",fontSize:18,fontWeight:700,letterSpacing:3,color:"#fff"}}>PREVIEW</div>
               </div>
             )}
             <div style={{display:"flex",gap:8,marginBottom:12}}>
-              <input className="fi" value={bgImage||""} onChange={e=>onBgChange(e.target.value)} placeholder="https://... image URL" style={{flex:1}}/>
-              <button className="btn-p" style={{flexShrink:0}} onClick={async()=>{
-                if(!window.electronAPI?.isElectron) return;
-                const result=await window.electronAPI.pickImage();
-                if(result) onBgChange(result);
-              }}>Browse</button>
+              <input className="fi" value={bgImage||""} onChange={e=>setBgInput(e.target.value)} placeholder="https://... image URL" style={{flex:1}}/>
+              <button className="btn-p" style={{flexShrink:0}} onClick={async()=>{const result=await pickImageFile();if(result){setBgInput(result);onBgChange(result);}}}>Browse</button>
             </div>
-            {bgImage&&<button className="btn-gh" style={{width:"100%",justifyContent:"center",padding:"10px"}} onClick={()=>onBgChange("")}>Remove Background</button>}
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn-p" style={{flex:1,justifyContent:"center"}} onClick={()=>onBgChange(bgInput)}>Apply Background</button>
+              {bgImage&&<button className="btn-gh" style={{padding:"10px 16px"}} onClick={()=>{onBgChange("");setBgInput("");}}>Remove</button>}
+            </div>
           </div>
         )}
         {tab==="saved"&&(
@@ -1368,17 +1581,24 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
             {(!savedThemes||savedThemes.length===0)
               ? <div style={{textAlign:"center",padding:"32px 0",color:"var(--t3)",fontSize:12}}>No saved themes yet. Build a theme and save it above.</div>
               : <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                  {savedThemes.map(t=>(
+                  {savedThemes.map(t=>{
+                    const swatchBg = t.colors?.bg || THEMES[t.themeName]?.bg || "#222831";
+                    const swatchAc = t.accent || t.colors?.ac || THEMES[t.themeName]?.ac || "#FF5722";
+                    const swatchAc2 = t.ac2 || t.colors?.ac2 || THEMES[t.themeName]?.ac2 || swatchAc;
+                    return (
                     <div key={t.name} style={{display:"flex",alignItems:"center",gap:12,background:"var(--card)",borderRadius:12,padding:"12px 14px",border:"1px solid var(--border)"}}>
-                      <div style={{width:44,height:44,borderRadius:10,background:`linear-gradient(135deg,${t.colors?.ac||t.accent||"#FF5722"},${t.ac2||t.colors?.ac2||"#ff8a65"})`,flexShrink:0}}/>
+                      <div style={{width:44,height:44,borderRadius:10,background:swatchBg,border:"1px solid rgba(255,255,255,.08)",flexShrink:0,position:"relative",overflow:"hidden"}}>
+                        <div style={{position:"absolute",top:6,left:6,width:14,height:14,borderRadius:4,background:`linear-gradient(135deg,${swatchAc},${swatchAc2})`}}/>
+                        <div style={{position:"absolute",bottom:5,left:5,right:5,height:4,borderRadius:2,background:`${swatchAc}66`}}/>
+                      </div>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:13,fontWeight:700,color:"var(--t1)",fontFamily:"Rajdhani,sans-serif",letterSpacing:.5}}>{t.name}</div>
-                        <div style={{fontSize:10,color:"var(--t3)",marginTop:2}}>{t.themeName||"Custom"} base · {t.accent||"#FF5722"}</div>
+                        <div style={{fontSize:10,color:"var(--t3)",marginTop:2}}>{t.themeName||"Custom"} · <span style={{color:swatchAc}}>{swatchAc}</span></div>
                       </div>
                       <button className="btn-p" style={{fontSize:10,padding:"5px 12px"}} onClick={()=>onLoadTheme(t)}>Load</button>
                       <button className="btn-d" style={{fontSize:10,padding:"5px 10px"}} onClick={()=>onDeleteTheme(t.name)}>✕</button>
                     </div>
-                  ))}
+                  )})}
                 </div>
             }
           </div>
@@ -1416,6 +1636,77 @@ function AchievementsScreen({ unlockedMap }) {
     </div>
   );
 }
+
+// ── Auto Updater ──────────────────────────────────────────────────────────────
+const UPDATE_CSS = `
+@keyframes updatePulse{0%,100%{box-shadow:0 0 0 0 rgba(var(--ac-rgb),.4)}50%{box-shadow:0 0 0 10px rgba(var(--ac-rgb),0)}}
+@keyframes progressShimmer{0%{transform:translateX(-100%)}100%{transform:translateX(200%)}}
+.update-toast{position:fixed;bottom:88px;right:20px;z-index:999;background:linear-gradient(135deg,var(--panel),var(--card));border:1px solid var(--acg);border-radius:14px;padding:14px 18px;min-width:280px;max-width:320px;box-shadow:0 12px 40px rgba(0,0,0,.6),0 0 0 1px var(--acg);animation:fadeUp .35s ease;}
+.update-toast-hdr{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+.update-toast-icon{font-size:18px;}
+.update-toast-title{font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:700;letter-spacing:.5px;color:var(--t1);flex:1;}
+.update-toast-close{background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;padding:0;line-height:1;}
+.update-toast-close:hover{color:var(--t1);}
+.update-progress-wrap{height:4px;background:var(--hover);border-radius:2px;overflow:hidden;margin-bottom:8px;position:relative;}
+.update-progress-bar{height:100%;background:linear-gradient(90deg,var(--ac),var(--ac2));border-radius:2px;transition:width .3s ease;position:relative;overflow:hidden;}
+.update-progress-bar::after{content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.3),transparent);animation:progressShimmer 1.5s infinite;}
+.update-pct{font-size:10px;color:var(--t2);margin-bottom:10px;}
+.update-restart-btn{width:100%;background:linear-gradient(90deg,var(--ac),var(--ac2));border:none;color:#fff;border-radius:10px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:'Rajdhani',sans-serif;letter-spacing:1.5px;animation:updatePulse 2s infinite;transition:filter .15s;}
+.update-restart-btn:hover{filter:brightness(1.15);}
+.update-msg{font-size:11px;color:var(--t2);}
+`;
+
+function AutoUpdater() {
+  const [state, setState] = useState(null); // null | 'available' | 'downloading' | 'ready'
+  const [progress, setProgress] = useState(0);
+  const [version, setVersion] = useState("");
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    if (!window.electronAPI?.isElectron) return;
+    window.electronAPI.onUpdateAvailable?.((v) => { setVersion(v||""); setState("available"); setDismissed(false); });
+    window.electronAPI.onUpdateProgress?.((pct) => { setState("downloading"); setProgress(Math.round(pct)); });
+    window.electronAPI.onUpdateReady?.(() => { setState("ready"); setProgress(100); });
+  }, []);
+
+  if (!state || dismissed) return null;
+
+  return (
+    <>
+      <style>{UPDATE_CSS}</style>
+      <div className="update-toast">
+        <div className="update-toast-hdr">
+          <span className="update-toast-icon">{state==="ready"?"🚀":"✨"}</span>
+          <span className="update-toast-title">
+            {state==="available" && `AURA ${version} Available`}
+            {state==="downloading" && "Downloading Update…"}
+            {state==="ready" && "Update Ready"}
+          </span>
+          {state!=="downloading"&&<button className="update-toast-close" onClick={()=>setDismissed(true)}>×</button>}
+        </div>
+        {state==="downloading"&&(
+          <>
+            <div className="update-progress-wrap"><div className="update-progress-bar" style={{width:`${progress}%`}}/></div>
+            <div className="update-pct">{progress}% downloaded</div>
+          </>
+        )}
+        {state==="available"&&(
+          <div className="update-msg" style={{marginBottom:10}}>A new version is ready to download.</div>
+        )}
+        {state==="available"&&(
+          <button className="update-restart-btn" onClick={()=>{window.electronAPI.downloadUpdate?.();setState("downloading");}}>↓ Download Now</button>
+        )}
+        {state==="ready"&&(
+          <>
+            <div className="update-msg" style={{marginBottom:10}}>Restart AURA to apply the update.</div>
+            <button className="update-restart-btn" onClick={()=>window.electronAPI.installUpdate?.()}>⚡ Restart &amp; Update</button>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 function UpdateButton() {
@@ -1493,6 +1784,7 @@ export default function App(){
   const [showProfileModal,setShowProfileModal]=useState(false);
 
   const [nowPlaying, setNowPlaying] = useState(null);
+  const [activeStream, setActiveStream] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bgImage, setBgImage] = useState(()=>localStorage.getItem("aura_bg")||"");
   const [savedThemes, setSavedThemes] = useState(()=>{
@@ -1535,7 +1827,11 @@ export default function App(){
     });
   },[checkAchievements, unlockedAch]);
 
-  const handleThemeChange = useCallback((key) => { setTheme(key);saveTheme(key);applyTheme(key,accent,customColors); }, [accent, customColors]);
+  const handleThemeChange = useCallback((key) => {
+    setTheme(key); saveTheme(key);
+    if(key !== "custom") { setAccent(null); saveAccent(""); }
+    applyTheme(key, key !== "custom" ? null : accent, customColors);
+  }, [accent, customColors]);
   const handleAccentChange = useCallback((color) => { setAccent(color);saveAccent(color||"");applyTheme(theme,color,customColors); }, [theme, customColors]);
   const handleCustomColorsChange = useCallback((colors) => { setCustomColors(colors);saveCustomTheme(colors);applyTheme("custom",accent,colors); }, [accent]);
   const updateStats = useCallback((patch) => { setStats(prev=>{ const updated={...prev,...patch};saveStats(updated);checkAchievements(updated,unlockedAch);return updated; }); }, [checkAchievements, unlockedAch]);
@@ -1659,13 +1955,14 @@ export default function App(){
 
   // Nav items — shared between both layouts
   const navItems = [
-    {id:"home",   icon:<Ic.Home/>,    label:"Home"},
-    {id:"library",icon:<Ic.Lib/>,     label:"Library",    badge:games.length},
-    {id:"recent", icon:<Ic.Clock/>,   label:"Recently Played"},
-    {id:"favorites",icon:<Ic.Heart/>, label:"Favorites",  badge:favs.length||null},
-    {id:"achievements",icon:<Ic.Trophy/>,label:"Achievements",badge:unlockedCount||null},
-    {id:"customize",icon:<Ic.Palette/>,label:"Customize"},
-    {id:"settings",icon:<Ic.Gear/>,   label:"Settings"},
+    {id:"home",      icon:<Ic.Home/>,    label:"Home"},
+    {id:"library",   icon:<Ic.Lib/>,     label:"Library",         badge:games.length},
+    {id:"recent",    icon:<Ic.Clock/>,   label:"Recently Played"},
+    {id:"favorites", icon:<Ic.Heart/>,   label:"Favorites",       badge:favs.length||null},
+    {id:"streams",   icon:<Ic.Tv/>,      label:"Live Streams"},
+    {id:"achievements",icon:<Ic.Trophy/>,label:"Achievements",    badge:unlockedCount||null},
+    {id:"customize", icon:<Ic.Palette/>, label:"Customize"},
+    {id:"settings",  icon:<Ic.Gear/>,    label:"Settings"},
   ];
 
   const goTo = (id) => { setView(id); setHeroGame(null); setSrch(""); };
@@ -1714,7 +2011,7 @@ export default function App(){
               ):(
                 <>
                   <FriendActivityShelf/>
-                  <TwitchShelf games={games}/>
+                  <TwitchShelf games={games} onStreamClick={s=>{setActiveStream(s);goTo("streams");}}/>
                   <MadeForShelf games={games} username={profile.username} onPlay={doPlay} onSelect={g=>{setHeroGame(g);goTo("library");}}/>
                   {recent.length>0&&<GMShelf title="RECENTLY PLAYED" games={recent.slice(0,12)} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}}/>}
                   {favs.length>0&&<GMShelf title="FAVORITES" games={favs} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}}/>}
@@ -1733,6 +2030,7 @@ export default function App(){
         {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={(p)=>{setProfile(p);saveProfile(p);setShowProfileModal(false);toast("Profile updated!");}}/>}
         {launching&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
         {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
+        <AutoUpdater/>
         <div className="tc">
           {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
           {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}
@@ -1827,7 +2125,24 @@ export default function App(){
 
           {view==="achievements"&&<AchievementsScreen unlockedMap={unlockedAch}/>}
 
-          {view==="customize"&&<Customize theme={theme} onThemeChange={handleThemeChange} accent={accent} onAccentChange={handleAccentChange} customColors={customColors} onCustomColorsChange={handleCustomColorsChange}/>}
+          {view==="streams"&&<StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)}/>}
+
+          {view==="customize"&&<Customize
+            theme={theme} onThemeChange={handleThemeChange}
+            accent={accent} onAccentChange={handleAccentChange}
+            customColors={customColors} onCustomColorsChange={handleCustomColorsChange}
+            bgImage={bgImage} onBgChange={(v)=>{setBgImage(v);localStorage.setItem("aura_bg",v||"");}}
+            savedThemes={savedThemes} onSaveTheme={saveCustomTheme2} onDeleteTheme={deleteCustomTheme2}
+            onLoadTheme={(t)=>{
+              const colors = t.colors||{};
+              const ac = t.accent||colors.ac||"#FF5722";
+              const themeKey = t.themeName||"custom";
+              setTheme(themeKey); saveTheme(themeKey);
+              setAccent(ac); saveAccent(ac);
+              setCustomColors(colors); saveCustomTheme(colors);
+              applyTheme(themeKey, ac, colors);
+            }}
+          />}
 
           {view==="settings"&&<Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames(DEMO_GAMES);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers}/>}
         </div>
@@ -1841,6 +2156,7 @@ export default function App(){
       {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={(p)=>{setProfile(p);saveProfile(p);setShowProfileModal(false);toast("Profile updated!");}}/>}
       {launching&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
       {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
+      <AutoUpdater/>
       <div className="tc">
         {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
         {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}

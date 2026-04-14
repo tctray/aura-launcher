@@ -1,7 +1,7 @@
 {
   "name": "aura",
   "private": true,
-  "version": "1.0.9",
+  "version": "1.1.1",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,11 @@
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
     "electron:build": "cross-env NODE_ENV=production npm run build && electron-builder"
   },
+  "publish": [{
+  "provider": "github",
+  "owner": "tctray",
+  "repo": "aura-launcher"
+}],
   "build": {
     "appId": "com.aura.launcher",
     "productName": "AURA",
@@ -19,9 +24,10 @@
       "target": "nsis",
       "icon": "public/icon.png"
     },
-      "linux": { "target": "AppImage",
-       "icon": "public/icon.png" }
-
+    "linux": {
+      "target": "AppImage",
+      "icon": "public/icon.png"
+    }
   },
   "dependencies": {
     "@node-steam/vdf": "^2.2.0",
@@ -30,6 +36,7 @@
     "discord-rpc": "^4.0.1",
     "dotenv": "^17.4.1",
     "electron-store": "^11.0.2",
+    "electron-updater": "^6.8.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
