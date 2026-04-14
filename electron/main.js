@@ -2,6 +2,8 @@ process.on('uncaughtException', (e) => {
   console.error('CRASH:', e.message, e.stack);
 });
 
+require("dotenv").config({ path: require("path").join(__dirname, "../.env") });
+
 const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
@@ -12,15 +14,16 @@ const axios = require("axios");
 const DiscordRPC = require("discord-rpc");
 const Registry = require("winreg");
 
-// ── PUT YOUR CREDENTIALS HERE ─────────────────────────────────────────────────
-const DISCORD_CLIENT_ID     = "YOUR_DISCORD_CLIENT_ID";
-const DISCORD_CLIENT_SECRET = "YOUR_DISCORD_CLIENT_SECRET";
+// ── Credentials from .env ─────────────────────────────────────────────────────
+// Never hardcode these — keep them in electron/.env or your project root .env
+const DISCORD_CLIENT_ID     = process.env.DISCORD_CLIENT_ID;
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const DISCORD_REDIRECT_URI  = "http://localhost:3000/callback";
-const IGDB_CLIENT_ID        = "YOUR_TWITCH_CLIENT_ID";
-const IGDB_CLIENT_SECRET    = "YOUR_TWITCH_CLIENT_SECRET";
-const STEAM_API_KEY         = "YOUR_STEAM_API_KEY";
-const OPENXBL_KEY           = "YOUR_OPENXBL_API_KEY";
-const YOUTUBE_API_KEY       = "YOUR_YOUTUBE_API_KEY";
+const IGDB_CLIENT_ID        = process.env.TWITCH_CLIENT_ID;
+const IGDB_CLIENT_SECRET    = process.env.TWITCH_CLIENT_SECRET;
+const STEAM_API_KEY         = process.env.STEAM_API_KEY;
+const OPENXBL_KEY           = process.env.OPENXBL_KEY;
+const YOUTUBE_API_KEY       = process.env.YOUTUBE_API_KEY;
 
 let discordToken  = null;
 let authServer    = null;
