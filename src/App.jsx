@@ -3,7 +3,7 @@
  * Full app with profile, themes, Discord, playtime tracking
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 
 const CATEGORIES = ["All","FPS","RPG","Strategy","Action","Adventure","Sports","Simulation","Indie","Other"];
 
@@ -1328,12 +1328,12 @@ function StreamsView({ games, initialStream, onClear }) {
       <div style={{flex:1,position:"relative",minHeight:0}}>
         {window.electronAPI?.isElectron
           ? <webview
-              src={`https://player.twitch.tv/?channel=${activeStream.user}&parent=localhost&autoplay=true`}
+              src={`https://player.twitch.tv/?channel=${activeStream.userLogin||activeStream.user}&parent=aura-launcher&autoplay=true&muted=false`}
               style={{width:"100%",height:"100%",display:"block"}}
               allowpopups="true"
             />
           : <iframe
-              src={`https://player.twitch.tv/?channel=${activeStream.user}&parent=localhost`}
+              src={`https://player.twitch.tv/?channel=${activeStream.userLogin||activeStream.user}&parent=localhost`}
               style={{width:"100%",height:"100%",border:"none",display:"block"}}
               allowFullScreen
             />
@@ -1358,12 +1358,12 @@ function StreamsView({ games, initialStream, onClear }) {
     <div style={{width:300,flexShrink:0,borderLeft:"1px solid var(--border)",background:"#0e0e10"}}>
       {window.electronAPI?.isElectron
         ? <webview
-            src={`https://www.twitch.tv/embed/${activeStream.user}/chat?parent=localhost&darkpopout`}
+            src={`https://www.twitch.tv/embed/${activeStream.userLogin||activeStream.user}/chat?parent=aura-launcher&darkpopout`}
             style={{width:"100%",height:"100%",display:"block"}}
             allowpopups="true"
           />
         : <iframe
-            src={`https://www.twitch.tv/embed/${activeStream.user}/chat?parent=localhost&darkpopout`}
+            src={`https://www.twitch.tv/embed/${activeStream.userLogin||activeStream.user}/chat?parent=localhost&darkpopout`}
             style={{width:"100%",height:"100%",border:"none",display:"block"}}
           />
       }
