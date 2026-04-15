@@ -21,6 +21,17 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Write .env for packaging
+        run: |
+          echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" >> .env
+          echo "DISCORD_CLIENT_SECRET=${{ secrets.DISCORD_CLIENT_SECRET }}" >> .env
+          echo "TWITCH_CLIENT_ID=${{ secrets.TWITCH_CLIENT_ID }}" >> .env
+          echo "TWITCH_CLIENT_SECRET=${{ secrets.TWITCH_CLIENT_SECRET }}" >> .env
+          echo "STEAM_API_KEY=${{ secrets.STEAM_API_KEY }}" >> .env
+          echo "OPENXBL_KEY=${{ secrets.OPENXBL_KEY }}" >> .env
+          echo "YOUTUBE_API_KEY=${{ secrets.YOUTUBE_API_KEY }}" >> .env
+        shell: bash
+
       - name: Build Windows
         run: npm run electron:build
         env:
@@ -29,6 +40,9 @@ jobs:
           DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+          STEAM_API_KEY: ${{ secrets.STEAM_API_KEY }}
+          OPENXBL_KEY: ${{ secrets.OPENXBL_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
@@ -39,7 +53,7 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     permissions:
-        contents: write
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +70,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y rpm fakeroot
 
+      - name: Write .env for packaging
+        run: |
+          echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" >> .env
+          echo "DISCORD_CLIENT_SECRET=${{ secrets.DISCORD_CLIENT_SECRET }}" >> .env
+          echo "TWITCH_CLIENT_ID=${{ secrets.TWITCH_CLIENT_ID }}" >> .env
+          echo "TWITCH_CLIENT_SECRET=${{ secrets.TWITCH_CLIENT_SECRET }}" >> .env
+          echo "STEAM_API_KEY=${{ secrets.STEAM_API_KEY }}" >> .env
+          echo "OPENXBL_KEY=${{ secrets.OPENXBL_KEY }}" >> .env
+          echo "YOUTUBE_API_KEY=${{ secrets.YOUTUBE_API_KEY }}" >> .env
+
       - name: Build Linux
         run: npm run electron:build
         env:
@@ -64,6 +88,9 @@ jobs:
           DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+          STEAM_API_KEY: ${{ secrets.STEAM_API_KEY }}
+          OPENXBL_KEY: ${{ secrets.OPENXBL_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
 
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4

@@ -6,11 +6,11 @@ const path = require("path");
 const fs   = require("fs");
 const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
 
-// Dev only — in production, credentials are injected by GitHub Actions Secrets
-if (!app.isPackaged) {
-  const devEnv = path.join(__dirname, "../.env");
-  if (fs.existsSync(devEnv)) require("dotenv").config({ path: devEnv });
-}
+// Load .env — written by CI from GitHub Secrets, or local file in dev
+const devEnv = path.join(__dirname, "../.env");
+const pkgEnv = path.join(process.resourcesPath || "", ".env");
+if      (fs.existsSync(devEnv)) require("dotenv").config({ path: devEnv });
+else if (fs.existsSync(pkgEnv)) require("dotenv").config({ path: pkgEnv });
 
 const { autoUpdater } = require("electron-updater");
 const http = require("http");
