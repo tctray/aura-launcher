@@ -660,10 +660,16 @@ function FriendsPanel({ launching, toast }) {
   const loadFriends=async()=>{
     setLoading(true);
     if(window.electronAPI?.isElectron){
-      const rpcResult=await window.electronAPI.rpcGetFriends();
-      if(rpcResult.success&&rpcResult.friends.length>0){setFriends(rpcResult.friends);setLoading(false);return;}
-      const res=await window.electronAPI.discordGetFriends();
-      if(res.success) setFriends(res.friends);
+      // Try RPC friends first (requires Discord desktop running)
+      try {
+        const rpcResult=await window.electronAPI.rpcGetFriends();
+        if(rpcResult.success&&rpcResult.friends.length>0){setFriends(rpcResult.friends);setLoading(false);return;}
+      } catch {}
+      // Fall back to OAuth friends
+      if(loggedIn){
+        const res=await window.electronAPI.discordGetFriends();
+        if(res.success) setFriends(res.friends);
+      }
     }
     setLoading(false);
   };
@@ -1558,7 +1564,7 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
               </div>
             )}
             <div style={{display:"flex",gap:8,marginBottom:12}}>
-              <input className="fi" value={bgImage||""} onChange={e=>setBgInput(e.target.value)} placeholder="https://... image URL" style={{flex:1}}/>
+              <input className="fi" value={bgInput} onChange={e=>setBgInput(e.target.value)} placeholder="https://... image URL" style={{flex:1}}/>
               <button className="btn-p" style={{flexShrink:0}} onClick={async()=>{const result=await pickImageFile();if(result){setBgInput(result);onBgChange(result);}}}>Browse</button>
             </div>
             <div style={{display:"flex",gap:8}}>
@@ -1712,6 +1718,7 @@ function AutoUpdater() {
 function UpdateButton() {
   const [status, setStatus] = useState("idle");
   const [latest, setLatest] = useState(null);
+
   const check = async () => {
     if (!window.electronAPI?.isElectron) return;
     setStatus("checking");
@@ -1719,11 +1726,17 @@ function UpdateButton() {
     if (res.success) { setLatest(res.latest); setStatus(res.hasUpdate ? "update" : "latest"); }
     else setStatus("error");
   };
+
   useEffect(() => { check(); }, []);
+
   if (status === "checking") return <span style={{fontSize:11,color:"var(--t3)"}}>Checking...</span>;
-  if (status === "latest") return <span style={{fontSize:11,color:"var(--ac)"}}>Up to date ✓</span>;
-  if (status === "error") return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Retry</button>;
-  if (status === "update") return <button className="btn-p" onClick={()=>window.electronAPI.openExternal("https://github.com/tctray/aura-launcher/releases/latest")} style={{fontSize:11,padding:"5px 14px",animation:"pulse 2s infinite"}}>v{latest} Available ↓</button>;
+  if (status === "latest")   return <span style={{fontSize:11,color:"var(--ac)"}}>Up to date ✓</span>;
+  if (status === "error")    return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Retry</button>;
+  if (status === "update")   return (
+    <button className="btn-p" onClick={()=>window.electronAPI.downloadUpdate?.()} style={{fontSize:11,padding:"5px 14px",animation:"pulse 2s infinite"}}>
+      v{latest} — Download
+    </button>
+  );
   return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Check</button>;
 }
 
@@ -1751,7 +1764,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       <div className="ss">
         <div className="ss-t">ABOUT</div>
         <div className="ss-card">
-          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.1.6</div></div><UpdateButton/></div>
+          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.1.8</div></div><UpdateButton/></div>
           <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>

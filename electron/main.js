@@ -2,9 +2,16 @@ process.on('uncaughtException', (e) => {
   console.error('CRASH:', e.message, e.stack);
 });
 
-require("dotenv").config({ path: require("path").join(__dirname, "../.env") });
-
+const path = require("path");
+const fs   = require("fs");
 const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
+
+// Dev only — in production, credentials are injected by GitHub Actions Secrets
+if (!app.isPackaged) {
+  const devEnv = path.join(__dirname, "../.env");
+  if (fs.existsSync(devEnv)) require("dotenv").config({ path: devEnv });
+}
+
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const http = require("http");
