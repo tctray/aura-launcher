@@ -1335,18 +1335,18 @@ function StreamsView({ games, initialStream, onClear }) {
   const fmtViewers = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
 
   const player = activeStream ? (
-    <div style={{flex:1,display:"flex",flexDirection:"column",background:"#000",minWidth:0}}>
+    <div style={{flex:1,display:"flex",flexDirection:"column",background:"#000",minWidth:0,height:"100%"}}>
       {/* Stream player */}
-      <div style={{flex:1,position:"relative",minHeight:0}}>
+      <div style={{flex:1,position:"relative",minHeight:0,overflow:"hidden"}}>
         {window.electronAPI?.isElectron
           ? <webview
               src={`https://player.twitch.tv/?channel=${activeStream.userLogin||activeStream.user}&parent=aura-launcher&autoplay=true&muted=false`}
-              style={{width:"100%",height:"100%",display:"block"}}
+              style={{width:"100%",height:"100%",display:"block",position:"absolute",inset:0}}
               allowpopups="true"
             />
           : <iframe
               src={`https://player.twitch.tv/?channel=${activeStream.userLogin||activeStream.user}&parent=localhost`}
-              style={{width:"100%",height:"100%",border:"none",display:"block"}}
+              style={{width:"100%",height:"100%",border:"none",display:"block",position:"absolute",inset:0}}
               allowFullScreen
             />
         }
@@ -1367,16 +1367,16 @@ function StreamsView({ games, initialStream, onClear }) {
   ) : null;
 
   const chat = activeStream && chatOpen ? (
-    <div style={{width:300,flexShrink:0,borderLeft:"1px solid var(--border)",background:"#0e0e10"}}>
+    <div style={{width:300,flexShrink:0,borderLeft:"1px solid var(--border)",background:"#0e0e10",position:"relative"}}>
       {window.electronAPI?.isElectron
         ? <webview
             src={`https://www.twitch.tv/embed/${activeStream.userLogin||activeStream.user}/chat?parent=aura-launcher&darkpopout`}
-            style={{width:"100%",height:"100%",display:"block"}}
+            style={{width:"100%",height:"100%",display:"block",position:"absolute",inset:0}}
             allowpopups="true"
           />
         : <iframe
             src={`https://www.twitch.tv/embed/${activeStream.userLogin||activeStream.user}/chat?parent=localhost&darkpopout`}
-            style={{width:"100%",height:"100%",border:"none",display:"block"}}
+            style={{width:"100%",height:"100%",border:"none",display:"block",position:"absolute",inset:0}}
           />
       }
     </div>

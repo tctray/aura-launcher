@@ -1,7 +1,7 @@
 {
   "name": "aura",
   "private": true,
-  "version": "1.1.8",
+  "version": "1.1.9",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -16,21 +16,26 @@
       "repo": "aura-launcher"
     }
   ],
-  "build": {
-    "appId": "com.aura.launcher",
-    "productName": "AURA",
-    "directories": {
-      "output": "release"
-    },
-    "win": {
-      "target": "nsis",
-      "icon": "public/icon.png"
-    },
-    "linux": {
-      "target": "AppImage",
-      "icon": "public/icon.png"
-    }
+"build": {
+  "appId": "com.aura.launcher",
+  "productName": "aura",
+  "extraResources": [
+    { "from": ".env", "to": ".env" }
+  ],
+  "publish": [{
+    "provider": "github",
+    "owner": "tctray",
+    "repo": "aura-launcher"
+  }],
+  "win": {
+    "target": "nsis",
+    "icon": "public/icon.png"
   },
+  "linux": {
+    "target": "AppImage",
+    "icon": "public/icon.png"
+  }
+},
   "dependencies": {
     "@node-steam/vdf": "^2.2.0",
     "axios": "^1.14.0",
