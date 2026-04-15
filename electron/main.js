@@ -13,9 +13,7 @@ if (!app.isPackaged) {
 }
 
 const { autoUpdater } = require("electron-updater");
-const path = require("path");
 const http = require("http");
-const fs = require("fs");
 const vdf = require("@node-steam/vdf");
 const axios = require("axios");
 const DiscordRPC = require("discord-rpc");
