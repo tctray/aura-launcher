@@ -7,10 +7,16 @@ const fs   = require("fs");
 const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
 
 // Load .env — written by CI from GitHub Secrets, or local file in dev
+// Load .env — dev reads from project root, packaged reads from resources/
+// Note: process.resourcesPath is available immediately in main process
 const devEnv = path.join(__dirname, "../.env");
-const pkgEnv = path.join(process.resourcesPath || "", ".env");
+const pkgEnv = path.join(app.getAppPath(), "../.env");
+const resEnv = process.resourcesPath ? path.join(process.resourcesPath, ".env") : null;
+
 if      (fs.existsSync(devEnv)) require("dotenv").config({ path: devEnv });
+else if (resEnv && fs.existsSync(resEnv)) require("dotenv").config({ path: resEnv });
 else if (fs.existsSync(pkgEnv)) require("dotenv").config({ path: pkgEnv });
+
 
 const { autoUpdater } = require("electron-updater");
 const http = require("http");

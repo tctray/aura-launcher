@@ -1160,8 +1160,11 @@ function TwitchShelf({ games, onStreamClick }) {
     setLoading(true);
     const gameNames = games.filter(g => g.cover).map(g => g.title).slice(0, 10);
     const userLogins = customLogins.split(",").map(s => s.trim()).filter(Boolean);
-    const res = await window.electronAPI.fetchTwitchStreams({ gameNames, userLogins });
-    if (res.success) setStreams(res.streams);
+    try {
+      const res = await window.electronAPI.fetchTwitchStreams({ gameNames, userLogins });
+      if (res.success) setStreams(res.streams);
+      else setStreams([]);
+    } catch { setStreams([]); }
     setLoading(false);
   }, [games, customLogins]);
 
@@ -1309,8 +1312,11 @@ function StreamsView({ games, initialStream, onClear }) {
     if (window.electronAPI?.isElectron) {
       const gameNames = games.filter(g => g.cover).map(g => g.title).slice(0, 10);
       const userLogins = customLogins.split(",").map(s => s.trim()).filter(Boolean);
-      const res = await window.electronAPI.fetchTwitchStreams({ gameNames, userLogins });
-      if (res.success) setStreams(res.streams);
+      try {
+        const res = await window.electronAPI.fetchTwitchStreams({ gameNames, userLogins });
+        if (res.success) setStreams(res.streams);
+        else setStreams([]);
+      } catch { setStreams([]); }
     } else {
       setStreams([
         { id:"1", user:"shroud",     title:"Valorant ranked",     game:"VALORANT",      viewers:45231, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_shroud-440x248.jpg",     url:"https://twitch.tv/shroud" },
