@@ -48,6 +48,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // ── Trailers ─────────────────────────────────────────────────────────────────
   fetchTrailer: (title) => ipcRenderer.invoke("fetch-trailer", title),
 
+  // ── Stream BrowserView ────────────────────────────────────────────────────
+  streamOpen:   (opts)   => ipcRenderer.invoke("stream-open", opts),
+  streamResize: (bounds) => ipcRenderer.invoke("stream-resize", bounds),
+  streamClose:  ()       => ipcRenderer.invoke("stream-close"),
+  chatOpen:     (opts)   => ipcRenderer.invoke("chat-open", opts),
+  chatClose:    ()       => ipcRenderer.invoke("chat-close"),
+
   // ── Update checker (legacy) ──────────────────────────────────────────────────
   checkUpdate: () => ipcRenderer.invoke("check-update"),
 

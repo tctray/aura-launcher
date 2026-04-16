@@ -146,7 +146,7 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .splash-logo{font-family:'Rajdhani',sans-serif;font-size:56px;font-weight:700;letter-spacing:10px;background:linear-gradient(90deg,var(--ac),var(--ac2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
 .app-bg{position:fixed;inset:0;background-size:cover;background-position:center;z-index:0;pointer-events:none;}
 .app-bg-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);z-index:0;pointer-events:none;}
-.app,.gm-app{z-index:1;}
+.app,.gm-app{position:fixed;inset:0;z-index:1;background:transparent;}
 .splash-sub{font-size:11px;color:#00aaff;letter-spacing:4px;text-transform:uppercase;}
 .splash-bar{width:200px;height:2px;background:var(--border);border-radius:2px;overflow:hidden;margin-top:8px;}
 .splash-fill{height:100%;background:linear-gradient(90deg,var(--ac),var(--ac2));border-radius:2px;animation:splash-load 1.8s ease forwards;}
@@ -164,7 +164,7 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .setup-w{width:100%;}
 
 /* APP LAYOUT */
-.app{display:flex;height:100vh;width:100vw;min-width:100vw;background:var(--bg);overflow:hidden;position:fixed;top:0;left:0;}
+.app{display:flex;height:100vh;width:100vw;min-width:100vw;background:transparent;overflow:hidden;position:fixed;top:0;left:0;}
 
 /* SIDEBAR — used in Library view */
 .sb{width:var(--sw);min-width:var(--sw);background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column}
@@ -375,7 +375,7 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .spotlight-arr.right{right:12px;}
 
 /* HOME / GM LAYOUT */
-.gm-app{display:flex;height:100vh;width:100vw;background:var(--bg);overflow:hidden;position:fixed;top:0;left:0;}
+.gm-app{display:flex;height:100vh;width:100vw;background:transparent;overflow:hidden;position:fixed;top:0;left:0;}
 .gm-rail{width:64px;min-width:64px;background:rgba(0,0,0,.6);backdrop-filter:blur(20px);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:4px;z-index:10;}
 .gm-rail-logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--ac),var(--ac2));display:flex;align-items:center;justify-content:center;font-size:14px;margin-bottom:16px;box-shadow:0 4px 14px var(--acg);}
 .gm-rail-item{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--t3);transition:all .18s;position:relative;}
@@ -1334,22 +1334,60 @@ function StreamsView({ games, initialStream, onClear }) {
 
   const fmtViewers = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
 
+  const playerContainerRef = useRef(null);
+  const chatContainerRef = useRef(null);
+
+  // Open BrowserView when stream selected
+  useEffect(() => {
+    if (!activeStream || !window.electronAPI?.isElectron) return;
+    const openViews = async () => {
+      await new Promise(r => setTimeout(r, 100)); // wait for layout
+      if (playerContainerRef.current) {
+        const r = playerContainerRef.current.getBoundingClientRect();
+        await window.electronAPI.streamOpen({
+          channel: activeStream.userLogin || activeStream.user,
+          bounds: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }
+        });
+      }
+      if (chatContainerRef.current && chatOpen) {
+        const r = chatContainerRef.current.getBoundingClientRect();
+        await window.electronAPI.chatOpen({
+          channel: activeStream.userLogin || activeStream.user,
+          bounds: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }
+        });
+      }
+    };
+    openViews();
+    return () => {
+      window.electronAPI.streamClose?.();
+      window.electronAPI.chatClose?.();
+    };
+  }, [activeStream]);
+
+  // Toggle chat
+  useEffect(() => {
+    if (!activeStream || !window.electronAPI?.isElectron) return;
+    if (chatOpen && chatContainerRef.current) {
+      const r = chatContainerRef.current.getBoundingClientRect();
+      window.electronAPI.chatOpen({
+        channel: activeStream.userLogin || activeStream.user,
+        bounds: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }
+      });
+    } else {
+      window.electronAPI.chatClose?.();
+    }
+  }, [chatOpen]);
+
   const player = activeStream ? (
-    <div style={{flex:1,display:"flex",flexDirection:"column",background:"#000",minWidth:0,height:"100%"}}>
-      {/* Stream player */}
-      <div style={{flex:1,position:"relative",minHeight:0,overflow:"hidden"}}>
-        {window.electronAPI?.isElectron
-          ? <webview
-              src={`https://player.twitch.tv/?channel=${activeStream.userLogin||activeStream.user}&parent=aura-launcher&autoplay=true&muted=false`}
-              style={{width:"100%",height:"100%",display:"block",position:"absolute",inset:0}}
-              allowpopups="true"
-            />
-          : <iframe
-              src={`https://player.twitch.tv/?channel=${activeStream.userLogin||activeStream.user}&parent=localhost`}
-              style={{width:"100%",height:"100%",border:"none",display:"block",position:"absolute",inset:0}}
-              allowFullScreen
-            />
-        }
+    <div style={{flex:1,display:"flex",flexDirection:"column",background:"#000",minWidth:0,minHeight:0}}>
+      <div ref={playerContainerRef} style={{flex:1,minHeight:0,background:"#000"}}>
+        {!window.electronAPI?.isElectron && (
+          <iframe
+            src={`https://player.twitch.tv/?channel=${activeStream.userLogin||activeStream.user}&parent=localhost`}
+            style={{width:"100%",height:"100%",border:"none",display:"block"}}
+            allowFullScreen
+          />
+        )}
       </div>
       {/* Stream info bar */}
       <div style={{padding:"10px 16px",background:"#0e0e10",borderTop:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
@@ -1367,23 +1405,18 @@ function StreamsView({ games, initialStream, onClear }) {
   ) : null;
 
   const chat = activeStream && chatOpen ? (
-    <div style={{width:300,flexShrink:0,borderLeft:"1px solid var(--border)",background:"#0e0e10",position:"relative"}}>
-      {window.electronAPI?.isElectron
-        ? <webview
-            src={`https://www.twitch.tv/embed/${activeStream.userLogin||activeStream.user}/chat?parent=aura-launcher&darkpopout`}
-            style={{width:"100%",height:"100%",display:"block",position:"absolute",inset:0}}
-            allowpopups="true"
-          />
-        : <iframe
-            src={`https://www.twitch.tv/embed/${activeStream.userLogin||activeStream.user}/chat?parent=localhost&darkpopout`}
-            style={{width:"100%",height:"100%",border:"none",display:"block",position:"absolute",inset:0}}
-          />
-      }
+    <div ref={chatContainerRef} style={{width:300,flexShrink:0,borderLeft:"1px solid var(--border)",background:"#0e0e10",minHeight:0}}>
+      {!window.electronAPI?.isElectron && (
+        <iframe
+          src={`https://www.twitch.tv/embed/${activeStream.userLogin||activeStream.user}/chat?parent=localhost&darkpopout`}
+          style={{width:"100%",height:"100%",border:"none",display:"block"}}
+        />
+      )}
     </div>
   ) : null;
 
   return (
-    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"var(--bg)"}}>
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"var(--bg)",height:"100%"}}>
       {/* Header */}
       <div style={{padding:"14px 24px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
         <div style={{width:8,height:8,borderRadius:"50%",background:"#eb0400",boxShadow:"0 0 8px #eb0400",animation:"pulse 2s infinite"}}/>
@@ -1401,7 +1434,7 @@ function StreamsView({ games, initialStream, onClear }) {
 
       {/* Main area */}
       {activeStream ? (
-        <div style={{flex:1,display:"flex",overflow:"hidden"}}>
+        <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
           {player}
           {chat}
         </div>
@@ -1770,12 +1803,184 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       <div className="ss">
         <div className="ss-t">ABOUT</div>
         <div className="ss-card">
-          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.1.8</div></div><UpdateButton/></div>
+          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.1.9</div></div><UpdateButton/></div>
           <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>
     </div>
   );
+}
+
+// ── Controller Support ────────────────────────────────────────────────────────
+const CONTROLLER_CSS = `
+@keyframes controllerFadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes controllerFadeOut{from{opacity:1;transform:translateY(0)}to{opacity:0;transform:translateY(8px)}}
+.ctrl-hud{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;align-items:center;gap:8px;background:rgba(10,10,14,.92);border:1px solid var(--borderb);border-radius:40px;padding:8px 18px;backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,.6);animation:controllerFadeIn .3s ease;}
+.ctrl-hud.hide{animation:controllerFadeOut .4s ease forwards;}
+.ctrl-btn{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--t2);font-family:'DM Sans',sans-serif;}
+.ctrl-badge{width:20px;height:20px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;flex-shrink:0;}
+.ctrl-badge.a{background:#5c9e31;color:#fff;}
+.ctrl-badge.b{background:#c0392b;color:#fff;}
+.ctrl-badge.x{background:#2471a3;color:#fff;}
+.ctrl-badge.y{background:#d4ac0d;color:#fff;}
+.ctrl-badge.lb,.ctrl-badge.rb{background:var(--hover);color:var(--t1);border:1px solid var(--borderb);}
+.ctrl-badge.start{background:var(--hover);color:var(--t1);border:1px solid var(--borderb);font-size:7px;width:28px;}
+.ctrl-sep{width:1px;height:16px;background:var(--border);margin:0 4px;}
+.ctrl-focus{outline:3px solid var(--ac)!important;outline-offset:3px!important;border-radius:10px!important;}
+`;
+
+function useController({ view, goTo, navItems, heroGame, setHeroGame, modal, setModal, doPlay, doFav, games, sorted }) {
+  const [connected, setConnected] = useState(false);
+  const [hint, setHint] = useState(null);
+  const [hintHide, setHintHide] = useState(false);
+  const prevButtons = useRef({});
+  const focusIdx = useRef(0);
+  const hintTimer = useRef(null);
+  const rafRef = useRef(null);
+  const lastInput = useRef(0);
+  const REPEAT_DELAY = 180; // ms between repeated inputs when held
+  const INITIAL_DELAY = 300; // ms before repeat starts
+
+  const showHint = (msg) => {
+    setHint(msg);
+    setHintHide(false);
+    clearTimeout(hintTimer.current);
+    hintTimer.current = setTimeout(() => {
+      setHintHide(true);
+      setTimeout(() => setHint(null), 400);
+    }, 2500);
+  };
+
+  const getFocusables = () => {
+    return Array.from(document.querySelectorAll(
+      '.gm-card, .gm-mf-card, .card, .sb-item, .gm-rail-item, .btn-p, .btn-gh, .chip, .twitch-card'
+    )).filter(el => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+  };
+
+  const moveFocus = (dir) => {
+    const els = getFocusables();
+    if (!els.length) return;
+    focusIdx.current = Math.max(0, Math.min(els.length - 1, focusIdx.current + dir));
+    const el = els[focusIdx.current];
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    document.querySelectorAll('.ctrl-focus').forEach(e => e.classList.remove('ctrl-focus'));
+    el.classList.add('ctrl-focus');
+  };
+
+  const pressButton = () => {
+    const els = getFocusables();
+    if (!els.length) return;
+    const el = els[focusIdx.current];
+    if (el) el.click();
+  };
+
+  useEffect(() => {
+    const onConnect = (e) => {
+      setConnected(true);
+      showHint(`🎮 ${e.gamepad.id.slice(0, 24)} connected`);
+    };
+    const onDisconnect = () => {
+      setConnected(false);
+      setHint(null);
+    };
+    window.addEventListener('gamepadconnected', onConnect);
+    window.addEventListener('gamepaddisconnected', onDisconnect);
+    return () => {
+      window.removeEventListener('gamepadconnected', onConnect);
+      window.removeEventListener('gamepaddisconnected', onDisconnect);
+    };
+  }, []);
+
+  useEffect(() => {
+    const BTNS = {
+      A: 0, B: 1, X: 2, Y: 3,
+      LB: 4, RB: 5,
+      SELECT: 8, START: 9,
+      UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15,
+    };
+
+    const poll = () => {
+      const gamepads = navigator.getGamepads();
+      const gp = Array.from(gamepads).find(g => g);
+      if (!gp) { rafRef.current = requestAnimationFrame(poll); return; }
+
+      const pressed = (btn) => gp.buttons[btn]?.pressed;
+      const justPressed = (btn) => pressed(btn) && !prevButtons.current[btn];
+
+      // D-pad / stick navigation
+      const lx = gp.axes[0] || 0;
+      const ly = gp.axes[1] || 0;
+      const now = Date.now();
+      const canMove = now - lastInput.current > REPEAT_DELAY;
+
+      if (canMove) {
+        if (justPressed(BTNS.RIGHT) || lx > 0.7) {
+          moveFocus(1); lastInput.current = now;
+        } else if (justPressed(BTNS.LEFT) || lx < -0.7) {
+          moveFocus(-1); lastInput.current = now;
+        } else if (justPressed(BTNS.DOWN) || ly > 0.7) {
+          moveFocus(4); lastInput.current = now;
+        } else if (justPressed(BTNS.UP) || ly < -0.7) {
+          moveFocus(-4); lastInput.current = now;
+        }
+      }
+
+      // A — select / confirm
+      if (justPressed(BTNS.A)) pressButton();
+
+      // B — back
+      if (justPressed(BTNS.B)) {
+        if (heroGame) setHeroGame(null);
+        else if (modal) setModal(null);
+        else if (view !== 'home') goTo('home');
+      }
+
+      // LB / RB — cycle nav items
+      if (justPressed(BTNS.LB)) {
+        const ids = navItems.map(n => n.id);
+        const cur = ids.indexOf(view);
+        goTo(ids[Math.max(0, cur - 1)]);
+      }
+      if (justPressed(BTNS.RB)) {
+        const ids = navItems.map(n => n.id);
+        const cur = ids.indexOf(view);
+        goTo(ids[Math.min(ids.length - 1, cur + 1)]);
+      }
+
+      // Y — favorite focused game
+      if (justPressed(BTNS.Y)) {
+        const els = getFocusables();
+        const el = els[focusIdx.current];
+        if (el) {
+          const favBtn = el.querySelector('.c-act.fav') || el.closest('.card')?.querySelector('.c-act.fav');
+          if (favBtn) favBtn.click();
+        }
+      }
+
+      // START — show controls hint
+      if (justPressed(BTNS.START)) {
+        showHint('← → navigate  A select  B back  LB/RB switch tabs  Y favorite');
+      }
+
+      // Store button states
+      Object.entries(BTNS).forEach(([key, idx]) => {
+        prevButtons.current[key] = pressed(idx);
+      });
+
+      rafRef.current = requestAnimationFrame(poll);
+    };
+
+    rafRef.current = requestAnimationFrame(poll);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [view, heroGame, modal, goTo, navItems, setHeroGame, setModal]);
+
+  // Reset focus index on view change
+  useEffect(() => { focusIdx.current = 0; }, [view, heroGame]);
+
+  return { connected, hint, hintHide };
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -1986,6 +2191,33 @@ export default function App(){
 
   const goTo = (id) => { setView(id); setHeroGame(null); setSrch(""); };
 
+  const { connected, hint, hintHide } = useController({
+    view, goTo, navItems: [
+      {id:"home"},{id:"library"},{id:"recent"},{id:"favorites"},
+      {id:"streams"},{id:"achievements"},{id:"customize"},{id:"settings"},
+    ],
+    heroGame, setHeroGame, modal, setModal, doPlay, doFav, games, sorted,
+  });
+
+  const ControllerHUD = () => hint ? (
+    <>
+      <style>{CONTROLLER_CSS}</style>
+      <div className={`ctrl-hud ${hintHide ? "hide" : ""}`}>
+        <span style={{fontSize:11,color:"var(--t2)"}}>{hint}</span>
+        {connected && <><div className="ctrl-sep"/><span style={{fontSize:10,color:"var(--ac)"}}>🎮</span></>}
+      </div>
+    </>
+  ) : connected ? (
+    <>
+      <style>{CONTROLLER_CSS}</style>
+      <div style={{position:"fixed",bottom:16,right:80,zIndex:9999,display:"flex",alignItems:"center",gap:6,background:"rgba(10,10,14,.8)",border:"1px solid var(--border)",borderRadius:20,padding:"5px 12px",backdropFilter:"blur(10px)"}}>
+        <span style={{fontSize:10,color:"var(--ac)"}}>🎮</span>
+        <span style={{fontSize:9,color:"var(--t3)",fontFamily:"DM Sans,sans-serif"}}>Controller Active</span>
+      </div>
+    </>
+  ) : null;
+
+
   if(!profile){
     return(<><style>{S}</style><ProfileSetup onComplete={(p)=>{setProfile(p);}}/></>);
   }
@@ -2050,6 +2282,7 @@ export default function App(){
         {launching&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
         {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
         <AutoUpdater/>
+        <ControllerHUD/>
         <div className="tc">
           {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
           {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}
@@ -2103,14 +2336,14 @@ export default function App(){
         </aside>
 
         <div className="main">
-          <header className="hdr">
+          {view!=="streams"&&<header className="hdr">
             <div className="hdr-title">{heroGame ? heroGame.title : view.toUpperCase()}</div>
             <div className="srch"><Ic.Search/><input value={srch} onChange={e=>setSrch(e.target.value)} placeholder="Search games…"/></div>
             <div className="hdr-r">
               <button className="btn-g" onClick={()=>setSort(sorts[(sorts.indexOf(sort)+1)%sorts.length])}><Ic.Sort/> Sort: {sort}</button>
               <button className="btn-p" onClick={()=>setModal("add")}><Ic.Plus/> Add Game</button>
             </div>
-          </header>
+          </header>}
 
           {view==="library"&&(
             <>
@@ -2176,9 +2409,8 @@ export default function App(){
       {launching&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
       {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
       <AutoUpdater/>
+      <ControllerHUD/>
       <div className="tc">
-        {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
-        {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}
       </div>
     </>
   );

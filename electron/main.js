@@ -525,7 +525,69 @@ ipcMain.handle("fetch-trailer", async (_e, title) => {
   } catch(e) { return { success: false, error: e.message }; }
 });
 
-// ── Update check (legacy) ─────────────────────────────────────────────────────
+// ── Stream BrowserView ────────────────────────────────────────────────────────
+let streamView = null;
+
+ipcMain.handle("stream-open", async (_e, { channel, bounds }) => {
+  if (streamView) {
+    mainWin.removeBrowserView(streamView);
+    streamView.webContents.destroy();
+    streamView = null;
+  }
+  streamView = new (require("electron").BrowserView)({
+    webPreferences: { contextIsolation: true, nodeIntegration: false }
+  });
+  mainWin.addBrowserView(streamView);
+  streamView.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+  streamView.setAutoResize({ width: false, height: false });
+  streamView.webContents.loadURL(
+    `https://player.twitch.tv/?channel=${channel}&parent=aura-launcher&autoplay=true&muted=false`
+  );
+  return { success: true };
+});
+
+ipcMain.handle("stream-resize", async (_e, bounds) => {
+  if (streamView) streamView.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+  return { success: true };
+});
+
+ipcMain.handle("stream-close", async () => {
+  if (streamView) {
+    mainWin.removeBrowserView(streamView);
+    streamView.webContents.destroy();
+    streamView = null;
+  }
+  return { success: true };
+});
+
+ipcMain.handle("chat-open", async (_e, { channel, bounds }) => {
+  // Chat uses a separate BrowserView
+  if (mainWin.chatView) {
+    mainWin.removeBrowserView(mainWin.chatView);
+    mainWin.chatView.webContents.destroy();
+    mainWin.chatView = null;
+  }
+  mainWin.chatView = new (require("electron").BrowserView)({
+    webPreferences: { contextIsolation: true, nodeIntegration: false }
+  });
+  mainWin.addBrowserView(mainWin.chatView);
+  mainWin.chatView.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+  mainWin.chatView.webContents.loadURL(
+    `https://www.twitch.tv/embed/${channel}/chat?parent=aura-launcher&darkpopout`
+  );
+  return { success: true };
+});
+
+ipcMain.handle("chat-close", async () => {
+  if (mainWin.chatView) {
+    mainWin.removeBrowserView(mainWin.chatView);
+    mainWin.chatView.webContents.destroy();
+    mainWin.chatView = null;
+  }
+  return { success: true };
+});
+
+
 ipcMain.handle("check-update", async () => {
   try {
     const res     = await axios.get("https://api.github.com/repos/tctray/aura-launcher/releases/latest");
