@@ -18,6 +18,12 @@
 "build": {
   "appId": "com.aura.launcher",
   "productName": "aura",
+  "files": [
+    "dist/**/*",
+    "electron/**/*",
+    "public/**/*",
+    "package.json"
+  ],
   "extraResources": [
     { "from": ".env", "to": ".env" }
   ],
