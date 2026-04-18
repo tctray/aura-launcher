@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   fetchCoversBulk: (games)  => ipcRenderer.invoke("fetch-covers-bulk", games),
 
   // ── Twitch live streams ──────────────────────────────────────────────────────
+  searchTwitch:       (opts) => ipcRenderer.invoke("search-twitch", opts),
   fetchTwitchStreams: (opts) => ipcRenderer.invoke("fetch-twitch-streams", opts),
 
   // ── Discord OAuth ───────────────────────────────────────────────────────────

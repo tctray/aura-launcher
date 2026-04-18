@@ -395,7 +395,84 @@ ipcMain.handle("fetch-twitch-streams", async (_e, { gameNames, userLogins }) => 
   }
 });
 
-// ── Steam API ─────────────────────────────────────────────────────────────────
+ipcMain.handle("search-twitch", async (_e, { query, type }) => {
+  // type: "streams" | "channels" | "games"
+  try {
+    const token = await getIGDBToken();
+
+    if (type === "games") {
+      const r = await axios.get("https://api.twitch.tv/helix/search/categories", {
+        headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
+        params: { query, first: 10 },
+      });
+      return { success: true, results: (r.data?.data || []).map(g => ({
+        id: g.id, name: g.name, thumbnail: g.box_art_url?.replace("{width}","140").replace("{height}","190"),
+      }))};
+    }
+
+    if (type === "channels") {
+      const r = await axios.get("https://api.twitch.tv/helix/search/channels", {
+        headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
+        params: { query, first: 20 },
+      });
+      return { success: true, results: (r.data?.data || []).map(c => ({
+        id: c.id, name: c.display_name, login: c.broadcaster_login,
+        thumbnail: c.thumbnail_url, game: c.game_name, isLive: c.is_live,
+        title: c.title,
+      }))};
+    }
+
+    // Default: search streams by game name or channel
+    const [chanRes, gameRes] = await Promise.allSettled([
+      axios.get("https://api.twitch.tv/helix/search/channels", {
+        headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
+        params: { query, first: 10 },
+      }),
+      axios.get("https://api.twitch.tv/helix/search/categories", {
+        headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
+        params: { query, first: 5 },
+      }),
+    ]);
+
+    const channels = chanRes.status === "fulfilled"
+      ? (chanRes.value.data?.data || []).map(c => ({
+          id: c.id, name: c.display_name, login: c.broadcaster_login,
+          thumbnail: c.thumbnail_url, game: c.game_name, isLive: c.is_live, title: c.title,
+        }))
+      : [];
+
+    const games = gameRes.status === "fulfilled"
+      ? (gameRes.value.data?.data || []).map(g => ({
+          id: g.id, name: g.name, thumbnail: g.box_art_url?.replace("{width}","140").replace("{height}","190"),
+        }))
+      : [];
+
+    // If game found, also fetch live streams for it
+    let gameStreams = [];
+    if (games.length) {
+      try {
+        const params = new URLSearchParams();
+        params.append("first", "10");
+        games.slice(0, 3).forEach(g => params.append("game_id", g.id));
+        const sr = await axios.get(`https://api.twitch.tv/helix/streams?${params}`, {
+          headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
+        });
+        gameStreams = (sr.data?.data || []).map(s => ({
+          id: s.id, user: s.user_name, userLogin: s.user_login,
+          title: s.title, game: s.game_name, viewers: s.viewer_count,
+          thumbnail: s.thumbnail_url.replace("{width}","440").replace("{height}","248"),
+          url: `https://twitch.tv/${s.user_login}`,
+        }));
+      } catch {}
+    }
+
+    return { success: true, channels, games, gameStreams };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+
 ipcMain.handle("steam-get-profile", async (_e, steamId) => {
   try {
     const res = await axios.get(

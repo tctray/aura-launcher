@@ -1332,7 +1332,6 @@ function StreamsView({ games, initialStream, onClear }) {
 
   useEffect(() => { fetchStreams(); }, [fetchStreams]);
 
-  const fmtViewers = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
 
   const playerContainerRef = useRef(null);
   const chatContainerRef = useRef(null);
@@ -1415,21 +1414,51 @@ function StreamsView({ games, initialStream, onClear }) {
     </div>
   ) : null;
 
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const fmtViewers = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
+
+  const doSearch = useCallback(async (q) => {
+    if (!q.trim()) { setSearchResults(null); return; }
+    setSearching(true);
+    if (window.electronAPI?.isElectron) {
+      const res = await window.electronAPI.searchTwitch({ query: q });
+      if (res.success) setSearchResults(res);
+    } else {
+      setSearchResults({ channels: [], games: [], gameStreams: [] });
+    }
+    setSearching(false);
+  }, []);
+
+
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"var(--bg)",height:"100%"}}>
       {/* Header */}
-      <div style={{padding:"14px 24px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
-        <div style={{width:8,height:8,borderRadius:"50%",background:"#eb0400",boxShadow:"0 0 8px #eb0400",animation:"pulse 2s infinite"}}/>
-        <span style={{fontFamily:"Rajdhani,sans-serif",fontSize:18,fontWeight:700,letterSpacing:2,color:"var(--t1)"}}>LIVE STREAMS</span>
-        <div style={{flex:1}}/>
-        <input
-          className="fi" value={inputVal}
-          onChange={e=>setInputVal(e.target.value)}
-          onKeyDown={e=>{ if(e.key==="Enter"){ setCustomLogins(inputVal); localStorage.setItem("aura_twitch_logins",inputVal); }}}
-          placeholder="Add streamers (comma separated) — press Enter"
-          style={{fontSize:11,maxWidth:320}}
-        />
-        <button className="btn-p" style={{fontSize:11,padding:"7px 14px"}} onClick={()=>{ setCustomLogins(inputVal); localStorage.setItem("aura_twitch_logins",inputVal); fetchStreams(); }}>↻ Refresh</button>
+      <div style={{padding:"12px 24px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+        <div style={{width:8,height:8,borderRadius:"50%",background:"#eb0400",boxShadow:"0 0 8px #eb0400",animation:"pulse 2s infinite",flexShrink:0}}/>
+        <span style={{fontFamily:"Rajdhani,sans-serif",fontSize:18,fontWeight:700,letterSpacing:2,color:"var(--t1)",flexShrink:0}}>LIVE</span>
+        {/* Unified search bar */}
+        <div style={{flex:1,display:"flex",alignItems:"center",gap:8,background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"8px 14px",transition:"all .2s"}}
+          onFocus={e=>e.currentTarget.style.borderColor="var(--ac)"}
+          onBlur={e=>e.currentTarget.style.borderColor="var(--border)"}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="13" height="13" style={{color:"var(--t3)",flexShrink:0}}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input
+            value={searchQuery}
+            onChange={e=>setSearchQuery(e.target.value)}
+            onKeyDown={e=>{
+              if(e.key==="Enter"){
+                if(searchQuery.trim()) doSearch(searchQuery);
+              }
+            }}
+            placeholder="Search streamers or games — press Enter"
+            style={{background:"none",border:"none",outline:"none",color:"var(--t1)",fontSize:12,width:"100%",fontFamily:"DM Sans,sans-serif"}}
+          />
+          {searchQuery&&<button onClick={()=>{setSearchQuery("");setSearchResults(null);}} style={{background:"none",border:"none",color:"var(--t3)",cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>×</button>}
+        </div>
+        <button className="btn-p" style={{fontSize:11,padding:"7px 14px",flexShrink:0}} onClick={()=>searchQuery.trim()?doSearch(searchQuery):(fetchStreams(),setSearchResults(null))}>
+          {searchQuery.trim()?"Search":"↻"}
+        </button>
       </div>
 
       {/* Main area */}
@@ -1437,6 +1466,88 @@ function StreamsView({ games, initialStream, onClear }) {
         <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
           {player}
           {chat}
+        </div>
+      ) : searchResults ? (
+        <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
+          {searching && <div style={{color:"var(--t3)",fontSize:12,marginBottom:16}}>Searching…</div>}
+          {searchResults.channels?.length > 0 && (
+            <div style={{marginBottom:28}}>
+              <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:15,fontWeight:700,letterSpacing:1.5,color:"var(--t1)",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
+                CHANNELS
+                <span style={{fontSize:10,color:"var(--t3)",fontWeight:400,fontFamily:"DM Sans,sans-serif"}}>
+                  {searchResults.channels.filter(c=>c.isLive).length} live · {searchResults.channels.filter(c=>!c.isLive).length} offline
+                </span>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12}}>
+                {searchResults.channels.map(c=>(
+                  <div key={c.id}
+                    onClick={()=>c.isLive&&setActiveStream({id:c.id,user:c.name,userLogin:c.login,title:c.title,game:c.game,viewers:0,thumbnail:c.thumbnail,url:`https://twitch.tv/${c.login}`})}
+                    style={{borderRadius:12,overflow:"hidden",cursor:c.isLive?"pointer":"default",background:"var(--card)",border:`1px solid ${c.isLive?"var(--border)":"rgba(255,255,255,.04)"}`,transition:"all .2s",opacity:c.isLive?1:0.5}}
+                    onMouseEnter={e=>{if(c.isLive){e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.borderColor="#9147ff55";}}}
+                    onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.borderColor=c.isLive?"var(--border)":"rgba(255,255,255,.04)";}}>
+                    <div style={{position:"relative",aspectRatio:"16/9",background:"#1a1a2e",overflow:"hidden"}}>
+                      {c.thumbnail&&<img src={c.thumbnail} alt={c.name} style={{width:"100%",height:"100%",objectFit:"cover",filter:c.isLive?"none":"grayscale(0.8)"}}/>}
+                      <div style={{position:"absolute",top:8,left:8,background:c.isLive?"linear-gradient(90deg,#eb0400,#9147ff)":"rgba(0,0,0,.6)",color:"#fff",fontSize:9,fontWeight:800,padding:"2px 8px",borderRadius:20,letterSpacing:1.5}}>
+                        {c.isLive?"LIVE":"OFFLINE"}
+                      </div>
+                    </div>
+                    <div style={{padding:"10px 12px"}}>
+                      <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:14,fontWeight:700,color:"var(--t1)"}}>{c.name}</div>
+                      <div style={{fontSize:10,color:"#9147ff",fontWeight:700,marginTop:2}}>{c.game||"—"}</div>
+                      <div style={{fontSize:10,color:"var(--t2)",marginTop:3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.isLive?c.title:"Channel is offline"}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {searchResults.games?.length > 0 && (
+            <div style={{marginBottom:28}}>
+              <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:15,fontWeight:700,letterSpacing:1.5,color:"var(--t1)",marginBottom:12}}>GAMES</div>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                {searchResults.games.map(g=>(
+                  <div key={g.id} onClick={async()=>{const sr=await window.electronAPI.fetchTwitchStreams({gameNames:[g.name],userLogins:[]});if(sr.success)setSearchResults(prev=>({...prev,gameStreams:sr.streams,channels:[]}));}}
+                    style={{display:"flex",alignItems:"center",gap:10,background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"8px 12px",cursor:"pointer",transition:"all .15s"}}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor="var(--ac)"}
+                    onMouseLeave={e=>e.currentTarget.style.borderColor="var(--border)"}>
+                    {g.thumbnail&&<img src={g.thumbnail} alt={g.name} style={{width:32,height:44,borderRadius:4,objectFit:"cover"}}/>}
+                    <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:13,fontWeight:700,color:"var(--t1)"}}>{g.name}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {searchResults.gameStreams?.length > 0 && (
+            <div style={{marginBottom:28}}>
+              <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:15,fontWeight:700,letterSpacing:1.5,color:"var(--t1)",marginBottom:12}}>STREAMS</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:14}}>
+                {searchResults.gameStreams.map(s=>(
+                  <div key={s.id} onClick={()=>setActiveStream(s)}
+                    style={{borderRadius:12,overflow:"hidden",cursor:"pointer",background:"var(--card)",border:"1px solid var(--border)",transition:"all .2s"}}
+                    onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.borderColor="#9147ff55";}}
+                    onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.borderColor="var(--border)";}}>
+                    <div style={{position:"relative",aspectRatio:"16/9",overflow:"hidden"}}>
+                      {s.thumbnail&&<img src={s.thumbnail} alt={s.user} style={{width:"100%",height:"100%",objectFit:"cover"}}/>}
+                      <div style={{position:"absolute",top:8,left:8,background:"linear-gradient(90deg,#eb0400,#9147ff)",color:"#fff",fontSize:9,fontWeight:800,padding:"2px 8px",borderRadius:20,letterSpacing:1.5}}>LIVE</div>
+                      <div style={{position:"absolute",top:8,right:8,background:"rgba(0,0,0,.75)",color:"#fff",fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:20}}>👁 {fmtViewers(s.viewers)}</div>
+                    </div>
+                    <div style={{padding:"10px 12px"}}>
+                      <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:14,fontWeight:700,color:"var(--t1)"}}>{s.user}</div>
+                      <div style={{fontSize:10,color:"#9147ff",fontWeight:700,marginTop:2}}>{s.game}</div>
+                      <div style={{fontSize:10,color:"var(--t2)",marginTop:3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.title}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {!searching&&!searchResults.channels?.length&&!searchResults.games?.length&&!searchResults.gameStreams?.length&&(
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:200,gap:10,color:"var(--t3)"}}>
+              <div style={{fontSize:36}}>🔍</div>
+              <div style={{fontSize:14,fontWeight:600,color:"var(--t2)"}}>No results found</div>
+              <div style={{fontSize:11}}>Try a different streamer or game name</div>
+            </div>
+          )}
         </div>
       ) : (
         <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
@@ -1803,7 +1914,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       <div className="ss">
         <div className="ss-t">ABOUT</div>
         <div className="ss-card">
-          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.1.9</div></div><UpdateButton/></div>
+          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.2.0</div></div><UpdateButton/></div>
           <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>
