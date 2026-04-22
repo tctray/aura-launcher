@@ -126,6 +126,7 @@ function createWindow() {
       nodeIntegration: false,
       webviewTag: true,
       webSecurity: false, // needed for Twitch embeds in file:// context
+      enableBlinkFeatures: "GetDisplayMedia",
     },
   });
 
@@ -743,6 +744,29 @@ ipcMain.handle("get-audio-devices", async () => {
   }
 });
 
+
+// Get all screens and windows for picker
+ipcMain.handle("get-capture-sources", async () => {
+  try {
+    const { desktopCapturer } = require("electron");
+    const sources = await desktopCapturer.getSources({
+      types: ["screen", "window"],
+      thumbnailSize: { width: 320, height: 180 },
+    });
+    return {
+      success: true,
+      sources: sources.map(s => ({
+        id: s.id,
+        name: s.name,
+        thumbnail: s.thumbnail.toDataURL(),
+        isScreen: s.id.startsWith("screen:"),
+      })),
+    };
+  } catch(e) {
+    console.error("desktopCapturer error:", e.message);
+    return { success: false, error: e.message, sources: [] };
+  }
+});
 
 ipcMain.handle("start-recording", async (_e, gameName, opts) => startRecording(gameName, opts || {}));
 ipcMain.handle("stop-recording",  async () => stopRecording());
