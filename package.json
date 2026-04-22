@@ -19,6 +19,9 @@
   "build": {
     "appId": "com.aura.launcher",
     "productName": "aura",
+     "asarUnpack": [
+    "node_modules/ffmpeg-static/**"
+  ],
     "files": [
       "dist/**/*",
       "electron/**/*",

@@ -37,13 +37,19 @@ let clipFolder = null;
 
 try {
   ffmpegPath = require("ffmpeg-static");
+  // In packaged app, ffmpeg-static is unpacked from asar
+  if (ffmpegPath && app.isPackaged) {
+    ffmpegPath = ffmpegPath.replace("app.asar", "app.asar.unpacked");
+  }
+  console.log("ffmpeg path:", ffmpegPath);
 } catch {
   console.log("ffmpeg-static not found — recording disabled");
 }
 
 function getClipFolder() {
   if (clipFolder) return clipFolder;
-  return path.join(app.getPath("videos"), "AURA Clips");
+  // Use userData path - always accessible in packaged apps
+  return path.join(app.getPath("userData"), "Clips");
 }
 
 function ensureDir(dir) {
