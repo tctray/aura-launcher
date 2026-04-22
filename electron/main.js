@@ -4,13 +4,7 @@ process.on('uncaughtException', (e) => {
 
 const path = require("path");
 const fs   = require("fs");
-const { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut, protocol } = require("electron");
-
-// Must be called before app is ready
-protocol.registerSchemesAsPrivileged([{
-  scheme: "localfile",
-  privileges: { secure: true, standard: true, stream: true, supportFetchAPI: true }
-}]);
+const { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut } = require("electron");
 
 // Load .env — written by CI from GitHub Secrets, or local file in dev
 // Load .env — dev reads from project root, packaged reads from resources/
@@ -170,11 +164,63 @@ function setupAutoUpdater(win) {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
-  // Register local file protocol for video playback in packaged app
-  const { protocol, net } = require("electron");
-  protocol.handle("localfile", (request) => {
-    const filePath = decodeURIComponent(request.url.replace("localfile://", ""));
-    return net.fetch(`file:///${filePath}`);
+  // Start local HTTP server for video file serving
+  const clipServerToken = require("crypto").randomBytes(32).toString("hex");
+  global.clipServerToken = clipServerToken;
+
+  const httpServer = http.createServer((req, res) => {
+    try {
+      // Verify secret token
+      const url = new URL(req.url, "http://127.0.0.1");
+      const token = url.searchParams.get("token");
+      if (token !== clipServerToken) {
+        res.writeHead(403);
+        res.end("Forbidden");
+        return;
+      }
+
+      const filePath = decodeURIComponent(url.pathname.slice(1));
+      if (!fs.existsSync(filePath)) {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      const stat = fs.statSync(filePath);
+      const fileSize = stat.size;
+      const range = req.headers.range;
+
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunkSize = end - start + 1;
+        const fileStream = fs.createReadStream(filePath, { start, end });
+        res.writeHead(206, {
+          "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+          "Accept-Ranges": "bytes",
+          "Content-Length": chunkSize,
+          "Content-Type": "video/mp4",
+        });
+        fileStream.pipe(res);
+      } else {
+        res.writeHead(200, {
+          "Content-Length": fileSize,
+          "Content-Type": "video/mp4",
+          "Accept-Ranges": "bytes",
+        });
+        fs.createReadStream(filePath).pipe(res);
+      }
+    } catch(e) {
+      res.writeHead(500);
+      res.end("Error: " + e.message);
+    }
+  });
+
+  // Pick an available port and store it
+  httpServer.listen(0, "127.0.0.1", () => {
+    const port = httpServer.address().port;
+    global.clipServerPort = port;
+    console.log("Clip server running on port:", port);
   });
 
   createWindow();
@@ -790,6 +836,11 @@ ipcMain.handle("get-capture-sources", async () => {
     return { success: false, error: e.message, sources: [] };
   }
 });
+
+ipcMain.handle("get-clip-server-port", () => ({
+  port: global.clipServerPort || null,
+  token: global.clipServerToken || null,
+}));
 
 ipcMain.handle("start-recording", async (_e, gameName, opts) => startRecording(gameName, opts || {}));
 ipcMain.handle("stop-recording",  async () => stopRecording());

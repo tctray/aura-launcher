@@ -1832,6 +1832,8 @@ function ClipsPage({ nowPlayingGame }) {
   const [showPicker, setShowPicker] = useState(false);
   const [pickerSources, setPickerSources] = useState([]);
   const [pickerLoading, setPickerLoading] = useState(false);
+  const [clipServerPort, setClipServerPort] = useState(null);
+  const [clipServerToken, setClipServerToken] = useState(null);
 
   const loadClips = async () => {
     if (!window.electronAPI?.isElectron) { setLoading(false); return; }
@@ -1845,7 +1847,11 @@ function ClipsPage({ nowPlayingGame }) {
     setIsRecording(sr.isRecording);
     setRecGame(sr.game || "");
     setRecElapsed(sr.elapsed || 0);
-    // Load audio devices
+    const serverInfo = await window.electronAPI.getClipServerPort?.();
+    if (serverInfo?.port) {
+      setClipServerPort(serverInfo.port);
+      setClipServerToken(serverInfo.token);
+    }
     const ad = await window.electronAPI.getAudioDevices();
     if (ad.success && ad.devices.length) {
       setAudioDevices(ad.devices);
@@ -1858,7 +1864,7 @@ function ClipsPage({ nowPlayingGame }) {
     loadClips();
     if (!window.electronAPI?.isElectron) return;
     window.electronAPI.onRecordingStarted((_e, data) => { setIsRecording(true); setRecGame(data.game); setRecElapsed(0); });
-    window.electronAPI.onRecordingStopped(() => { setIsRecording(false); loadClips(); });
+    window.electronAPI.onRecordingStopped(() => { setIsRecording(false); setTimeout(loadClips, 2000); });
     window.electronAPI.onRecordingHotkey((_e, action) => {
       if (action === "start") setIsRecording(true);
       if (action === "stop") { setIsRecording(false); loadClips(); }
@@ -2068,11 +2074,11 @@ function ClipsPage({ nowPlayingGame }) {
               <div key={clip.id} className="clip-card">
                 {playing === clip.id ? (
                   <div style={{aspectRatio:"16/9",background:"#000"}}>
-                    <video src={`localfile://${encodeURIComponent(clip.path)}`} controls autoPlay style={{width:"100%",height:"100%",display:"block"}}/>
+                    <video src={clipServerPort ? `http://127.0.0.1:${clipServerPort}/${encodeURIComponent(clip.path)}?token=${clipServerToken}` : `file:///${clip.path}`} controls autoPlay style={{width:"100%",height:"100%",display:"block"}}/>
                   </div>
                 ) : (
                   <div className="clip-thumb" onClick={()=>setPlaying(clip.id)}>
-                    <video src={`localfile://${encodeURIComponent(clip.path)}`} style={{width:"100%",height:"100%",objectFit:"cover"}} preload="metadata"/>
+                    <video src={clipServerPort ? `http://127.0.0.1:${clipServerPort}/${encodeURIComponent(clip.path)}?token=${clipServerToken}` : `file:///${clip.path}`} style={{width:"100%",height:"100%",objectFit:"cover"}} preload="metadata"/>
                     <div className="clip-play-ov">
                       <button className="clip-play-btn"><Ic.Play/></button>
                     </div>
