@@ -649,26 +649,28 @@ function startRecording(gameName, opts = {}) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const outFile = path.join(gameDir, `clip-${timestamp}.mp4`);
 
-  // Use gdigrab for screen capture — most reliable on Windows
-  // Audio: try to capture default audio output + default mic
+  // Determine capture input
+  // sourceId format: "screen:0:0" for screens, "window:12345:0" for windows
+  let captureInput = "desktop";
+  if (opts.sourceName && !opts.isScreen) {
+    // Capture specific window by title
+    captureInput = `title=${opts.sourceName}`;
+  }
+
   const args = [
     "-f", "gdigrab",
     "-framerate", "60",
-    "-offset_x", "0",
-    "-offset_y", "0",
-    "-i", "desktop",
-    "-f", "dshow",
-    "-i", `audio=${opts.micDevice || "Microphone (Realtek High Definition Audio)"}`,
-    "-map", "0:v",
-    "-map", "1:a",
+    "-i", captureInput,
     "-vcodec", "libx264",
     "-preset", "ultrafast",
     "-crf", "23",
-    "-acodec", "aac",
+    "-pix_fmt", "yuv420p",
     "-movflags", "+faststart",
     "-y",
     outFile
   ];
+
+  console.log("Starting recording:", captureInput, "->", outFile);
 
   try {
     recordingProcess = spawn(ffmpegPath, args, { windowsHide: true });
@@ -678,22 +680,24 @@ function startRecording(gameName, opts = {}) {
     recordingOutFile = outFile;
 
     recordingProcess.on("close", (code) => {
-      console.log("ffmpeg closed with code:", code);
+      console.log("ffmpeg closed:", code);
       isRecording = false;
       recordingProcess = null;
       mainWin?.webContents.send("recording-stopped", { file: outFile, game: recordingGame });
     });
 
     recordingProcess.stderr.on("data", (data) => {
-      console.log("ffmpeg:", data.toString().slice(0, 150));
+      console.log("ffmpeg:", data.toString().slice(0, 200));
     });
 
     mainWin?.webContents.send("recording-started", { game: recordingGame, file: outFile });
     return { success: true, file: outFile, game: recordingGame };
   } catch(e) {
+    console.error("Recording error:", e.message);
     return { success: false, error: e.message };
   }
 }
+
 
 function stopRecording() {
   if (!isRecording || !recordingProcess) return { success: false, error: "Not recording" };
@@ -732,6 +736,29 @@ ipcMain.handle("get-audio-devices", async () => {
   }
 });
 
+
+// Get all screens and windows for picker
+ipcMain.handle("get-capture-sources", async () => {
+  try {
+    const { desktopCapturer } = require("electron");
+    const sources = await desktopCapturer.getSources({
+      types: ["screen", "window"],
+      thumbnailSize: { width: 320, height: 180 },
+      fetchWindowIcons: true,
+    });
+    return {
+      success: true,
+      sources: sources.map(s => ({
+        id: s.id,
+        name: s.name,
+        thumbnail: s.thumbnail.toDataURL(),
+        isScreen: s.id.startsWith("screen:"),
+      })),
+    };
+  } catch(e) {
+    return { success: false, error: e.message, sources: [] };
+  }
+});
 
 ipcMain.handle("start-recording", async (_e, gameName, opts) => startRecording(gameName, opts || {}));
 ipcMain.handle("stop-recording",  async () => stopRecording());

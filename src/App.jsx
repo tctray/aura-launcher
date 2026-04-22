@@ -1829,6 +1829,9 @@ function ClipsPage({ nowPlayingGame }) {
   const [audioDevices, setAudioDevices] = useState([]);
   const [selectedMic, setSelectedMic] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerSources, setPickerSources] = useState([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
 
   const loadClips = async () => {
     if (!window.electronAPI?.isElectron) { setLoading(false); return; }
@@ -1877,15 +1880,28 @@ function ClipsPage({ nowPlayingGame }) {
     if (isRecording) {
       await window.electronAPI.stopRecording();
       setIsRecording(false);
-      setTimeout(loadClips, 1500); // reload clips after stop
+      setTimeout(loadClips, 1500);
     } else {
-      const game = nowPlayingGame || recGame || "General";
-      const res = await window.electronAPI.startRecording(game, { micDevice: selectedMic });
-      if (res.success) {
-        setIsRecording(true);
-        setRecGame(game);
-        setRecElapsed(0);
-      }
+      // Show screen picker first
+      setPickerLoading(true);
+      setShowPicker(true);
+      const res = await window.electronAPI.getCaptureSources();
+      if (res.success) setPickerSources(res.sources);
+      setPickerLoading(false);
+    }
+  };
+
+  const startWithSource = async (source) => {
+    setShowPicker(false);
+    const game = nowPlayingGame || recGame || "General";
+    const res = await window.electronAPI.startRecording(game, {
+      sourceName: source.name,
+      isScreen: source.isScreen,
+    });
+    if (res.success) {
+      setIsRecording(true);
+      setRecGame(game);
+      setRecElapsed(0);
     }
   };
 
@@ -1907,6 +1923,74 @@ function ClipsPage({ nowPlayingGame }) {
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <style>{CLIPS_CSS}</style>
+
+      {/* Screen Picker Modal */}
+      {showPicker&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",backdropFilter:"blur(10px)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn .2s ease"}}>
+          <div style={{background:"var(--panel)",border:"1px solid var(--borderb)",borderRadius:18,width:700,maxWidth:"90vw",maxHeight:"80vh",display:"flex",flexDirection:"column",overflow:"hidden",boxShadow:"0 32px 80px rgba(0,0,0,.7)"}}>
+            <div style={{padding:"20px 24px 16px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:18,fontWeight:700,letterSpacing:1.5}}>Choose Screen or Window</div>
+              <button onClick={()=>setShowPicker(false)} style={{background:"var(--hover)",border:"1px solid var(--border)",borderRadius:8,padding:5,cursor:"pointer",color:"var(--t2)",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+            </div>
+            <div style={{flex:1,overflowY:"auto",padding:20}}>
+              {pickerLoading ? (
+                <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:200,color:"var(--t3)"}}>Loading sources…</div>
+              ) : (
+                <>
+                  {/* Screens */}
+                  {pickerSources.filter(s=>s.isScreen).length>0&&(
+                    <div style={{marginBottom:20}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"var(--t2)",letterSpacing:2,textTransform:"uppercase",marginBottom:12}}>Screens</div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
+                        {pickerSources.filter(s=>s.isScreen).map(s=>(
+                          <div key={s.id} onClick={()=>startWithSource(s)}
+                            style={{borderRadius:12,overflow:"hidden",cursor:"pointer",border:"2px solid var(--border)",transition:"all .15s",background:"var(--card)"}}
+                            onMouseEnter={e=>{e.currentTarget.style.borderColor="var(--ac)";e.currentTarget.style.transform="translateY(-2px)";}}
+                            onMouseLeave={e=>{e.currentTarget.style.borderColor="var(--border)";e.currentTarget.style.transform="none";}}>
+                            <div style={{aspectRatio:"16/9",overflow:"hidden",background:"#000"}}>
+                              <img src={s.thumbnail} alt={s.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                            </div>
+                            <div style={{padding:"8px 10px",fontSize:11,fontWeight:600,color:"var(--t1)",display:"flex",alignItems:"center",gap:6}}>
+                              <span style={{fontSize:14}}>🖥️</span>{s.name}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Windows */}
+                  {pickerSources.filter(s=>!s.isScreen).length>0&&(
+                    <div>
+                      <div style={{fontSize:11,fontWeight:700,color:"var(--t2)",letterSpacing:2,textTransform:"uppercase",marginBottom:12}}>Windows</div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
+                        {pickerSources.filter(s=>!s.isScreen).map(s=>(
+                          <div key={s.id} onClick={()=>startWithSource(s)}
+                            style={{borderRadius:12,overflow:"hidden",cursor:"pointer",border:"2px solid var(--border)",transition:"all .15s",background:"var(--card)"}}
+                            onMouseEnter={e=>{e.currentTarget.style.borderColor="var(--ac)";e.currentTarget.style.transform="translateY(-2px)";}}
+                            onMouseLeave={e=>{e.currentTarget.style.borderColor="var(--border)";e.currentTarget.style.transform="none";}}>
+                            <div style={{aspectRatio:"16/9",overflow:"hidden",background:"#000"}}>
+                              <img src={s.thumbnail} alt={s.name} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                            </div>
+                            <div style={{padding:"8px 10px",fontSize:11,fontWeight:600,color:"var(--t1)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                              {s.name}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div style={{padding:"14px 24px",borderTop:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:11,color:"var(--t3)"}}>Click any screen or window to start recording</span>
+              <button onClick={()=>startWithSource({name:"desktop",isScreen:true})} className="btn-p" style={{fontSize:11}}>
+                Record Full Desktop
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Header */}
       <div style={{padding:"14px 24px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
