@@ -4,7 +4,13 @@ process.on('uncaughtException', (e) => {
 
 const path = require("path");
 const fs   = require("fs");
-const { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut, protocol } = require("electron");
+
+// Must be called before app is ready
+protocol.registerSchemesAsPrivileged([{
+  scheme: "localfile",
+  privileges: { secure: true, standard: true, stream: true, supportFetchAPI: true }
+}]);
 
 // Load .env — written by CI from GitHub Secrets, or local file in dev
 // Load .env — dev reads from project root, packaged reads from resources/
@@ -165,10 +171,10 @@ function setupAutoUpdater(win) {
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
   // Register local file protocol for video playback in packaged app
-  const { protocol } = require("electron");
-  protocol.registerFileProtocol("localfile", (request, callback) => {
+  const { protocol, net } = require("electron");
+  protocol.handle("localfile", (request) => {
     const filePath = decodeURIComponent(request.url.replace("localfile://", ""));
-    callback({ path: filePath });
+    return net.fetch(`file:///${filePath}`);
   });
 
   createWindow();
