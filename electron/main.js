@@ -4,7 +4,7 @@ process.on('uncaughtException', (e) => {
 
 const path = require("path");
 const fs   = require("fs");
-const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut } = require("electron");
 
 // Load .env — written by CI from GitHub Secrets, or local file in dev
 // Load .env — dev reads from project root, packaged reads from resources/
@@ -24,6 +24,38 @@ const vdf = require("@node-steam/vdf");
 const axios = require("axios");
 const DiscordRPC = require("discord-rpc");
 const Registry = require("winreg");
+const { spawn } = require("child_process");
+
+// ── Recording state ───────────────────────────────────────────────────────────
+let ffmpegPath = null;
+let recordingProcess = null;
+let isRecording = false;
+let recordingGame = null;
+let recordingStartTime = null;
+let clipFolder = null;
+
+try {
+  ffmpegPath = require("ffmpeg-static");
+} catch {
+  console.log("ffmpeg-static not found — recording disabled");
+}
+
+function getClipFolder() {
+  if (clipFolder) return clipFolder;
+  return path.join(app.getPath("videos"), "AURA Clips");
+}
+
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function getAutoResolution() {
+  const { screen } = require("electron");
+  const display = screen.getPrimaryDisplay();
+  return { width: display.size.width, height: display.size.height };
+}
+
+
 
 // ── Credentials from .env ─────────────────────────────────────────────────────
 // Never hardcode these — keep them in electron/.env or your project root .env
@@ -131,6 +163,7 @@ function setupAutoUpdater(win) {
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
   createWindow();
+  registerHotkeys();
 
   ipcMain.handle("download-update", () => {
     try { autoUpdater.downloadUpdate(); } catch(e) { console.error(e); }
@@ -144,6 +177,8 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
+  globalShortcut.unregisterAll();
+  if (isRecording) stopRecording();
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -602,7 +637,156 @@ ipcMain.handle("fetch-trailer", async (_e, title) => {
   } catch(e) { return { success: false, error: e.message }; }
 });
 
-// ── Stream BrowserView ────────────────────────────────────────────────────────
+// ── Clip Recording ────────────────────────────────────────────────────────────
+function startRecording(gameName) {
+  if (!ffmpegPath) return { success: false, error: "ffmpeg not available" };
+  if (isRecording) return { success: false, error: "Already recording" };
+
+  const { width, height } = getAutoResolution();
+  const gameDir = path.join(getClipFolder(), gameName || "General");
+  ensureDir(gameDir);
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const outFile = path.join(gameDir, `clip-${timestamp}.mp4`);
+
+  // Build ffmpeg args for Windows screen capture + audio
+  const args = [
+    "-f", "gdigrab",
+    "-framerate", "60",
+    "-i", "desktop",
+    "-f", "dshow",
+    "-i", "audio=virtual-audio-capturer",  // game audio via VB-Audio or similar
+    "-f", "dshow",
+    "-i", "audio=Microphone",              // default mic
+    "-filter_complex", "[1:a][2:a]amix=inputs=2[aout]",
+    "-map", "0:v",
+    "-map", "[aout]",
+    "-vcodec", "libx264",
+    "-preset", "ultrafast",
+    "-crf", "23",
+    "-acodec", "aac",
+    "-movflags", "+faststart",
+    outFile
+  ];
+
+  try {
+    recordingProcess = spawn(ffmpegPath, args, { windowsHide: true });
+    isRecording = true;
+    recordingGame = gameName || "General";
+    recordingStartTime = Date.now();
+
+    recordingProcess.on("close", () => {
+      isRecording = false;
+      recordingProcess = null;
+      mainWin?.webContents.send("recording-stopped", { file: outFile, game: recordingGame });
+    });
+
+    recordingProcess.stderr.on("data", (data) => {
+      console.log("ffmpeg:", data.toString().slice(0, 100));
+    });
+
+    mainWin?.webContents.send("recording-started", { game: recordingGame, file: outFile });
+    return { success: true, file: outFile, game: recordingGame };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+}
+
+function stopRecording() {
+  if (!isRecording || !recordingProcess) return { success: false, error: "Not recording" };
+  recordingProcess.stdin.write("q");
+  recordingProcess.kill("SIGINT");
+  isRecording = false;
+  return { success: true };
+}
+
+ipcMain.handle("start-recording", async (_e, gameName) => startRecording(gameName));
+ipcMain.handle("stop-recording",  async () => stopRecording());
+ipcMain.handle("recording-status", async () => ({
+  isRecording,
+  game: recordingGame,
+  elapsed: recordingStartTime ? Date.now() - recordingStartTime : 0,
+}));
+
+ipcMain.handle("set-clip-folder", async () => {
+  const r = await dialog.showOpenDialog({ properties: ["openDirectory"], title: "Choose Clip Save Folder" });
+  if (r.canceled) return { success: false };
+  clipFolder = r.filePaths[0];
+  return { success: true, folder: clipFolder };
+});
+
+ipcMain.handle("get-clip-folder", async () => ({ folder: getClipFolder() }));
+
+ipcMain.handle("get-clips", async () => {
+  try {
+    const base = getClipFolder();
+    ensureDir(base);
+    const clips = [];
+    const gameDirs = fs.readdirSync(base).filter(f => fs.statSync(path.join(base, f)).isDirectory());
+    for (const game of gameDirs) {
+      const gameDir = path.join(base, game);
+      const files = fs.readdirSync(gameDir).filter(f => f.endsWith(".mp4") || f.endsWith(".mkv"));
+      for (const file of files) {
+        const filePath = path.join(gameDir, file);
+        const stat = fs.statSync(filePath);
+        clips.push({
+          id: `${game}-${file}`,
+          game,
+          file,
+          path: filePath,
+          size: stat.size,
+          date: stat.mtime.toISOString(),
+        });
+      }
+    }
+    clips.sort((a, b) => new Date(b.date) - new Date(a.date));
+    return { success: true, clips };
+  } catch(e) {
+    return { success: false, error: e.message, clips: [] };
+  }
+});
+
+ipcMain.handle("delete-clip", async (_e, filePath) => {
+  try {
+    fs.unlinkSync(filePath);
+    return { success: true };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("open-clip-folder", async (_e, filePath) => {
+  shell.showItemInFolder(filePath);
+  return { success: true };
+});
+
+ipcMain.handle("rename-clip", async (_e, { oldPath, newName }) => {
+  try {
+    const dir = path.dirname(oldPath);
+    const ext = path.extname(oldPath);
+    const newPath = path.join(dir, newName + ext);
+    fs.renameSync(oldPath, newPath);
+    return { success: true, newPath };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// ── Register F9 hotkey after window ready ─────────────────────────────────────
+function registerHotkeys() {
+  globalShortcut.register("F9", () => {
+    if (isRecording) {
+      stopRecording();
+      mainWin?.webContents.send("recording-hotkey", "stop");
+    } else {
+      const currentGame = recordingGame || "General";
+      startRecording(currentGame);
+      mainWin?.webContents.send("recording-hotkey", "start");
+    }
+  });
+}
+
+
 let streamView = null;
 
 ipcMain.handle("stream-open", async (_e, { channel, bounds }) => {

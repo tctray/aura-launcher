@@ -1,13 +1,14 @@
 {
   "name": "aura",
   "private": true,
-  "version": "1.2.2",
+  "version": "1.2.3",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
-"electron:build": "cross-env NODE_ENV=production npm run build && electron-builder --publish always"  },
+    "electron:build": "cross-env NODE_ENV=production npm run build && electron-builder --publish always"
+  },
   "publish": [
     {
       "provider": "github",
@@ -15,32 +16,37 @@
       "repo": "aura-launcher"
     }
   ],
-"build": {
-  "appId": "com.aura.launcher",
-  "productName": "aura",
-  "files": [
-    "dist/**/*",
-    "electron/**/*",
-    "public/**/*",
-    "package.json"
-  ],
-  "extraResources": [
-    { "from": ".env", "to": ".env" }
-  ],
-  "publish": [{
-    "provider": "github",
-    "owner": "tctray",
-    "repo": "aura-launcher"
-  }],
-  "win": {
-    "target": "nsis",
-    "icon": "public/icon.png"
+  "build": {
+    "appId": "com.aura.launcher",
+    "productName": "aura",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".env",
+        "to": ".env"
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "tctray",
+        "repo": "aura-launcher"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "public/icon.png"
+    }
   },
-  "linux": {
-    "target": "AppImage",
-    "icon": "public/icon.png"
-  }
-},
   "dependencies": {
     "@node-steam/vdf": "^2.2.0",
     "axios": "^1.14.0",
@@ -49,6 +55,7 @@
     "dotenv": "^17.4.1",
     "electron-store": "^11.0.2",
     "electron-updater": "^6.8.3",
+    "ffmpeg-static": "^5.3.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "winreg": "^1.2.5"

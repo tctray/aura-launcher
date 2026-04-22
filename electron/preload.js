@@ -49,6 +49,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // ── Trailers ─────────────────────────────────────────────────────────────────
   fetchTrailer: (title) => ipcRenderer.invoke("fetch-trailer", title),
 
+  // ── Recording ────────────────────────────────────────────────────────────────
+  startRecording:    (game)  => ipcRenderer.invoke("start-recording", game),
+  stopRecording:     ()      => ipcRenderer.invoke("stop-recording"),
+  recordingStatus:   ()      => ipcRenderer.invoke("recording-status"),
+  setClipFolder:     ()      => ipcRenderer.invoke("set-clip-folder"),
+  getClipFolder:     ()      => ipcRenderer.invoke("get-clip-folder"),
+  getClips:          ()      => ipcRenderer.invoke("get-clips"),
+  deleteClip:        (p)     => ipcRenderer.invoke("delete-clip", p),
+  openClipFolder:    (p)     => ipcRenderer.invoke("open-clip-folder", p),
+  renameClip:        (opts)  => ipcRenderer.invoke("rename-clip", opts),
+  onRecordingStarted:(cb)    => ipcRenderer.on("recording-started", cb),
+  onRecordingStopped:(cb)    => ipcRenderer.on("recording-stopped", cb),
+  onRecordingHotkey: (cb)    => ipcRenderer.on("recording-hotkey", cb),
+
   // ── Stream BrowserView ────────────────────────────────────────────────────
   streamOpen:   (opts)   => ipcRenderer.invoke("stream-open", opts),
   streamResize: (bounds) => ipcRenderer.invoke("stream-resize", bounds),

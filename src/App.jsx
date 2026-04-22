@@ -144,6 +144,8 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .splash{position:fixed;inset:0;background:var(--bg);z-index:1000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;animation:fadeIn .3s ease;}
 .splash.hide{animation:fadeOut .5s ease forwards;}
 .splash-logo{font-family:'Rajdhani',sans-serif;font-size:56px;font-weight:700;letter-spacing:10px;background:linear-gradient(90deg,var(--ac),var(--ac2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.splash-logo-img{width:320px;max-width:80vw;animation:fadeUp .5s ease;}
+.splash-logo-img img{width:100%;height:auto;display:block;}
 .app-bg{position:fixed;inset:0;background-size:cover;background-position:center;z-index:0;pointer-events:none;}
 .app-bg-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);z-index:0;pointer-events:none;}
 .app,.gm-app{position:fixed;inset:0;z-index:1;background:transparent;}
@@ -377,7 +379,7 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 /* HOME / GM LAYOUT */
 .gm-app{display:flex;height:100vh;width:100vw;background:transparent;overflow:hidden;position:fixed;top:0;left:0;}
 .gm-rail{width:64px;min-width:64px;background:rgba(0,0,0,.6);backdrop-filter:blur(20px);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:4px;z-index:10;}
-.gm-rail-logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--ac),var(--ac2));display:flex;align-items:center;justify-content:center;font-size:14px;margin-bottom:16px;box-shadow:0 4px 14px var(--acg);}
+.gm-rail-logo{width:150px;height:150px;border-radius:10px;background:linear-gradient(135deg,var(--ac),var(--ac2));display:flex;align-items:center;justify-content:center;font-size:14px;margin-bottom:16px;box-shadow:0 4px 14px var(--acg);}
 .gm-rail-item{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--t3);transition:all .18s;position:relative;}
 .gm-rail-item:hover{background:var(--hover);color:var(--t2);}
 .gm-rail-item.on{background:var(--acd);color:var(--ac);}
@@ -1765,6 +1767,230 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
 }
 
 // ── Achievements ──────────────────────────────────────────────────────────────
+// ── Clips Page ────────────────────────────────────────────────────────────────
+const CLIPS_CSS = `
+.clips-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;padding:24px;}
+.clip-card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;transition:all .2s;position:relative;}
+.clip-card:hover{transform:translateY(-4px);box-shadow:0 16px 40px rgba(0,0,0,.6);border-color:var(--borderb);}
+.clip-thumb{width:100%;aspect-ratio:16/9;background:#000;position:relative;cursor:pointer;}
+.clip-thumb video{width:100%;height:100%;object-fit:cover;display:block;}
+.clip-play-ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4);opacity:0;transition:opacity .2s;}
+.clip-card:hover .clip-play-ov{opacity:1;}
+.clip-play-btn{width:48px;height:48px;border-radius:50%;background:var(--ac);border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;box-shadow:0 4px 16px var(--acg);}
+.clip-info{padding:12px 14px;}
+.clip-name{font-size:13px;font-weight:700;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'Rajdhani',sans-serif;letter-spacing:.3px;margin-bottom:4px;}
+.clip-meta{font-size:10px;color:var(--t3);display:flex;gap:10px;}
+.clip-actions{display:flex;gap:6px;padding:0 14px 12px;}
+.clip-act-btn{flex:1;background:var(--hover);border:1px solid var(--border);color:var(--t2);border-radius:8px;padding:6px;font-size:10px;font-weight:600;cursor:pointer;transition:all .15s;font-family:'DM Sans',sans-serif;}
+.clip-act-btn:hover{color:var(--t1);border-color:var(--borderb);}
+.clip-act-btn.danger:hover{color:var(--danger);border-color:rgba(255,77,109,.3);}
+.rec-indicator{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(10,10,14,.92);border:1px solid #eb0400;border-radius:30px;padding:8px 20px;display:flex;align-items:center;gap:10px;backdrop-filter:blur(12px);box-shadow:0 4px 20px rgba(235,4,0,.3);animation:fadeUp .3s ease;}
+.rec-dot{width:10px;height:10px;border-radius:50%;background:#eb0400;animation:pulse 1s infinite;flex-shrink:0;}
+.rec-label{font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:700;color:#fff;letter-spacing:1px;}
+.rec-timer{font-family:'Rajdhani',sans-serif;font-size:13px;color:#eb0400;font-weight:700;letter-spacing:1px;}
+`;
+
+function RecordingIndicator({ game, elapsed, onStop }) {
+  const [secs, setSecs] = useState(Math.floor(elapsed / 1000));
+  useEffect(() => {
+    const t = setInterval(() => setSecs(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const fmt = (s) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  };
+  return (
+    <>
+      <style>{CLIPS_CSS}</style>
+      <div className="rec-indicator">
+        <div className="rec-dot"/>
+        <span className="rec-label">REC {game}</span>
+        <span className="rec-timer">{fmt(secs)}</span>
+        <button onClick={onStop} style={{background:"rgba(235,4,0,.2)",border:"1px solid rgba(235,4,0,.4)",color:"#fff",borderRadius:6,padding:"3px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>■ Stop</button>
+        <span style={{fontSize:9,color:"rgba(255,255,255,.4)"}}>F9</span>
+      </div>
+    </>
+  );
+}
+
+function ClipsPage({ nowPlayingGame }) {
+  const [clips, setClips] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [clipFolder, setClipFolderState] = useState("");
+  const [playing, setPlaying] = useState(null);
+  const [renaming, setRenaming] = useState(null);
+  const [renamVal, setRenamVal] = useState("");
+  const [filterGame, setFilterGame] = useState("All");
+  const [isRecording, setIsRecording] = useState(false);
+  const [recGame, setRecGame] = useState("");
+  const [recElapsed, setRecElapsed] = useState(0);
+
+  const loadClips = async () => {
+    if (!window.electronAPI?.isElectron) { setLoading(false); return; }
+    setLoading(true);
+    const res = await window.electronAPI.getClips();
+    if (res.success) setClips(res.clips);
+    const fr = await window.electronAPI.getClipFolder();
+    setClipFolderState(fr.folder);
+    const sr = await window.electronAPI.recordingStatus();
+    setIsRecording(sr.isRecording);
+    setRecGame(sr.game || "");
+    setRecElapsed(sr.elapsed || 0);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadClips();
+    if (!window.electronAPI?.isElectron) return;
+    window.electronAPI.onRecordingStarted((_e, data) => { setIsRecording(true); setRecGame(data.game); setRecElapsed(0); });
+    window.electronAPI.onRecordingStopped(() => { setIsRecording(false); loadClips(); });
+    window.electronAPI.onRecordingHotkey((_e, action) => {
+      if (action === "start") setIsRecording(true);
+      if (action === "stop") { setIsRecording(false); loadClips(); }
+    });
+  }, []);
+
+  const games = ["All", ...new Set(clips.map(c => c.game))];
+  const filtered = filterGame === "All" ? clips : clips.filter(c => c.game === filterGame);
+
+  const fmtSize = (bytes) => {
+    if (bytes > 1e9) return `${(bytes/1e9).toFixed(1)} GB`;
+    return `${(bytes/1e6).toFixed(0)} MB`;
+  };
+
+  const fmtDate = (iso) => new Date(iso).toLocaleDateString();
+
+  const handleRecord = async () => {
+    if (!window.electronAPI?.isElectron) return;
+    if (isRecording) {
+      await window.electronAPI.stopRecording();
+      setIsRecording(false);
+    } else {
+      const game = nowPlayingGame || "General";
+      await window.electronAPI.startRecording(game);
+      setIsRecording(true);
+      setRecGame(game);
+      setRecElapsed(0);
+    }
+  };
+
+  const handleDelete = async (clip) => {
+    if (!window.electronAPI?.isElectron) return;
+    await window.electronAPI.deleteClip(clip.path);
+    setClips(cs => cs.filter(c => c.id !== clip.id));
+  };
+
+  const handleRename = async (clip) => {
+    if (!window.electronAPI?.isElectron || !renamVal.trim()) return;
+    const res = await window.electronAPI.renameClip({ oldPath: clip.path, newName: renamVal.trim() });
+    if (res.success) {
+      setClips(cs => cs.map(c => c.id === clip.id ? {...c, file: renamVal.trim() + '.mp4', path: res.newPath} : c));
+      setRenaming(null);
+    }
+  };
+
+  return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <style>{CLIPS_CSS}</style>
+
+      {/* Header */}
+      <div style={{padding:"14px 24px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
+        <span style={{fontFamily:"Rajdhani,sans-serif",fontSize:18,fontWeight:700,letterSpacing:2,color:"var(--t1)"}}>MY CLIPS</span>
+        <div style={{flex:1,display:"flex",gap:8,overflowX:"auto"}}>
+          {games.map(g=>(
+            <button key={g} onClick={()=>setFilterGame(g)}
+              style={{padding:"4px 12px",borderRadius:20,fontSize:11,fontWeight:600,cursor:"pointer",border:"1px solid",fontFamily:"DM Sans,sans-serif",flexShrink:0,
+                background:filterGame===g?"var(--ac)":"transparent",
+                borderColor:filterGame===g?"var(--ac)":"var(--border)",
+                color:filterGame===g?"#fff":"var(--t2)"}}>
+              {g}
+            </button>
+          ))}
+        </div>
+        <button className="btn-g" onClick={async()=>{
+          const res = await window.electronAPI?.setClipFolder();
+          if(res?.success) setClipFolderState(res.folder);
+        }} style={{fontSize:10,flexShrink:0}}>📁 Change Folder</button>
+        <button onClick={handleRecord} style={{
+          display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:10,
+          background:isRecording?"rgba(235,4,0,.15)":"var(--ac)",
+          border:isRecording?"1px solid #eb0400":"none",
+          color:isRecording?"#eb0400":"#fff",
+          fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0
+        }}>
+          {isRecording?<><span style={{width:8,height:8,borderRadius:2,background:"#eb0400",display:"inline-block"}}/>■ Stop</>:<>⏺ Record</>}
+        </button>
+        <button className="btn-g" onClick={loadClips} style={{fontSize:11,flexShrink:0}}>↻</button>
+      </div>
+
+      {/* Clip folder info */}
+      <div style={{padding:"8px 24px",borderBottom:"1px solid var(--border)",fontSize:10,color:"var(--t3)",display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+        <span>📁</span>
+        <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{clipFolder}</span>
+        <span style={{color:"var(--t2)"}}>{clips.length} clips · Press <kbd style={{background:"var(--hover)",border:"1px solid var(--border)",borderRadius:4,padding:"1px 6px",fontFamily:"monospace",fontSize:10}}>F9</kbd> to record</span>
+      </div>
+
+      {/* Clips grid */}
+      {loading ? (
+        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--t3)",fontSize:12}}>Loading clips…</div>
+      ) : filtered.length === 0 ? (
+        <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12,color:"var(--t3)"}}>
+          <div style={{fontSize:48}}>🎬</div>
+          <div style={{fontSize:16,fontWeight:600,color:"var(--t2)"}}>No clips yet</div>
+          <div style={{fontSize:12}}>Press <strong>F9</strong> while in a game to start recording</div>
+          <button onClick={handleRecord} className="btn-p" style={{marginTop:8}}>⏺ Start Recording</button>
+        </div>
+      ) : (
+        <div style={{flex:1,overflowY:"auto"}}>
+          <div className="clips-grid">
+            {filtered.map(clip => (
+              <div key={clip.id} className="clip-card">
+                {playing === clip.id ? (
+                  <div style={{aspectRatio:"16/9",background:"#000"}}>
+                    <video src={`file://${clip.path}`} controls autoPlay style={{width:"100%",height:"100%",display:"block"}}/>
+                  </div>
+                ) : (
+                  <div className="clip-thumb" onClick={()=>setPlaying(clip.id)}>
+                    <video src={`file://${clip.path}`} style={{width:"100%",height:"100%",objectFit:"cover"}} preload="metadata"/>
+                    <div className="clip-play-ov">
+                      <button className="clip-play-btn"><Ic.Play/></button>
+                    </div>
+                  </div>
+                )}
+                <div className="clip-info">
+                  {renaming === clip.id ? (
+                    <div style={{display:"flex",gap:6,marginBottom:4}}>
+                      <input className="fi" value={renamVal} onChange={e=>setRenamVal(e.target.value)}
+                        onKeyDown={e=>e.key==="Enter"&&handleRename(clip)}
+                        style={{fontSize:11,padding:"4px 8px",flex:1}} autoFocus/>
+                      <button className="btn-p" style={{fontSize:10,padding:"4px 8px"}} onClick={()=>handleRename(clip)}>✓</button>
+                      <button className="btn-gh" style={{fontSize:10,padding:"4px 8px"}} onClick={()=>setRenaming(null)}>✕</button>
+                    </div>
+                  ) : (
+                    <div className="clip-name">{clip.file.replace(/\.[^.]+$/, "")}</div>
+                  )}
+                  <div className="clip-meta">
+                    <span>🎮 {clip.game}</span>
+                    <span>{fmtSize(clip.size)}</span>
+                    <span>{fmtDate(clip.date)}</span>
+                  </div>
+                </div>
+                <div className="clip-actions">
+                  <button className="clip-act-btn" onClick={()=>{setRenaming(clip.id);setRenamVal(clip.file.replace(/\.[^.]+$/,""));}}>✏️ Rename</button>
+                  <button className="clip-act-btn" onClick={()=>window.electronAPI?.openClipFolder(clip.path)}>📁 Show</button>
+                  <button className="clip-act-btn danger" onClick={()=>handleDelete(clip)}>🗑️ Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AchievementsScreen({ unlockedMap }) {
   const unlocked = ACHIEVEMENTS.filter(a => unlockedMap[a.id]);
   const locked = ACHIEVEMENTS.filter(a => !unlockedMap[a.id]);
@@ -2119,6 +2345,19 @@ export default function App(){
   const [showProfileModal,setShowProfileModal]=useState(false);
 
   const [nowPlaying, setNowPlaying] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recGame, setRecGame] = useState("");
+  const [recElapsed, setRecElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!window.electronAPI?.isElectron) return;
+    window.electronAPI.onRecordingStarted((_e, data) => { setIsRecording(true); setRecGame(data.game); setRecElapsed(0); });
+    window.electronAPI.onRecordingStopped(() => setIsRecording(false));
+    window.electronAPI.onRecordingHotkey((_e, action) => {
+      if (action === "start") setIsRecording(true);
+      if (action === "stop") setIsRecording(false);
+    });
+  }, []);
   const [activeStream, setActiveStream] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bgImage, setBgImage] = useState(()=>localStorage.getItem("aura_bg")||"");
@@ -2198,7 +2437,7 @@ export default function App(){
     if(window.electronAPI?.isElectron){
       const result=await window.electronAPI.launchGame(game.exePath);
       setLaunching(null);
-      if(result.success){ toast(`${game.title} launched!`); setNowPlaying(game); }
+      if(result.success){ toast(`${game.title} launched!`); setNowPlaying(game); setRecGame(game.title); }
       else toast(`Launch failed: ${result.error}`,"err");
     } else {
       setTimeout(()=>{setLaunching(null);toast(`${game.title} launched!`);setNowPlaying(game);},2200);
@@ -2295,6 +2534,7 @@ export default function App(){
     {id:"recent",    icon:<Ic.Clock/>,   label:"Recently Played"},
     {id:"favorites", icon:<Ic.Heart/>,   label:"Favorites",       badge:favs.length||null},
     {id:"streams",   icon:<Ic.Tv/>,      label:"Live Streams"},
+    {id:"clips",     icon:<span style={{fontSize:14}}>🎬</span>, label:"Clips"},
     {id:"achievements",icon:<Ic.Trophy/>,label:"Achievements",    badge:unlockedCount||null},
     {id:"customize", icon:<Ic.Palette/>, label:"Customize"},
     {id:"settings",  icon:<Ic.Gear/>,    label:"Settings"},
@@ -2305,7 +2545,7 @@ export default function App(){
   const { connected, hint, hintHide } = useController({
     view, goTo, navItems: [
       {id:"home"},{id:"library"},{id:"recent"},{id:"favorites"},
-      {id:"streams"},{id:"achievements"},{id:"customize"},{id:"settings"},
+      {id:"streams"},{id:"clips"},{id:"achievements"},{id:"customize"},{id:"settings"},
     ],
     heroGame, setHeroGame, modal, setModal, doPlay, doFav, games, sorted,
   });
@@ -2339,15 +2579,15 @@ export default function App(){
       <>
         <style>{S}</style>
         {bgImage&&<><div className="app-bg" style={{backgroundImage:`url(${bgImage})`}}/><div className="app-bg-overlay"/></>}
-        {splash&&(<div className={`splash ${splashHide?"hide":""}`}><div className="splash-logo">AURA</div><div className="splash-sub">Your Game Library</div><div className="splash-sub">Developed By: Taurrean Traylor</div><div className="splash-bar"><div className="splash-fill"/></div></div>)}
+        {splash&&(<div className={`splash ${splashHide?"hide":""}`}><div className="splash-logo-img"><img src="./aura-logo.png" alt="AURA"/></div><div className="splash-sub">Developed By: Taurrean Traylor</div><div className="splash-bar"><div className="splash-fill"/></div></div>)}
         <div className="gm-app">
           <aside className={`gm-rail ${sidebarOpen?"expanded":""}`}>
             <button className="gm-rail-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu">
               {sidebarOpen?<Ic.MenuClose/>:<Ic.Menu/>}
             </button>
             <div style={{display:"flex",flexDirection:"column",alignItems:sidebarOpen?"flex-start":"center",marginBottom:16,gap:4,width:"100%",paddingLeft:sidebarOpen?4:0}}>
-              <div className="gm-rail-logo"><Ic.Ctrl/></div>
-              {sidebarOpen&&<div style={{fontFamily:"Rajdhani,sans-serif",fontSize:9,fontWeight:700,letterSpacing:3,background:"linear-gradient(90deg,var(--ac),var(--ac2))",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",marginLeft:4}}>AURA</div>}
+              <div className="gm-rail-logo" style={{background:"transparent",boxShadow:"none",overflow:"hidden",padding:2}}><img src="./aura-logo.png" alt="AURA" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
+              {sidebarOpen&&<div style={{fontFamily:"Rajdhani,sans-serif",fontSize:9,fontWeight:700,letterSpacing:3,background:"linear-gradient(90deg,var(--ac),var(--ac2))",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",marginLeft:4}}></div>}
             </div>
             {navItems.map(it=>(
               <div key={it.id} className={`gm-rail-item ${view===it.id?"on":""}`} onClick={()=>goTo(it.id)} title={it.label}>
@@ -2394,6 +2634,7 @@ export default function App(){
         {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
         <AutoUpdater/>
         <ControllerHUD/>
+        {isRecording&&<RecordingIndicator game={recGame} elapsed={recElapsed} onStop={async()=>{await window.electronAPI?.stopRecording();setIsRecording(false);}}/>}
         <div className="tc">
           {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
           {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}
@@ -2407,19 +2648,18 @@ export default function App(){
     <>
       <style>{S}</style>
       {bgImage&&<><div className="app-bg" style={{backgroundImage:`url(${bgImage})`}}/><div className="app-bg-overlay"/></>}
-      {splash&&(<div className={`splash ${splashHide?"hide":""}`}><div className="splash-logo">AURA</div><div className="splash-sub">Your Game Library</div><div className="splash-sub">Developed By: Taurrean Traylor</div><div className="splash-bar"><div className="splash-fill"/></div></div>)}
+      {splash&&(<div className={`splash ${splashHide?"hide":""}`}><div className="splash-logo-img"><img src="./aura-logo.png" alt="AURA"/></div><div className="splash-sub">Developed By: Taurrean Traylor</div><div className="splash-bar"><div className="splash-fill"/></div></div>)}
       <div className="app">
         <aside className={`sb ${sidebarOpen?"":"collapsed"}`}>
           <div className="sb-logo">
             {sidebarOpen
               ? <>
-                  <div className="sb-li"><Ic.Ctrl/></div>
-                  <span className="sb-lt">AURA</span>
+                  <img src="./aura-logo.png" alt="AURA" style={{height:28,width:"auto",objectFit:"contain"}}/>
                   <button className="sb-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu"><Ic.MenuClose/></button>
                 </>
               : <>
                   <button className="sb-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu" style={{margin:"0 auto"}}><Ic.Menu/></button>
-                  <div className="sb-li" style={{margin:"0 auto"}}><Ic.Ctrl/></div>
+                  <img src="./aura-logo.png" alt="AURA" style={{width:32,height:32,objectFit:"contain",margin:"0 auto"}}/>
                 </>
             }
           </div>
@@ -2487,6 +2727,8 @@ export default function App(){
           )}
 
           {view==="achievements"&&<AchievementsScreen unlockedMap={unlockedAch}/>}
+
+          {view==="clips"&&<ClipsPage nowPlayingGame={nowPlaying?.title}/>}
 
           {view==="streams"&&<StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)}/>}
 
