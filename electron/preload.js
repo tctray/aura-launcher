@@ -50,7 +50,23 @@ contextBridge.exposeInMainWorld("electronAPI", {
   fetchTrailer: (title) => ipcRenderer.invoke("fetch-trailer", title),
 
   // ── Recording ────────────────────────────────────────────────────────────────
-  getCaptureSources:  ()      => ipcRenderer.invoke("get-capture-sources"),
+  getCaptureSources: async () => {
+    const { desktopCapturer } = require("electron");
+    const sources = await desktopCapturer.getSources({
+      types: ["screen", "window"],
+      thumbnailSize: { width: 320, height: 180 },
+      fetchWindowIcons: false,
+    });
+    return {
+      success: true,
+      sources: sources.map(s => ({
+        id: s.id,
+        name: s.name,
+        thumbnail: s.thumbnail.toDataURL(),
+        isScreen: s.id.startsWith("screen:"),
+      })),
+    };
+  },
   getAudioDevices:   ()      => ipcRenderer.invoke("get-audio-devices"),
   startRecording:    (game, opts)  => ipcRenderer.invoke("start-recording", game, opts),
   stopRecording:     ()      => ipcRenderer.invoke("stop-recording"),

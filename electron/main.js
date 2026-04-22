@@ -163,6 +163,13 @@ function setupAutoUpdater(win) {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  // Register local file protocol for video playback in packaged app
+  const { protocol } = require("electron");
+  protocol.registerFileProtocol("localfile", (request, callback) => {
+    const filePath = decodeURIComponent(request.url.replace("localfile://", ""));
+    callback({ path: filePath });
+  });
+
   createWindow();
   registerHotkeys();
 
@@ -736,29 +743,6 @@ ipcMain.handle("get-audio-devices", async () => {
   }
 });
 
-
-// Get all screens and windows for picker
-ipcMain.handle("get-capture-sources", async () => {
-  try {
-    const { desktopCapturer } = require("electron");
-    const sources = await desktopCapturer.getSources({
-      types: ["screen", "window"],
-      thumbnailSize: { width: 320, height: 180 },
-      fetchWindowIcons: true,
-    });
-    return {
-      success: true,
-      sources: sources.map(s => ({
-        id: s.id,
-        name: s.name,
-        thumbnail: s.thumbnail.toDataURL(),
-        isScreen: s.id.startsWith("screen:"),
-      })),
-    };
-  } catch(e) {
-    return { success: false, error: e.message, sources: [] };
-  }
-});
 
 ipcMain.handle("start-recording", async (_e, gameName, opts) => startRecording(gameName, opts || {}));
 ipcMain.handle("stop-recording",  async () => stopRecording());

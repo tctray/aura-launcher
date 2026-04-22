@@ -2067,11 +2067,11 @@ function ClipsPage({ nowPlayingGame }) {
               <div key={clip.id} className="clip-card">
                 {playing === clip.id ? (
                   <div style={{aspectRatio:"16/9",background:"#000"}}>
-                    <video src={`file://${clip.path}`} controls autoPlay style={{width:"100%",height:"100%",display:"block"}}/>
+                    <video src={`localfile://${encodeURIComponent(clip.path)}`} controls autoPlay style={{width:"100%",height:"100%",display:"block"}}/>
                   </div>
                 ) : (
                   <div className="clip-thumb" onClick={()=>setPlaying(clip.id)}>
-                    <video src={`file://${clip.path}`} style={{width:"100%",height:"100%",objectFit:"cover"}} preload="metadata"/>
+                    <video src={`localfile://${encodeURIComponent(clip.path)}`} style={{width:"100%",height:"100%",objectFit:"cover"}} preload="metadata"/>
                     <div className="clip-play-ov">
                       <button className="clip-play-btn"><Ic.Play/></button>
                     </div>
