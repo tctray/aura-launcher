@@ -1895,6 +1895,7 @@ function ClipsPage({ nowPlayingGame }) {
     setShowPicker(false);
     const game = nowPlayingGame || recGame || "General";
     const res = await window.electronAPI.startRecording(game, {
+      sourceId: source.id,
       sourceName: source.name,
       isScreen: source.isScreen,
     });

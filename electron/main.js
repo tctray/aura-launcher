@@ -657,17 +657,29 @@ function startRecording(gameName, opts = {}) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const outFile = path.join(gameDir, `clip-${timestamp}.mp4`);
 
-  // Determine capture input
-  // sourceId format: "screen:0:0" for screens, "window:12345:0" for windows
+  // Determine capture input based on source selection
   let captureInput = "desktop";
-  if (opts.sourceName && !opts.isScreen) {
-    // Capture specific window by title
+  let offsetX = 0;
+  let offsetY = 0;
+
+  if (opts.isScreen && opts.sourceId) {
+    // screen:0:0 = monitor 0, screen:1:0 = monitor 1
+    const monitorIndex = parseInt(opts.sourceId.split(":")[1]) || 0;
+    const { screen } = require("electron");
+    const displays = screen.getAllDisplays();
+    const display = displays[monitorIndex] || displays[0];
+    offsetX = display.bounds.x < 0 ? 0 : display.bounds.x;
+    offsetY = display.bounds.y < 0 ? 0 : display.bounds.y;
+    console.log(`Recording screen ${monitorIndex} at offset ${offsetX},${offsetY}`);
+  } else if (!opts.isScreen && opts.sourceName) {
     captureInput = `title=${opts.sourceName}`;
   }
 
   const args = [
     "-f", "gdigrab",
     "-framerate", "60",
+    "-offset_x", String(offsetX),
+    "-offset_y", String(offsetY),
     "-i", captureInput,
     "-vcodec", "libx264",
     "-preset", "ultrafast",
@@ -721,18 +733,23 @@ function stopRecording() {
 
 // Get available audio devices
 ipcMain.handle("get-audio-devices", async () => {
+  if (!ffmpegPath) return { success: false, devices: [] };
   try {
-    const result = await new Promise((resolve) => {
-      const proc = spawn(ffmpegPath, ["-list_devices", "true", "-f", "dshow", "-i", "dummy"], { windowsHide: true });
-      let output = "";
-      proc.stderr.on("data", d => output += d.toString());
-      proc.on("close", () => resolve(output));
-    });
-    const lines = result.split("\n").filter(l => l.includes("DirectShow audio devices") || (l.includes('"') && !l.includes("DirectShow video")));
+    const result = await Promise.race([
+      new Promise((resolve) => {
+        const proc = spawn(ffmpegPath, ["-list_devices", "true", "-f", "dshow", "-i", "dummy"], { windowsHide: true });
+        let output = "";
+        proc.stderr.on("data", d => output += d.toString());
+        proc.on("close", () => resolve(output));
+        proc.on("error", () => resolve(""));
+      }),
+      new Promise(resolve => setTimeout(() => resolve(""), 5000)) // 5s timeout
+    ]);
     const devices = [];
     let inAudio = false;
     for (const line of result.split("\n")) {
       if (line.includes("DirectShow audio devices")) { inAudio = true; continue; }
+      if (line.includes("DirectShow video devices")) { inAudio = false; continue; }
       if (inAudio && line.includes('"')) {
         const match = line.match(/"([^"]+)"/);
         if (match) devices.push(match[1]);
