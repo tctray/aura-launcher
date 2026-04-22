@@ -1308,6 +1308,10 @@ function StreamsView({ games, initialStream, onClear }) {
   const [customLogins, setCustomLogins] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
   const [inputVal, setInputVal] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
   const [chatOpen, setChatOpen] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const fmtViewers = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
 
   const fetchStreams = useCallback(async () => {
     setLoading(true);
@@ -1415,11 +1419,6 @@ function StreamsView({ games, initialStream, onClear }) {
       )}
     </div>
   ) : null;
-
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState(null);
-  const [searching, setSearching] = useState(false);
-  const fmtViewers = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
 
   const doSearch = useCallback(async (q) => {
     if (!q.trim()) { setSearchResults(null); return; }

@@ -719,16 +719,19 @@ function startRecording(gameName, opts = {}) {
   let captureInput = "desktop";
   let offsetX = 0;
   let offsetY = 0;
+  let captureWidth = 0;
+  let captureHeight = 0;
 
   if (opts.isScreen && opts.sourceId) {
-    // screen:0:0 = monitor 0, screen:1:0 = monitor 1
     const monitorIndex = parseInt(opts.sourceId.split(":")[1]) || 0;
     const { screen } = require("electron");
     const displays = screen.getAllDisplays();
     const display = displays[monitorIndex] || displays[0];
     offsetX = display.bounds.x < 0 ? 0 : display.bounds.x;
     offsetY = display.bounds.y < 0 ? 0 : display.bounds.y;
-    console.log(`Recording screen ${monitorIndex} at offset ${offsetX},${offsetY}`);
+    captureWidth = display.bounds.width;
+    captureHeight = display.bounds.height;
+    console.log(`Recording screen ${monitorIndex} at offset ${offsetX},${offsetY} size ${captureWidth}x${captureHeight}`);
   } else if (!opts.isScreen && opts.sourceName) {
     captureInput = `title=${opts.sourceName}`;
   }
@@ -738,11 +741,17 @@ function startRecording(gameName, opts = {}) {
     "-framerate", "60",
     "-offset_x", String(offsetX),
     "-offset_y", String(offsetY),
+    ...(captureWidth && captureHeight ? ["-video_size", `${captureWidth}x${captureHeight}`] : []),
     "-i", captureInput,
+    "-f", "wasapi",
+    "-loopback", "1",
+    "-i", "default",
     "-vcodec", "libx264",
     "-preset", "ultrafast",
     "-crf", "23",
     "-pix_fmt", "yuv420p",
+    "-acodec", "aac",
+    "-b:a", "128k",
     "-movflags", "+faststart",
     "-y",
     outFile
