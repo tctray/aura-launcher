@@ -32,6 +32,7 @@ let recordingProcess = null;
 let isRecording = false;
 let recordingGame = null;
 let recordingStartTime = null;
+let recordingOutFile = null;
 let clipFolder = null;
 
 try {
@@ -638,34 +639,34 @@ ipcMain.handle("fetch-trailer", async (_e, title) => {
 });
 
 // ── Clip Recording ────────────────────────────────────────────────────────────
-function startRecording(gameName) {
+function startRecording(gameName, opts = {}) {
   if (!ffmpegPath) return { success: false, error: "ffmpeg not available" };
   if (isRecording) return { success: false, error: "Already recording" };
 
-  const { width, height } = getAutoResolution();
   const gameDir = path.join(getClipFolder(), gameName || "General");
   ensureDir(gameDir);
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const outFile = path.join(gameDir, `clip-${timestamp}.mp4`);
 
-  // Build ffmpeg args for Windows screen capture + audio
+  // Use gdigrab for screen capture — most reliable on Windows
+  // Audio: try to capture default audio output + default mic
   const args = [
     "-f", "gdigrab",
     "-framerate", "60",
+    "-offset_x", "0",
+    "-offset_y", "0",
     "-i", "desktop",
     "-f", "dshow",
-    "-i", "audio=virtual-audio-capturer",  // game audio via VB-Audio or similar
-    "-f", "dshow",
-    "-i", "audio=Microphone",              // default mic
-    "-filter_complex", "[1:a][2:a]amix=inputs=2[aout]",
+    "-i", `audio=${opts.micDevice || "Microphone (Realtek High Definition Audio)"}`,
     "-map", "0:v",
-    "-map", "[aout]",
+    "-map", "1:a",
     "-vcodec", "libx264",
     "-preset", "ultrafast",
     "-crf", "23",
     "-acodec", "aac",
     "-movflags", "+faststart",
+    "-y",
     outFile
   ];
 
@@ -674,15 +675,17 @@ function startRecording(gameName) {
     isRecording = true;
     recordingGame = gameName || "General";
     recordingStartTime = Date.now();
+    recordingOutFile = outFile;
 
-    recordingProcess.on("close", () => {
+    recordingProcess.on("close", (code) => {
+      console.log("ffmpeg closed with code:", code);
       isRecording = false;
       recordingProcess = null;
       mainWin?.webContents.send("recording-stopped", { file: outFile, game: recordingGame });
     });
 
     recordingProcess.stderr.on("data", (data) => {
-      console.log("ffmpeg:", data.toString().slice(0, 100));
+      console.log("ffmpeg:", data.toString().slice(0, 150));
     });
 
     mainWin?.webContents.send("recording-started", { game: recordingGame, file: outFile });
@@ -694,13 +697,43 @@ function startRecording(gameName) {
 
 function stopRecording() {
   if (!isRecording || !recordingProcess) return { success: false, error: "Not recording" };
-  recordingProcess.stdin.write("q");
-  recordingProcess.kill("SIGINT");
+  try {
+    recordingProcess.stdin.write("q");
+  } catch {}
+  setTimeout(() => {
+    if (recordingProcess) recordingProcess.kill("SIGKILL");
+  }, 2000);
   isRecording = false;
   return { success: true };
 }
 
-ipcMain.handle("start-recording", async (_e, gameName) => startRecording(gameName));
+// Get available audio devices
+ipcMain.handle("get-audio-devices", async () => {
+  try {
+    const result = await new Promise((resolve) => {
+      const proc = spawn(ffmpegPath, ["-list_devices", "true", "-f", "dshow", "-i", "dummy"], { windowsHide: true });
+      let output = "";
+      proc.stderr.on("data", d => output += d.toString());
+      proc.on("close", () => resolve(output));
+    });
+    const lines = result.split("\n").filter(l => l.includes("DirectShow audio devices") || (l.includes('"') && !l.includes("DirectShow video")));
+    const devices = [];
+    let inAudio = false;
+    for (const line of result.split("\n")) {
+      if (line.includes("DirectShow audio devices")) { inAudio = true; continue; }
+      if (inAudio && line.includes('"')) {
+        const match = line.match(/"([^"]+)"/);
+        if (match) devices.push(match[1]);
+      }
+    }
+    return { success: true, devices };
+  } catch(e) {
+    return { success: false, devices: [] };
+  }
+});
+
+
+ipcMain.handle("start-recording", async (_e, gameName, opts) => startRecording(gameName, opts || {}));
 ipcMain.handle("stop-recording",  async () => stopRecording());
 ipcMain.handle("recording-status", async () => ({
   isRecording,

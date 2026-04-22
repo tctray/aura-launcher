@@ -379,7 +379,7 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 /* HOME / GM LAYOUT */
 .gm-app{display:flex;height:100vh;width:100vw;background:transparent;overflow:hidden;position:fixed;top:0;left:0;}
 .gm-rail{width:64px;min-width:64px;background:rgba(0,0,0,.6);backdrop-filter:blur(20px);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:4px;z-index:10;}
-.gm-rail-logo{width:150px;height:150px;border-radius:10px;background:linear-gradient(135deg,var(--ac),var(--ac2));display:flex;align-items:center;justify-content:center;font-size:14px;margin-bottom:16px;box-shadow:0 4px 14px var(--acg);}
+.gm-rail-logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--ac),var(--ac2));display:flex;align-items:center;justify-content:center;font-size:14px;margin-bottom:16px;box-shadow:0 4px 14px var(--acg);}
 .gm-rail-item{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--t3);transition:all .18s;position:relative;}
 .gm-rail-item:hover{background:var(--hover);color:var(--t2);}
 .gm-rail-item.on{background:var(--acd);color:var(--ac);}
@@ -1826,18 +1826,28 @@ function ClipsPage({ nowPlayingGame }) {
   const [isRecording, setIsRecording] = useState(false);
   const [recGame, setRecGame] = useState("");
   const [recElapsed, setRecElapsed] = useState(0);
+  const [audioDevices, setAudioDevices] = useState([]);
+  const [selectedMic, setSelectedMic] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
 
   const loadClips = async () => {
     if (!window.electronAPI?.isElectron) { setLoading(false); return; }
     setLoading(true);
     const res = await window.electronAPI.getClips();
     if (res.success) setClips(res.clips);
+    else setClips([]);
     const fr = await window.electronAPI.getClipFolder();
     setClipFolderState(fr.folder);
     const sr = await window.electronAPI.recordingStatus();
     setIsRecording(sr.isRecording);
     setRecGame(sr.game || "");
     setRecElapsed(sr.elapsed || 0);
+    // Load audio devices
+    const ad = await window.electronAPI.getAudioDevices();
+    if (ad.success && ad.devices.length) {
+      setAudioDevices(ad.devices);
+      setSelectedMic(ad.devices[0]);
+    }
     setLoading(false);
   };
 
@@ -1867,12 +1877,15 @@ function ClipsPage({ nowPlayingGame }) {
     if (isRecording) {
       await window.electronAPI.stopRecording();
       setIsRecording(false);
+      setTimeout(loadClips, 1500); // reload clips after stop
     } else {
-      const game = nowPlayingGame || "General";
-      await window.electronAPI.startRecording(game);
-      setIsRecording(true);
-      setRecGame(game);
-      setRecElapsed(0);
+      const game = nowPlayingGame || recGame || "General";
+      const res = await window.electronAPI.startRecording(game, { micDevice: selectedMic });
+      if (res.success) {
+        setIsRecording(true);
+        setRecGame(game);
+        setRecElapsed(0);
+      }
     }
   };
 
@@ -1909,10 +1922,11 @@ function ClipsPage({ nowPlayingGame }) {
             </button>
           ))}
         </div>
+        <button className="btn-g" onClick={()=>setShowSettings(s=>!s)} style={{fontSize:10,flexShrink:0}}>⚙️ Settings</button>
         <button className="btn-g" onClick={async()=>{
           const res = await window.electronAPI?.setClipFolder();
           if(res?.success) setClipFolderState(res.folder);
-        }} style={{fontSize:10,flexShrink:0}}>📁 Change Folder</button>
+        }} style={{fontSize:10,flexShrink:0}}>📁 Folder</button>
         <button onClick={handleRecord} style={{
           display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:10,
           background:isRecording?"rgba(235,4,0,.15)":"var(--ac)",
@@ -1924,6 +1938,26 @@ function ClipsPage({ nowPlayingGame }) {
         </button>
         <button className="btn-g" onClick={loadClips} style={{fontSize:11,flexShrink:0}}>↻</button>
       </div>
+
+      {/* Settings panel */}
+      {showSettings&&(
+        <div style={{padding:"12px 24px",borderBottom:"1px solid var(--border)",background:"var(--panel)",display:"flex",gap:16,alignItems:"center",flexShrink:0,flexWrap:"wrap"}}>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <label style={{fontSize:10,color:"var(--t2)",fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>Microphone</label>
+            <select className="fs" value={selectedMic} onChange={e=>setSelectedMic(e.target.value)} style={{fontSize:11,padding:"5px 10px",minWidth:220}}>
+              {audioDevices.length ? audioDevices.map(d=><option key={d} value={d}>{d}</option>) : <option value="">No devices found</option>}
+            </select>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <label style={{fontSize:10,color:"var(--t2)",fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>Save Folder</label>
+            <div style={{fontSize:11,color:"var(--t1)",background:"var(--card)",border:"1px solid var(--border)",borderRadius:8,padding:"5px 10px",maxWidth:300,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{clipFolder}</div>
+          </div>
+          <button className="btn-p" style={{fontSize:11,padding:"7px 14px",alignSelf:"flex-end"}} onClick={async()=>{
+            const res=await window.electronAPI?.setClipFolder();
+            if(res?.success) setClipFolderState(res.folder);
+          }}>Change</button>
+        </div>
+      )}
 
       {/* Clip folder info */}
       <div style={{padding:"8px 24px",borderBottom:"1px solid var(--border)",fontSize:10,color:"var(--t3)",display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
@@ -2587,7 +2621,7 @@ export default function App(){
             </button>
             <div style={{display:"flex",flexDirection:"column",alignItems:sidebarOpen?"flex-start":"center",marginBottom:16,gap:4,width:"100%",paddingLeft:sidebarOpen?4:0}}>
               <div className="gm-rail-logo" style={{background:"transparent",boxShadow:"none",overflow:"hidden",padding:2}}><img src="./aura-logo.png" alt="AURA" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
-              {sidebarOpen&&<div style={{fontFamily:"Rajdhani,sans-serif",fontSize:9,fontWeight:700,letterSpacing:3,background:"linear-gradient(90deg,var(--ac),var(--ac2))",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",marginLeft:4}}></div>}
+              {sidebarOpen&&<div style={{fontFamily:"Rajdhani,sans-serif",fontSize:9,fontWeight:700,letterSpacing:3,background:"linear-gradient(90deg,var(--ac),var(--ac2))",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",marginLeft:4}}>AURA</div>}
             </div>
             {navItems.map(it=>(
               <div key={it.id} className={`gm-rail-item ${view===it.id?"on":""}`} onClick={()=>goTo(it.id)} title={it.label}>
