@@ -50,8 +50,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   fetchTrailer: (title) => ipcRenderer.invoke("fetch-trailer", title),
 
   // ── Recording ────────────────────────────────────────────────────────────────
-  getCaptureSources: () => ipcRenderer.invoke("get-capture-sources"),
+  getDisplays:        ()      => ipcRenderer.invoke("get-displays"),
+  getCaptureSources:  ()     => ipcRenderer.invoke("get-capture-sources"),
   getAudioDevices:   ()      => ipcRenderer.invoke("get-audio-devices"),
+  getClipServerPort:  ()      => ipcRenderer.invoke("get-clip-server-port"),
   startRecording:    (game, opts)  => ipcRenderer.invoke("start-recording", game, opts),
   stopRecording:     ()      => ipcRenderer.invoke("stop-recording"),
   recordingStatus:   ()      => ipcRenderer.invoke("recording-status"),

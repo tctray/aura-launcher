@@ -36,14 +36,22 @@ let recordingOutFile = null;
 let clipFolder = null;
 
 try {
-  ffmpegPath = require("ffmpeg-static");
-  // In packaged app, ffmpeg-static is unpacked from asar
+  const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
+  ffmpegPath = ffmpegInstaller.path;
   if (ffmpegPath && app.isPackaged) {
     ffmpegPath = ffmpegPath.replace("app.asar", "app.asar.unpacked");
   }
   console.log("ffmpeg path:", ffmpegPath);
 } catch {
-  console.log("ffmpeg-static not found — recording disabled");
+  try {
+    ffmpegPath = require("ffmpeg-static");
+    if (ffmpegPath && app.isPackaged) {
+      ffmpegPath = ffmpegPath.replace("app.asar", "app.asar.unpacked");
+    }
+    console.log("ffmpeg path (basic):", ffmpegPath);
+  } catch {
+    console.log("ffmpeg not found — recording disabled");
+  }
 }
 
 function getClipFolder() {
@@ -727,25 +735,52 @@ function startRecording(gameName, opts = {}) {
     const { screen } = require("electron");
     const displays = screen.getAllDisplays();
     const display = displays[monitorIndex] || displays[0];
-    offsetX = display.bounds.x < 0 ? 0 : display.bounds.x;
-    offsetY = display.bounds.y < 0 ? 0 : display.bounds.y;
+    const allBounds = displays.map(d => d.bounds);
+    const minX = Math.min(...allBounds.map(b => b.x));
+    const minY = Math.min(...allBounds.map(b => b.y));
+
+    // Normalize coordinates to gdigrab virtual desktop space
+    offsetX = display.bounds.x - minX;
+    offsetY = display.bounds.y - minY;
     captureWidth = display.bounds.width;
     captureHeight = display.bounds.height;
-    console.log(`Recording screen ${monitorIndex} at offset ${offsetX},${offsetY} size ${captureWidth}x${captureHeight}`);
+    console.log(`Screen ${monitorIndex}: gdigrab offset=${offsetX},${offsetY} size=${captureWidth}x${captureHeight}`);
   } else if (!opts.isScreen && opts.sourceName) {
-    captureInput = `title=${opts.sourceName}`;
+    gdigrabInput = `title=${opts.sourceName}`;
   }
+
+  // Calculate total virtual desktop size for full capture + crop approach
+  const { screen } = require("electron");
+  const allDisplays = screen.getAllDisplays();
+  const allBounds2 = allDisplays.map(d => d.bounds);
+  const minX2 = Math.min(...allBounds2.map(b => b.x));
+  const minY2 = Math.min(...allBounds2.map(b => b.y));
+  const totalWidth = Math.max(...allBounds2.map(b => b.x + b.width)) - minX2;
+  const totalHeight = Math.max(...allBounds2.map(b => b.y + b.height)) - minY2;
+
+  // Use first available non-mic device, or first device as fallback
+  const preferredDevices = [
+    "Stereo Mix (Realtek(R) Audio)",
+    "CABLE Output (VB-Audio Virtual Cable)",
+    "Voicemod Virtual Audio Device (WDM)",
+  ];
+  let defaultAudio = null;
+  // Will be overridden by user selection in settings
+  const micDevice = opts.micDevice || "Microphone (Arctis Nova 7 Gen 2)";
+  const systemAudio = opts.systemDevice || "Stereo Mix (Realtek(R) Audio)";
 
   const args = [
     "-f", "gdigrab",
     "-framerate", "60",
-    "-offset_x", String(offsetX),
-    "-offset_y", String(offsetY),
-    ...(captureWidth && captureHeight ? ["-video_size", `${captureWidth}x${captureHeight}`] : []),
-    "-i", captureInput,
-    "-f", "wasapi",
-    "-loopback", "1",
-    "-i", "default",
+    ...videoArgs,
+    "-i", gdigrabInput,
+    "-f", "dshow",
+    "-i", `audio=${systemAudio}`,
+    "-f", "dshow",
+    "-i", `audio=${micDevice}`,
+    "-filter_complex", "[1:a][2:a]amix=inputs=2:duration=longest[aout]",
+    "-map", "0:v",
+    "-map", "[aout]",
     "-vcodec", "libx264",
     "-preset", "ultrafast",
     "-crf", "23",
@@ -756,6 +791,8 @@ function startRecording(gameName, opts = {}) {
     "-y",
     outFile
   ];
+
+  console.log("Recording args:", args.join(" "));
 
   console.log("Starting recording:", captureInput, "->", outFile);
 
@@ -810,7 +847,7 @@ ipcMain.handle("get-audio-devices", async () => {
         proc.on("close", () => resolve(output));
         proc.on("error", () => resolve(""));
       }),
-      new Promise(resolve => setTimeout(() => resolve(""), 5000)) // 5s timeout
+      new Promise(resolve => setTimeout(() => resolve(""), 5000))
     ]);
     const devices = [];
     let inAudio = false;
@@ -822,6 +859,7 @@ ipcMain.handle("get-audio-devices", async () => {
         if (match) devices.push(match[1]);
       }
     }
+    console.log("Audio devices found:", devices);
     return { success: true, devices };
   } catch(e) {
     return { success: false, devices: [] };
@@ -830,6 +868,18 @@ ipcMain.handle("get-audio-devices", async () => {
 
 
 // Get all screens and windows for picker
+ipcMain.handle("get-displays", () => {
+  const { screen } = require("electron");
+  const primary = screen.getPrimaryDisplay();
+  return screen.getAllDisplays().map((d, i) => ({
+    index: i,
+    id: d.id,
+    bounds: d.bounds,
+    scaleFactor: d.scaleFactor,
+    isPrimary: d.id === primary.id,
+  }));
+});
+
 ipcMain.handle("get-capture-sources", async () => {
   try {
     const { desktopCapturer } = require("electron");

@@ -1827,6 +1827,7 @@ function ClipsPage({ nowPlayingGame }) {
   const [recElapsed, setRecElapsed] = useState(0);
   const [audioDevices, setAudioDevices] = useState([]);
   const [selectedMic, setSelectedMic] = useState("");
+  const [selectedSystem, setSelectedSystem] = useState("Stereo Mix (Realtek(R) Audio)");
   const [showSettings, setShowSettings] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [pickerSources, setPickerSources] = useState([]);
@@ -1903,11 +1904,16 @@ function ClipsPage({ nowPlayingGame }) {
       sourceId: source.id,
       sourceName: source.name,
       isScreen: source.isScreen,
+      micDevice: selectedMic,
+      systemDevice: selectedSystem,
     });
+    console.log("startRecording result:", res);
     if (res.success) {
       setIsRecording(true);
       setRecGame(game);
       setRecElapsed(0);
+    } else {
+      alert("Recording failed: " + (res.error || "Unknown error"));
     }
   };
 
@@ -2035,7 +2041,13 @@ function ClipsPage({ nowPlayingGame }) {
           <div style={{display:"flex",flexDirection:"column",gap:4}}>
             <label style={{fontSize:10,color:"var(--t2)",fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>Microphone</label>
             <select className="fs" value={selectedMic} onChange={e=>setSelectedMic(e.target.value)} style={{fontSize:11,padding:"5px 10px",minWidth:220}}>
-              {audioDevices.length ? audioDevices.map(d=><option key={d} value={d}>{d}</option>) : <option value="">No devices found</option>}
+              {audioDevices.filter(d=>!d.startsWith("@")).map(d=><option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <label style={{fontSize:10,color:"var(--t2)",fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>System Audio</label>
+            <select className="fs" value={selectedSystem} onChange={e=>setSelectedSystem(e.target.value)} style={{fontSize:11,padding:"5px 10px",minWidth:220}}>
+              {audioDevices.filter(d=>!d.startsWith("@")).map(d=><option key={d} value={d}>{d}</option>)}
             </select>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:4}}>
