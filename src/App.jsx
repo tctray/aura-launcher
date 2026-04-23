@@ -1773,6 +1773,7 @@ const CLIPS_CSS = `
 .clip-card:hover{transform:translateY(-4px);box-shadow:0 16px 40px rgba(0,0,0,.6);border-color:var(--borderb);}
 .clip-thumb{width:100%;aspect-ratio:16/9;background:#000;position:relative;cursor:pointer;}
 .clip-thumb video{width:100%;height:100%;object-fit:cover;display:block;}
+.clip-card video::-webkit-media-controls-fullscreen-button{display:none!important;}
 .clip-play-ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4);opacity:0;transition:opacity .2s;}
 .clip-card:hover .clip-play-ov{opacity:1;}
 .clip-play-btn{width:48px;height:48px;border-radius:50%;background:var(--ac);border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;box-shadow:0 4px 16px var(--acg);}
@@ -1819,6 +1820,7 @@ function ClipsPage({ nowPlayingGame }) {
   const [loading, setLoading] = useState(true);
   const [clipFolder, setClipFolderState] = useState("");
   const [playing, setPlaying] = useState(null);
+  const [fullscreenClip, setFullscreenClip] = useState(null);
   const [renaming, setRenaming] = useState(null);
   const [renamVal, setRenamVal] = useState("");
   const [filterGame, setFilterGame] = useState("All");
@@ -1854,8 +1856,12 @@ function ClipsPage({ nowPlayingGame }) {
     }
     const ad = await window.electronAPI.getAudioDevices();
     if (ad.success && ad.devices.length) {
-      setAudioDevices(ad.devices);
-      setSelectedMic(ad.devices[0]);
+      const realDevices = ad.devices.filter(d => !d.startsWith("@"));
+      setAudioDevices(realDevices);
+      const stereoMix = realDevices.find(d => d.includes("Stereo Mix"));
+      if (stereoMix) setSelectedSystem(stereoMix);
+      const mic = realDevices.find(d => d.toLowerCase().includes("microphone"));
+      if (mic) setSelectedMic(mic);
     }
     setLoading(false);
   };
@@ -1881,14 +1887,15 @@ function ClipsPage({ nowPlayingGame }) {
 
   const fmtDate = (iso) => new Date(iso).toLocaleDateString();
 
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+
   const handleRecord = async () => {
     if (!window.electronAPI?.isElectron) return;
     if (isRecording) {
-      await window.electronAPI.stopRecording();
+      mediaRecorderRef.current?.stop();
       setIsRecording(false);
-      setTimeout(loadClips, 1500);
     } else {
-      // Show screen picker first
       setPickerLoading(true);
       setShowPicker(true);
       const res = await window.electronAPI.getCaptureSources();
@@ -1900,20 +1907,114 @@ function ClipsPage({ nowPlayingGame }) {
   const startWithSource = async (source) => {
     setShowPicker(false);
     const game = nowPlayingGame || recGame || "General";
-    const res = await window.electronAPI.startRecording(game, {
-      sourceId: source.id,
-      sourceName: source.name,
-      isScreen: source.isScreen,
-      micDevice: selectedMic,
-      systemDevice: selectedSystem,
-    });
-    console.log("startRecording result:", res);
-    if (res.success) {
+
+    try {
+      await window.electronAPI.setCaptureSource(source.id);
+
+      let stream = null;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 30 },
+          audio: true,
+        });
+        console.log("getDisplayMedia succeeded:", stream.getTracks().map(t => `${t.kind}:${t.label}`));
+      } catch(e) {
+        console.log("getDisplayMedia failed:", e.message, "- falling back to gdigrab");
+        const res = await window.electronAPI.startRecording(game, {
+          sourceId: source.id,
+          sourceName: source.name,
+          isScreen: source.isScreen,
+          micDevice: selectedMic,
+          systemDevice: selectedSystem,
+        });
+        if (res.success) {
+          setIsRecording(true);
+          setRecGame(game);
+          setRecElapsed(0);
+        } else {
+          alert("Recording failed: " + (res.error || "Unknown error"));
+        }
+        return;
+      }
+
+      let micStream = null;
+      try {
+        // First get permission with default mic, then enumerate to find selected
+        const defaultMic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(d => d.kind === "audioinput");
+        console.log("Audio inputs:", audioInputs.map(d => `${d.label} [${d.deviceId}]`));
+
+        // Find device matching selectedMic label
+        const target = audioInputs.find(d => selectedMic && d.label.toLowerCase().includes(
+          selectedMic.replace(/microphone\s*/i, "").replace(/[()]/g, "").trim().toLowerCase()
+        ));
+
+        if (target && target.deviceId !== audioInputs.find(d => d.label === defaultMic.getAudioTracks()[0]?.label)?.deviceId) {
+          defaultMic.getTracks().forEach(t => t.stop());
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: target.deviceId } }, video: false });
+          console.log("Mic captured (selected):", micStream.getAudioTracks().map(t => t.label));
+        } else {
+          micStream = defaultMic;
+          console.log("Mic captured (default):", micStream.getAudioTracks().map(t => t.label));
+        }
+      } catch(e) {
+        console.log("Mic not available:", e.message);
+      }
+
+      // Mix system audio + mic using AudioContext
+      const audioCtx = new AudioContext();
+      const destination = audioCtx.createMediaStreamDestination();
+
+      // Add system audio tracks
+      stream.getAudioTracks().forEach(track => {
+        const src = audioCtx.createMediaStreamSource(new MediaStream([track]));
+        src.connect(destination);
+      });
+
+      // Add mic tracks
+      if (micStream) {
+        micStream.getAudioTracks().forEach(track => {
+          const src = audioCtx.createMediaStreamSource(new MediaStream([track]));
+          src.connect(destination);
+        });
+      }
+
+      const combined = new MediaStream([
+        ...stream.getVideoTracks(),
+        ...destination.stream.getAudioTracks(),
+      ]);
+
+      chunksRef.current = [];
+      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+        ? "video/webm;codecs=vp9,opus"
+        : "video/webm";
+
+      const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 3000000 });
+      await window.electronAPI.startFfmpegPipe(game);
+
+      recorder.ondataavailable = async (e) => {
+        if (e.data.size > 0) {
+          const buf = await e.data.arrayBuffer();
+          window.electronAPI.pipeToFfmpeg(new Uint8Array(buf));
+        }
+      };
+
+      recorder.onstop = async () => {
+        await window.electronAPI.stopFfmpegPipe();
+        combined.getTracks().forEach(t => t.stop());
+        audioCtx.close();
+        setTimeout(loadClips, 2000);
+      };
+
+      recorder.start(500);
+      mediaRecorderRef.current = recorder;
       setIsRecording(true);
       setRecGame(game);
       setRecElapsed(0);
-    } else {
-      alert("Recording failed: " + (res.error || "Unknown error"));
+    } catch(e) {
+      console.error("Recording failed:", e);
+      alert("Recording failed: " + e.message);
     }
   };
 
@@ -1934,6 +2035,17 @@ function ClipsPage({ nowPlayingGame }) {
 
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      {/* Fullscreen overlay */}
+      {fullscreenClip && (
+        <div style={{position:"fixed",inset:0,background:"#000",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <video
+            src={clipServerPort ? `http://127.0.0.1:${clipServerPort}/${encodeURIComponent(fullscreenClip.path)}?token=${clipServerToken}` : `file:///${fullscreenClip.path}`}
+            controls autoPlay
+            style={{width:"100%",height:"100%",objectFit:"contain"}}
+          />
+          <button onClick={()=>setFullscreenClip(null)} style={{position:"absolute",top:16,right:16,background:"rgba(0,0,0,.5)",border:"1px solid rgba(255,255,255,.2)",color:"#fff",borderRadius:8,padding:"6px 14px",fontSize:13,cursor:"pointer",zIndex:10000}}>✕ Close</button>
+        </div>
+      )}
       <style>{CLIPS_CSS}</style>
 
       {/* Screen Picker Modal */}
@@ -2085,7 +2197,7 @@ function ClipsPage({ nowPlayingGame }) {
               <div key={clip.id} className="clip-card">
                 {playing === clip.id ? (
                   <div style={{aspectRatio:"16/9",background:"#000"}}>
-                    <video src={clipServerPort ? `http://127.0.0.1:${clipServerPort}/${encodeURIComponent(clip.path)}?token=${clipServerToken}` : `file:///${clip.path}`} controls autoPlay style={{width:"100%",height:"100%",display:"block"}}/>
+                    <video src={clipServerPort ? `http://127.0.0.1:${clipServerPort}/${encodeURIComponent(clip.path)}?token=${clipServerToken}` : `file:///${clip.path}`} data-clipid={clip.id} controls autoPlay onDoubleClick={e=>e.target.requestFullscreen()} style={{width:"100%",height:"100%",display:"block"}}/>
                   </div>
                 ) : (
                   <div className="clip-thumb" onClick={()=>setPlaying(clip.id)}>
@@ -2114,6 +2226,7 @@ function ClipsPage({ nowPlayingGame }) {
                   </div>
                 </div>
                 <div className="clip-actions">
+                  <button className="clip-act-btn" onClick={()=>setFullscreenClip(clip)}>⛶ Full</button>
                   <button className="clip-act-btn" onClick={()=>{setRenaming(clip.id);setRenamVal(clip.file.replace(/\.[^.]+$/,""));}}>✏️ Rename</button>
                   <button className="clip-act-btn" onClick={()=>window.electronAPI?.openClipFolder(clip.path)}>📁 Show</button>
                   <button className="clip-act-btn danger" onClick={()=>handleDelete(clip)}>🗑️ Delete</button>

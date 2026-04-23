@@ -36,22 +36,24 @@ let recordingOutFile = null;
 let clipFolder = null;
 
 try {
-  const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
-  ffmpegPath = ffmpegInstaller.path;
-  if (ffmpegPath && app.isPackaged) {
-    ffmpegPath = ffmpegPath.replace("app.asar", "app.asar.unpacked");
-  }
-  console.log("ffmpeg path:", ffmpegPath);
-} catch {
-  try {
-    ffmpegPath = require("ffmpeg-static");
+  // Try bundled full ffmpeg first (supports WASAPI)
+  const bundledPath = app.isPackaged
+    ? path.join(process.resourcesPath, "ffmpeg.exe")
+    : path.join(__dirname, "../../resources/ffmpeg.exe");
+
+  if (fs.existsSync(bundledPath)) {
+    ffmpegPath = bundledPath;
+    console.log("ffmpeg path (bundled):", ffmpegPath);
+  } else {
+    const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
+    ffmpegPath = ffmpegInstaller.path;
     if (ffmpegPath && app.isPackaged) {
       ffmpegPath = ffmpegPath.replace("app.asar", "app.asar.unpacked");
     }
-    console.log("ffmpeg path (basic):", ffmpegPath);
-  } catch {
-    console.log("ffmpeg not found — recording disabled");
+    console.log("ffmpeg path (installer):", ffmpegPath);
   }
+} catch {
+  console.log("ffmpeg not found — recording disabled");
 }
 
 function getClipFolder() {
@@ -139,13 +141,42 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
-      webSecurity: false, // needed for Twitch embeds in file:// context
+      webSecurity: false,
       enableBlinkFeatures: "GetDisplayMedia",
+      allowRunningInsecureContent: true,
+      sandbox: false,
     },
   });
 
   mainWin.maximize();
   mainWin.once("ready-to-show", () => mainWin.show());
+
+  // Allow getUserMedia with desktop capture source
+  mainWin.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+    // Allow all media permissions including microphone
+    const allowed = ["media", "audioCapture", "desktopCapture", "mediaKeySystem"];
+    callback(allowed.includes(permission) || permission.includes("media") || permission.includes("audio"));
+  });
+
+  mainWin.webContents.session.setPermissionCheckHandler(() => true);
+
+  mainWin.webContents.on("enter-html-full-screen", () => {
+    mainWin.setFullScreen(true);
+  });
+  mainWin.webContents.on("leave-html-full-screen", () => {
+    mainWin.setFullScreen(false);
+  });
+  mainWin.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
+    const { desktopCapturer } = require("electron");
+    desktopCapturer.getSources({ types: ["screen", "window"] }).then(sources => {
+      const sourceId = global.pendingCaptureSource;
+      const source = sourceId
+        ? sources.find(s => s.id === sourceId) || sources[0]
+        : sources[0];
+      // Pass video source and enable loopback audio
+      callback({ video: source, audio: "loopback" });
+    });
+  }, { useSystemPicker: false });
 
   const isDev = !app.isPackaged;
   if (isDev) {
@@ -176,6 +207,10 @@ function setupAutoUpdater(win) {
   autoUpdater.on("error", (e) => console.error("Updater:", e.message));
 }
 
+// Allow desktopCapturer getUserMedia in renderer
+app.commandLine.appendSwitch("enable-usermedia-screen-capturing");
+app.commandLine.appendSwitch("allow-http-screen-capture");
+
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
   // Start local HTTP server for video file serving
@@ -193,7 +228,9 @@ app.whenReady().then(() => {
         return;
       }
 
-      const filePath = decodeURIComponent(url.pathname.slice(1));
+      const rawPath = decodeURIComponent(url.pathname.slice(1));
+      // Fix Windows path - restore backslashes and drive letter colon
+      const filePath = rawPath.replace(/\//g, "\\");
       if (!fs.existsSync(filePath)) {
         res.writeHead(404);
         res.end("Not found");
@@ -213,13 +250,13 @@ app.whenReady().then(() => {
           "Content-Range": `bytes ${start}-${end}/${fileSize}`,
           "Accept-Ranges": "bytes",
           "Content-Length": chunkSize,
-          "Content-Type": "video/mp4",
+          "Content-Type": filePath.endsWith(".webm") ? "video/webm" : "video/mp4",
         });
         fileStream.pipe(res);
       } else {
         res.writeHead(200, {
           "Content-Length": fileSize,
-          "Content-Type": "video/mp4",
+          "Content-Type": filePath.endsWith(".webm") ? "video/webm" : "video/mp4",
           "Accept-Ranges": "bytes",
         });
         fs.createReadStream(filePath).pipe(res);
@@ -746,12 +783,15 @@ function startRecording(gameName, opts = {}) {
   const systemAudio = opts.systemDevice || "Stereo Mix (Realtek(R) Audio)";
 
   const args = [
+    "-thread_queue_size", "512",
     "-f", "gdigrab",
-    "-framerate", "60",
+    "-framerate", "30",
     ...videoArgs,
     "-i", gdigrabInput,
+    "-thread_queue_size", "512",
     "-f", "dshow",
     "-i", `audio=${systemAudio}`,
+    "-thread_queue_size", "512",
     "-f", "dshow",
     "-i", `audio=${micDevice}`,
     "-filter_complex", "[1:a][2:a]amix=inputs=2:duration=longest[aout]",
@@ -883,6 +923,91 @@ ipcMain.handle("get-clip-server-port", () => ({
   token: global.clipServerToken || null,
 }));
 
+ipcMain.handle("set-capture-source", (_e, sourceId) => {
+  global.pendingCaptureSource = sourceId;
+  return { success: true };
+});
+
+ipcMain.handle("start-ffmpeg-pipe", async (_e, gameName) => {
+  try {
+    const gameDir = path.join(getClipFolder(), gameName || "General");
+    ensureDir(gameDir);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    pipeOutFile = path.join(gameDir, `clip-${timestamp}.mp4`);
+    const webmFile = pipeOutFile.replace(".mp4", ".webm");
+    global.pipeWebmFile = webmFile;
+    global.pipeChunks = [];
+    console.log("Recording to webm:", webmFile);
+    return { success: true, file: pipeOutFile };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("pipe-to-ffmpeg", (_e, buffer) => {
+  if (global.pipeChunks) {
+    global.pipeChunks.push(Buffer.from(buffer));
+  }
+  return { success: true };
+});
+
+ipcMain.handle("stop-ffmpeg-pipe", async () => {
+  try {
+    if (!global.pipeChunks || !global.pipeWebmFile) return { success: false };
+    const webmFile = global.pipeWebmFile;
+    const outFile = webmFile.replace(".webm", ".mp4");
+
+    // Write all chunks to webm file
+    const combined = Buffer.concat(global.pipeChunks);
+    fs.writeFileSync(webmFile, combined);
+    global.pipeChunks = [];
+    console.log("Webm saved:", webmFile, combined.length, "bytes");
+
+    // Convert webm to mp4 with ffmpeg
+    const args = [
+      "-i", webmFile,
+      "-c:v", "libx264",
+      "-preset", "ultrafast",
+      "-crf", "23",
+      "-c:a", "aac",
+      "-b:a", "128k",
+      "-movflags", "+faststart",
+      "-y",
+      outFile
+    ];
+
+    await new Promise((resolve) => {
+      const proc = spawn(ffmpegPath, args, { windowsHide: true });
+      proc.stderr.on("data", d => console.log("convert:", d.toString().slice(0, 100)));
+      proc.on("close", (code) => {
+        console.log("convert closed:", code, "->", outFile);
+        // Delete temp webm
+        try { fs.unlinkSync(webmFile); } catch {}
+        resolve(code);
+      });
+    });
+
+    mainWin?.webContents.send("recording-stopped", { file: outFile });
+    return { success: true };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("save-clip", async (_e, gameName, buffer) => {
+  try {
+    const gameDir = path.join(getClipFolder(), gameName || "General");
+    ensureDir(gameDir);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const outFile = path.join(gameDir, `clip-${timestamp}.webm`);
+    fs.writeFileSync(outFile, Buffer.from(buffer));
+    console.log("Clip saved:", outFile);
+    return { success: true, file: outFile };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle("start-recording", async (_e, gameName, opts) => startRecording(gameName, opts || {}));
 ipcMain.handle("stop-recording",  async () => stopRecording());
 ipcMain.handle("recording-status", async () => ({
@@ -908,7 +1033,7 @@ ipcMain.handle("get-clips", async () => {
     const gameDirs = fs.readdirSync(base).filter(f => fs.statSync(path.join(base, f)).isDirectory());
     for (const game of gameDirs) {
       const gameDir = path.join(base, game);
-      const files = fs.readdirSync(gameDir).filter(f => f.endsWith(".mp4") || f.endsWith(".mkv"));
+      const files = fs.readdirSync(gameDir).filter(f => f.endsWith(".mp4") || f.endsWith(".webm") || f.endsWith(".mkv"));
       for (const file of files) {
         const filePath = path.join(gameDir, file);
         const stat = fs.statSync(filePath);
