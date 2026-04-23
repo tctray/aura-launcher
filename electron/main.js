@@ -723,49 +723,25 @@ function startRecording(gameName, opts = {}) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const outFile = path.join(gameDir, `clip-${timestamp}.mp4`);
 
-  // Determine capture input based on source selection
-  let captureInput = "desktop";
-  let offsetX = 0;
-  let offsetY = 0;
-  let captureWidth = 0;
-  let captureHeight = 0;
+  // Determine capture input
+  const { screen: electronScreen } = require("electron");
+  const displays = electronScreen.getAllDisplays();
+  let gdigrabInput = "desktop";
+  let videoArgs = [];
 
   if (opts.isScreen && opts.sourceId) {
     const monitorIndex = parseInt(opts.sourceId.split(":")[1]) || 0;
-    const { screen } = require("electron");
-    const displays = screen.getAllDisplays();
     const display = displays[monitorIndex] || displays[0];
-    const allBounds = displays.map(d => d.bounds);
-    const minX = Math.min(...allBounds.map(b => b.x));
-    const minY = Math.min(...allBounds.map(b => b.y));
-
-    // Normalize coordinates to gdigrab virtual desktop space
-    offsetX = display.bounds.x - minX;
-    offsetY = display.bounds.y - minY;
-    captureWidth = display.bounds.width;
-    captureHeight = display.bounds.height;
-    console.log(`Screen ${monitorIndex}: gdigrab offset=${offsetX},${offsetY} size=${captureWidth}x${captureHeight}`);
+    videoArgs = [
+      "-offset_x", String(display.bounds.x),
+      "-offset_y", String(display.bounds.y),
+      "-video_size", `${display.bounds.width}x${display.bounds.height}`,
+    ];
+    console.log(`Screen ${monitorIndex}: offset=${display.bounds.x},${display.bounds.y} size=${display.bounds.width}x${display.bounds.height}`);
   } else if (!opts.isScreen && opts.sourceName) {
     gdigrabInput = `title=${opts.sourceName}`;
   }
 
-  // Calculate total virtual desktop size for full capture + crop approach
-  const { screen } = require("electron");
-  const allDisplays = screen.getAllDisplays();
-  const allBounds2 = allDisplays.map(d => d.bounds);
-  const minX2 = Math.min(...allBounds2.map(b => b.x));
-  const minY2 = Math.min(...allBounds2.map(b => b.y));
-  const totalWidth = Math.max(...allBounds2.map(b => b.x + b.width)) - minX2;
-  const totalHeight = Math.max(...allBounds2.map(b => b.y + b.height)) - minY2;
-
-  // Use first available non-mic device, or first device as fallback
-  const preferredDevices = [
-    "Stereo Mix (Realtek(R) Audio)",
-    "CABLE Output (VB-Audio Virtual Cable)",
-    "Voicemod Virtual Audio Device (WDM)",
-  ];
-  let defaultAudio = null;
-  // Will be overridden by user selection in settings
   const micDevice = opts.micDevice || "Microphone (Arctis Nova 7 Gen 2)";
   const systemAudio = opts.systemDevice || "Stereo Mix (Realtek(R) Audio)";
 
@@ -794,7 +770,7 @@ function startRecording(gameName, opts = {}) {
 
   console.log("Recording args:", args.join(" "));
 
-  console.log("Starting recording:", captureInput, "->", outFile);
+  console.log("Starting recording:", gdigrabInput, "->", outFile);
 
   try {
     recordingProcess = spawn(ffmpegPath, args, { windowsHide: true });
