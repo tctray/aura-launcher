@@ -212,6 +212,61 @@ app.commandLine.appendSwitch("enable-usermedia-screen-capturing");
 app.commandLine.appendSwitch("allow-http-screen-capture");
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
+let auraBar = null;
+
+function createAuraBar() {
+  const { screen } = require("electron");
+  const { width } = screen.getPrimaryDisplay().workAreaSize;
+
+  auraBar = new BrowserWindow({
+    width: Math.round(width * 0.4),
+    height: 48,
+    x: Math.round(width * 0.3),
+    y: 20,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: true,
+    hasShadow: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  if (process.env.NODE_ENV === "development" || !app.isPackaged) {
+    auraBar.loadURL("http://localhost:5173/#aurabar");
+  } else {
+    auraBar.loadFile(path.join(__dirname, "../dist/index.html"), { hash: "aurabar" });
+  }
+
+  auraBar.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  auraBar.setAlwaysOnTop(true, "screen-saver");
+}
+
+ipcMain.handle("aurabar-move", (_e, { x, y }) => {
+  auraBar?.setPosition(Math.round(x), Math.round(y));
+  return { success: true };
+});
+
+ipcMain.handle("aurabar-hide", () => { auraBar?.hide(); });
+ipcMain.handle("aurabar-show", () => { auraBar?.show(); });
+
+ipcMain.handle("aurabar-get-state", () => ({
+  isRecording: !!global.pipeChunks,
+  clipServerPort: global.clipServerPort,
+  clipServerToken: global.clipServerToken,
+}));
+
+// Forward recording events to bar
+function notifyBar(channel, data) {
+  auraBar?.webContents.send(channel, data);
+}
+
 app.whenReady().then(() => {
   // Start local HTTP server for video file serving
   const clipServerToken = require("crypto").randomBytes(32).toString("hex");
@@ -250,13 +305,13 @@ app.whenReady().then(() => {
           "Content-Range": `bytes ${start}-${end}/${fileSize}`,
           "Accept-Ranges": "bytes",
           "Content-Length": chunkSize,
-          "Content-Type": filePath.endsWith(".webm") ? "video/webm" : "video/mp4",
+          "Content-Type": filePath.endsWith(".webm") ? "video/webm" : filePath.endsWith(".png") ? "image/png" : filePath.endsWith(".jpg") ? "image/jpeg" : "video/mp4",
         });
         fileStream.pipe(res);
       } else {
         res.writeHead(200, {
           "Content-Length": fileSize,
-          "Content-Type": filePath.endsWith(".webm") ? "video/webm" : "video/mp4",
+          "Content-Type": filePath.endsWith(".webm") ? "video/webm" : filePath.endsWith(".png") ? "image/png" : filePath.endsWith(".jpg") ? "image/jpeg" : "video/mp4",
           "Accept-Ranges": "bytes",
         });
         fs.createReadStream(filePath).pipe(res);
@@ -275,6 +330,7 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  createAuraBar();
   registerHotkeys();
 
   ipcMain.handle("download-update", () => {
@@ -824,6 +880,7 @@ function startRecording(gameName, opts = {}) {
       isRecording = false;
       recordingProcess = null;
       mainWin?.webContents.send("recording-stopped", { file: outFile, game: recordingGame });
+      auraBar?.webContents.send("recording-stopped");
     });
 
     recordingProcess.stderr.on("data", (data) => {
@@ -831,6 +888,7 @@ function startRecording(gameName, opts = {}) {
     });
 
     mainWin?.webContents.send("recording-started", { game: recordingGame, file: outFile });
+    auraBar?.webContents.send("recording-started");
     return { success: true, file: outFile, game: recordingGame };
   } catch(e) {
     console.error("Recording error:", e.message);
@@ -938,6 +996,8 @@ ipcMain.handle("start-ffmpeg-pipe", async (_e, gameName) => {
     global.pipeWebmFile = webmFile;
     global.pipeChunks = [];
     console.log("Recording to webm:", webmFile);
+    // Notify bar recording started
+    auraBar?.webContents.send("recording-started");
     return { success: true, file: pipeOutFile };
   } catch(e) {
     return { success: false, error: e.message };
@@ -988,7 +1048,78 @@ ipcMain.handle("stop-ffmpeg-pipe", async () => {
     });
 
     mainWin?.webContents.send("recording-stopped", { file: outFile });
+    auraBar?.webContents.send("recording-stopped");
     return { success: true };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("trim-clip", async (_e, { path: filePath, start, end }) => {
+  try {
+    const dir = path.dirname(filePath);
+    const ext = path.extname(filePath);
+    const base = path.basename(filePath, ext);
+    const outFile = path.join(dir, `${base}-trim${ext}`);
+    const duration = end - start;
+
+    await new Promise((resolve, reject) => {
+      const args = [
+        "-ss", String(start),
+        "-i", filePath,
+        "-t", String(duration),
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        "-y",
+        outFile
+      ];
+      const proc = spawn(ffmpegPath, args, { windowsHide: true });
+      proc.stderr.on("data", d => console.log("trim:", d.toString().slice(0, 100)));
+      proc.on("close", code => code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`)));
+      proc.on("error", reject);
+    });
+
+    console.log("Trim saved:", outFile);
+    return { success: true, file: outFile };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("share-clip", async (_e, filePath) => {
+  try {
+    const FormData = require("form-data");
+    const form = new FormData();
+    form.append("reqtype", "fileupload");
+    form.append("fileToUpload", fs.createReadStream(filePath), {
+      filename: path.basename(filePath),
+      contentType: filePath.endsWith(".webm") ? "video/webm" : "video/mp4",
+    });
+
+    const response = await new Promise((resolve, reject) => {
+      const https = require("https");
+      const req = https.request({
+        hostname: "catbox.moe",
+        path: "/user/api.php",
+        method: "POST",
+        headers: form.getHeaders(),
+      }, (res) => {
+        let data = "";
+        res.on("data", d => data += d);
+        res.on("end", () => resolve(data.trim()));
+      });
+      req.on("error", reject);
+      form.pipe(req);
+    });
+
+    if (response.startsWith("https://")) {
+      console.log("Clip shared:", response);
+      return { success: true, url: response };
+    } else {
+      return { success: false, error: response };
+    }
   } catch(e) {
     return { success: false, error: e.message };
   }
@@ -1086,10 +1217,23 @@ function registerHotkeys() {
     if (isRecording) {
       stopRecording();
       mainWin?.webContents.send("recording-hotkey", "stop");
+      auraBar?.webContents.send("recording-hotkey", "stop");
     } else {
       const currentGame = recordingGame || "General";
       startRecording(currentGame);
       mainWin?.webContents.send("recording-hotkey", "start");
+      auraBar?.webContents.send("recording-hotkey", "start");
+    }
+  });
+
+  // F10 toggles AURA Bar visibility
+  globalShortcut.register("F10", () => {
+    if (!auraBar) return;
+    if (auraBar.isVisible()) {
+      auraBar.hide();
+    } else {
+      auraBar.show();
+      auraBar.focus();
     }
   });
 }
@@ -1112,6 +1256,80 @@ ipcMain.handle("stream-open", async (_e, { channel, bounds }) => {
   streamView.webContents.loadURL(
     `https://player.twitch.tv/?channel=${channel}&parent=aura-launcher&autoplay=true&muted=false`
   );
+  return { success: true };
+});
+
+ipcMain.handle("focus-main", () => {
+  mainWin?.show();
+  mainWin?.focus();
+  return { success: true };
+});
+
+ipcMain.handle("get-window-pos", (_e) => {
+  // Return position of the calling window (auraBar)
+  const pos = auraBar?.getPosition() || [0, 0];
+  return { x: pos[0], y: pos[1] };
+});
+
+ipcMain.handle("stop-bar-recording", () => {
+  mainWin?.webContents.send("bar-stop-recording");
+  return { success: true };
+});
+
+ipcMain.handle("toggle-recording", async () => {
+  // Focus main window and send toggle
+  mainWin?.show();
+  mainWin?.focus();
+  mainWin?.webContents.send("bar-toggle-recording");
+  return { success: true };
+});
+
+ipcMain.handle("get-screenshots", async () => {
+  try {
+    const screenshotDir = path.join(getClipFolder(), "Screenshots");
+    if (!fs.existsSync(screenshotDir)) return { success: true, screenshots: [] };
+    const files = fs.readdirSync(screenshotDir).filter(f => f.endsWith(".png") || f.endsWith(".jpg"));
+    const screenshots = files.map(f => {
+      const fp = path.join(screenshotDir, f);
+      const stat = fs.statSync(fp);
+      return { id: f, file: f, path: fp, date: stat.mtime.toISOString(), size: stat.size };
+    }).sort((a, b) => new Date(b.date) - new Date(a.date));
+    return { success: true, screenshots };
+  } catch(e) {
+    return { success: false, screenshots: [], error: e.message };
+  }
+});
+
+ipcMain.handle("take-screenshot", async () => {
+  try {
+    const { desktopCapturer, screen } = require("electron");
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 3840, height: 2160 } });
+    // Get cursor position to find which screen to screenshot
+    const cursor = screen.getCursorScreenPoint();
+    const display = screen.getDisplayNearestPoint(cursor);
+    // Match source to display by index
+    const displays = screen.getAllDisplays();
+    const idx = displays.findIndex(d => d.id === display.id);
+    const source = sources[idx] || sources[0];
+    if (!source) return { success: false, error: "No screen found" };
+    const screenshotDir = path.join(getClipFolder(), "Screenshots");
+    ensureDir(screenshotDir);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const outFile = path.join(screenshotDir, `screenshot-${timestamp}.png`);
+    const img = source.thumbnail.toPNG();
+    fs.writeFileSync(outFile, img);
+    console.log("Screenshot saved:", outFile);
+    return { success: true, file: outFile };
+  } catch(e) {
+    console.error("Screenshot error:", e);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("stream-pip", async (_e, bounds) => {
+  if (streamView) {
+    streamView.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) });
+  }
   return { success: true };
 });
 

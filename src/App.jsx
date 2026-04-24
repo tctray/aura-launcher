@@ -1817,10 +1817,19 @@ function RecordingIndicator({ game, elapsed, onStop }) {
 
 function ClipsPage({ nowPlayingGame }) {
   const [clips, setClips] = useState([]);
+  const [screenshots, setScreenshots] = useState([]);
+  const [activeTab, setActiveTab] = useState("clips"); // "clips" | "screenshots"
   const [loading, setLoading] = useState(true);
   const [clipFolder, setClipFolderState] = useState("");
   const [playing, setPlaying] = useState(null);
   const [fullscreenClip, setFullscreenClip] = useState(null);
+  const [trimClip, setTrimClip] = useState(null);
+  const [trimIn, setTrimIn] = useState(0);
+  const [trimOut, setTrimOut] = useState(0);
+  const [trimExporting, setTrimExporting] = useState(false);
+  const trimVideoRef = useRef(null);
+  const [sharing, setSharing] = useState(null); // clipId
+  const [shareLinks, setShareLinks] = useState({}); // clipId -> url
   const [renaming, setRenaming] = useState(null);
   const [renamVal, setRenamVal] = useState("");
   const [filterGame, setFilterGame] = useState("All");
@@ -1843,6 +1852,9 @@ function ClipsPage({ nowPlayingGame }) {
     const res = await window.electronAPI.getClips();
     if (res.success) setClips(res.clips);
     else setClips([]);
+    // Load screenshots
+    const sres = await window.electronAPI.getScreenshots?.();
+    if (sres?.success) setScreenshots(sres.screenshots);
     const fr = await window.electronAPI.getClipFolder();
     setClipFolderState(fr.folder);
     const sr = await window.electronAPI.recordingStatus();
@@ -1875,6 +1887,41 @@ function ClipsPage({ nowPlayingGame }) {
       if (action === "start") setIsRecording(true);
       if (action === "stop") { setIsRecording(false); loadClips(); }
     });
+    window.electronAPI.onBarToggleRecording?.(() => {
+      setIsRecording(prev => {
+        if (prev) {
+          mediaRecorderRef.current?.stop();
+        } else {
+          setShowPicker(true);
+          window.electronAPI.getCaptureSources().then(res => {
+            if (res.success) setPickerSources(res.sources);
+            setPickerLoading(false);
+          });
+        }
+        return prev;
+      });
+    });
+
+    // From App-level bar handler
+    const onBarRecord = () => {
+      if (isRecording) {
+        mediaRecorderRef.current?.stop();
+      } else {
+        setShowPicker(true);
+        window.electronAPI.getCaptureSources().then(res => {
+          if (res.success) setPickerSources(res.sources);
+          setPickerLoading(false);
+        });
+      }
+    };
+    window.addEventListener("aura-bar-record", onBarRecord);
+
+    // Bar stop button
+    window.electronAPI.onBarStopRecording?.(() => {
+      mediaRecorderRef.current?.stop();
+    });
+
+    return () => window.removeEventListener("aura-bar-record", onBarRecord);
   }, []);
 
   const games = ["All", ...new Set(clips.map(c => c.game))];
@@ -2018,6 +2065,28 @@ function ClipsPage({ nowPlayingGame }) {
     }
   };
 
+  const handleShare = async (clip) => {
+    if (shareLinks[clip.id]) {
+      // Already uploaded - just show the link
+      setSharing(clip.id);
+      return;
+    }
+    setSharing(clip.id + "-uploading");
+    try {
+      const res = await window.electronAPI.shareClip(clip.path);
+      if (res.success) {
+        setShareLinks(s => ({ ...s, [clip.id]: res.url }));
+        setSharing(clip.id);
+      } else {
+        alert("Share failed: " + (res.error || "Unknown error"));
+        setSharing(null);
+      }
+    } catch(e) {
+      alert("Share failed: " + e.message);
+      setSharing(null);
+    }
+  };
+
   const handleDelete = async (clip) => {
     if (!window.electronAPI?.isElectron) return;
     await window.electronAPI.deleteClip(clip.path);
@@ -2035,7 +2104,81 @@ function ClipsPage({ nowPlayingGame }) {
 
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      {/* Fullscreen overlay */}
+      {/* Share modal */}
+      {sharing && !String(sharing).endsWith("-uploading") && shareLinks[sharing] && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setSharing(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"var(--panel)",border:"1px solid var(--border)",borderRadius:16,padding:24,width:420,display:"flex",flexDirection:"column",gap:16}}>
+            <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:18,fontWeight:700,color:"var(--t1)",letterSpacing:1}}>SHARE CLIP</div>
+            <div style={{fontSize:12,color:"var(--t2)"}}>Your clip has been uploaded and is ready to share.</div>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <input readOnly value={shareLinks[sharing]} style={{flex:1,background:"var(--card)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 12px",color:"var(--t1)",fontSize:12,fontFamily:"monospace"}} onClick={e=>e.target.select()}/>
+              <button className="btn-p" style={{fontSize:12,padding:"8px 14px",flexShrink:0}} onClick={()=>{navigator.clipboard.writeText(shareLinks[sharing]);toast?.("Copied!");}}>Copy</button>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn-p" style={{flex:1,fontSize:12,padding:"8px 14px",background:"#0077b5"}} onClick={()=>{const url=`mailto:?subject=Check out this clip&body=Check out this clip I recorded: ${shareLinks[sharing]}`;window.electronAPI?.openExternal(url);}}>
+                ✉️ Email
+              </button>
+              <button className="btn-p" style={{flex:1,fontSize:12,padding:"8px 14px",background:"#5865F2"}} onClick={()=>window.electronAPI?.openExternal(`https://discord.com/channels/@me`)}>
+                💬 Discord
+              </button>
+              <button className="btn-p" style={{flex:1,fontSize:12,padding:"8px 14px"}} onClick={()=>window.electronAPI?.openExternal(shareLinks[sharing])}>
+                🌐 Open
+              </button>
+            </div>
+            <button onClick={()=>setSharing(null)} style={{background:"none",border:"none",color:"var(--t2)",cursor:"pointer",fontSize:12,alignSelf:"flex-end"}}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* Trim modal */}
+      {trimClip && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.92)",zIndex:9998,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:20,padding:32}}>
+          <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:20,fontWeight:700,color:"#fff",letterSpacing:2}}>✂️ TRIM CLIP</div>
+          <video
+            ref={trimVideoRef}
+            src={clipServerPort ? `http://127.0.0.1:${clipServerPort}/${encodeURIComponent(trimClip.path)}?token=${clipServerToken}` : `file:///${trimClip.path}`}
+            controls
+            onLoadedMetadata={e=>{setTrimIn(0);setTrimOut(e.target.duration);}}
+            style={{width:"100%",maxWidth:800,maxHeight:400,borderRadius:10,background:"#000"}}
+          />
+          <div style={{width:"100%",maxWidth:800,display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{display:"flex",gap:16,alignItems:"center"}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginBottom:4}}>START — {trimIn.toFixed(2)}s</div>
+                <input type="range" min={0} max={trimVideoRef.current?.duration||100} step={0.1} value={trimIn}
+                  onChange={e=>{const v=parseFloat(e.target.value);if(v<trimOut){setTrimIn(v);if(trimVideoRef.current)trimVideoRef.current.currentTime=v;}}}
+                  style={{width:"100%",accentColor:"var(--ac)"}}
+                />
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginBottom:4}}>END — {trimOut.toFixed(2)}s</div>
+                <input type="range" min={0} max={trimVideoRef.current?.duration||100} step={0.1} value={trimOut}
+                  onChange={e=>{const v=parseFloat(e.target.value);if(v>trimIn){setTrimOut(v);if(trimVideoRef.current)trimVideoRef.current.currentTime=v;}}}
+                  style={{width:"100%",accentColor:"var(--ac)"}}
+                />
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,fontSize:12,color:"rgba(255,255,255,.6)",justifyContent:"center"}}>
+              Duration: <strong style={{color:"#fff",marginLeft:4}}>{(trimOut-trimIn).toFixed(2)}s</strong>
+            </div>
+            <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+              <button onClick={()=>setTrimClip(null)} style={{background:"rgba(255,255,255,.1)",border:"none",color:"#fff",borderRadius:8,padding:"10px 24px",fontSize:13,cursor:"pointer"}}>Cancel</button>
+              <button
+                disabled={trimExporting}
+                onClick={async()=>{
+                  setTrimExporting(true);
+                  const res = await window.electronAPI.trimClip({ path: trimClip.path, start: trimIn, end: trimOut });
+                  setTrimExporting(false);
+                  if(res.success){ setTrimClip(null); setTimeout(loadClips,500); }
+                  else alert("Trim failed: "+(res.error||"Unknown"));
+                }}
+                style={{background:"var(--ac)",border:"none",color:"#fff",borderRadius:8,padding:"10px 24px",fontSize:13,cursor:"pointer",fontWeight:700,opacity:trimExporting?0.6:1}}
+              >{trimExporting?"⏳ Exporting...":"✂️ Export Trim"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {fullscreenClip && (
         <div style={{position:"fixed",inset:0,background:"#000",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}}>
           <video
@@ -2118,8 +2261,11 @@ function ClipsPage({ nowPlayingGame }) {
 
       {/* Header */}
       <div style={{padding:"14px 24px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
-        <span style={{fontFamily:"Rajdhani,sans-serif",fontSize:18,fontWeight:700,letterSpacing:2,color:"var(--t1)"}}>MY CLIPS</span>
-        <div style={{flex:1,display:"flex",gap:8,overflowX:"auto"}}>
+        <div style={{display:"flex",gap:4,background:"var(--card)",borderRadius:8,padding:2}}>
+          <button onClick={()=>setActiveTab("clips")} style={{padding:"4px 14px",borderRadius:6,border:"none",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"DM Sans,sans-serif",background:activeTab==="clips"?"var(--ac)":"transparent",color:activeTab==="clips"?"#fff":"var(--t2)"}}>🎬 Clips</button>
+          <button onClick={()=>setActiveTab("screenshots")} style={{padding:"4px 14px",borderRadius:6,border:"none",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"DM Sans,sans-serif",background:activeTab==="screenshots"?"var(--ac)":"transparent",color:activeTab==="screenshots"?"#fff":"var(--t2)"}}>📷 Screenshots</button>
+        </div>
+        {activeTab==="clips"&&<div style={{flex:1,display:"flex",gap:8,overflowX:"auto"}}>
           {games.map(g=>(
             <button key={g} onClick={()=>setFilterGame(g)}
               style={{padding:"4px 12px",borderRadius:20,fontSize:11,fontWeight:600,cursor:"pointer",border:"1px solid",fontFamily:"DM Sans,sans-serif",flexShrink:0,
@@ -2129,7 +2275,7 @@ function ClipsPage({ nowPlayingGame }) {
               {g}
             </button>
           ))}
-        </div>
+        </div>}
         <button className="btn-g" onClick={()=>setShowSettings(s=>!s)} style={{fontSize:10,flexShrink:0}}>⚙️ Settings</button>
         <button className="btn-g" onClick={async()=>{
           const res = await window.electronAPI?.setClipFolder();
@@ -2182,7 +2328,36 @@ function ClipsPage({ nowPlayingGame }) {
 
       {/* Clips grid */}
       {loading ? (
-        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--t3)",fontSize:12}}>Loading clips…</div>
+        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--t3)",fontSize:12}}>Loading…</div>
+      ) : activeTab === "screenshots" ? (
+        screenshots.length === 0 ? (
+          <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12,color:"var(--t3)"}}>
+            <div style={{fontSize:48}}>📷</div>
+            <div style={{fontSize:16,fontWeight:600,color:"var(--t2)"}}>No screenshots yet</div>
+            <div style={{fontSize:12}}>Press 📷 in the AURA Bar to take a screenshot</div>
+          </div>
+        ) : (
+          <div style={{flex:1,overflowY:"auto"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16,padding:24}}>
+              {screenshots.map(s => (
+                <div key={s.id} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,overflow:"hidden"}}>
+                  <img src={clipServerPort ? `http://127.0.0.1:${clipServerPort}/${encodeURIComponent(s.path)}?token=${clipServerToken}` : `file:///${s.path}`}
+                    alt={s.file} style={{width:"100%",aspectRatio:"16/9",objectFit:"cover",display:"block",cursor:"pointer"}}
+                    onClick={()=>window.electronAPI?.openExternal?.("file:///" + s.path.replace(/\\/g,"/"))}
+                  />
+                  <div style={{padding:"10px 14px"}}>
+                    <div style={{fontSize:11,color:"var(--t2)",fontFamily:"DM Sans,sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.file}</div>
+                    <div style={{fontSize:10,color:"var(--t3)",marginTop:2}}>{new Date(s.date).toLocaleDateString()}</div>
+                  </div>
+                  <div style={{display:"flex",gap:6,padding:"0 14px 12px"}}>
+                    <button className="clip-act-btn" onClick={()=>window.electronAPI?.openClipFolder?.(s.path)}>📁 Show</button>
+                    <button className="clip-act-btn danger" onClick={async()=>{await window.electronAPI?.deleteClip?.(s.path);setScreenshots(ss=>ss.filter(x=>x.id!==s.id));}}>🗑️ Delete</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )
       ) : filtered.length === 0 ? (
         <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12,color:"var(--t3)"}}>
           <div style={{fontSize:48}}>🎬</div>
@@ -2227,7 +2402,11 @@ function ClipsPage({ nowPlayingGame }) {
                 </div>
                 <div className="clip-actions">
                   <button className="clip-act-btn" onClick={()=>setFullscreenClip(clip)}>⛶ Full</button>
+                  <button className="clip-act-btn" onClick={()=>setTrimClip(clip)}>✂️ Trim</button>
                   <button className="clip-act-btn" onClick={()=>{setRenaming(clip.id);setRenamVal(clip.file.replace(/\.[^.]+$/,""));}}>✏️ Rename</button>
+                  <button className="clip-act-btn" onClick={()=>handleShare(clip)} style={{opacity:sharing===clip.id+"-uploading"?0.5:1}}>
+                    {sharing===clip.id+"-uploading" ? "⏳ Uploading..." : "🔗 Share"}
+                  </button>
                   <button className="clip-act-btn" onClick={()=>window.electronAPI?.openClipFolder(clip.path)}>📁 Show</button>
                   <button className="clip-act-btn danger" onClick={()=>handleDelete(clip)}>🗑️ Delete</button>
                 </div>
@@ -2606,8 +2785,26 @@ export default function App(){
       if (action === "start") setIsRecording(true);
       if (action === "stop") setIsRecording(false);
     });
+    // Bar record button - navigate to clips and show picker
+    window.electronAPI.onBarToggleRecording?.(() => {
+      goTo("clips");
+      // Small delay to let clips page mount
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("aura-bar-record"));
+      }, 150);
+    });
   }, []);
   const [activeStream, setActiveStream] = useState(null);
+  // Move stream BrowserView to PiP when leaving streams view
+  useEffect(() => {
+    if (!activeStream || !window.electronAPI?.isElectron) return;
+    if (view === "streams") return;
+    const pip = document.getElementById("pip-stream-container");
+    if (pip) {
+      const r = pip.getBoundingClientRect();
+      window.electronAPI.streamPip({ x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) });
+    }
+  }, [view, activeStream]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bgImage, setBgImage] = useState(()=>localStorage.getItem("aura_bg")||"");
   const [savedThemes, setSavedThemes] = useState(()=>{
@@ -2977,9 +3174,13 @@ export default function App(){
 
           {view==="achievements"&&<AchievementsScreen unlockedMap={unlockedAch}/>}
 
-          {view==="clips"&&<ClipsPage nowPlayingGame={nowPlaying?.title}/>}
+          <div style={{display:view==="clips"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
+            <ClipsPage nowPlayingGame={nowPlaying?.title}/>
+          </div>
 
-          {view==="streams"&&<StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)}/>}
+          <div style={{display:view==="streams"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
+            <StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)}/>
+          </div>
 
           {view==="customize"&&<Customize
             theme={theme} onThemeChange={handleThemeChange}
@@ -3010,10 +3211,178 @@ export default function App(){
       {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={(p)=>{setProfile(p);saveProfile(p);setShowProfileModal(false);toast("Profile updated!");}}/>}
       {launching&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
       {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
+
+      {/* PiP stream player - shows when stream is active but not on streams view */}
+      {activeStream && view !== "streams" && window.electronAPI?.isElectron && (
+        <div style={{
+          position:"fixed", bottom:24, right:24, width:320, height:180,
+          borderRadius:12, overflow:"hidden", zIndex:800,
+          boxShadow:"0 8px 32px rgba(0,0,0,.8)",
+          border:"2px solid var(--ac)",
+          background:"#000",
+          cursor:"pointer",
+        }}>
+          <div style={{position:"absolute",top:0,left:0,right:0,padding:"6px 10px",background:"linear-gradient(to bottom,rgba(0,0,0,.8),transparent)",display:"flex",alignItems:"center",justifyContent:"space-between",zIndex:1}}>
+            <span style={{fontSize:11,fontWeight:700,color:"#fff",fontFamily:"DM Sans,sans-serif"}}>{activeStream.user}</span>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>goTo("streams")} style={{background:"var(--ac)",border:"none",color:"#fff",borderRadius:6,padding:"2px 8px",fontSize:10,cursor:"pointer",fontWeight:700}}>Open</button>
+              <button onClick={()=>setActiveStream(null)} style={{background:"rgba(255,255,255,.15)",border:"none",color:"#fff",borderRadius:6,padding:"2px 8px",fontSize:10,cursor:"pointer"}}>✕</button>
+            </div>
+          </div>
+          <div id="pip-stream-container" style={{width:"100%",height:"100%"}}/>
+        </div>
+      )}
+
       <AutoUpdater/>
       <ControllerHUD/>
       <div className="tc">
       </div>
     </>
   );
+}
+
+// ── AURA Bar ──────────────────────────────────────────────────────────────────
+export function AuraBar() {
+  const [isRecording, setIsRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [shotFlash, setShotFlash] = useState(false);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const dragStart = useRef(null);
+  const elapsedRef = useRef(null);
+
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    document.body.style.background = "transparent";
+    document.documentElement.style.overflow = "hidden";
+    document.documentElement.style.background = "transparent";
+
+    // Sync accent color from localStorage
+    const syncAccent = () => {
+      const accent = localStorage.getItem("aura_accent") || "#FF6B35";
+      document.documentElement.style.setProperty("--ac", accent);
+      document.documentElement.style.setProperty("--acg", accent + "66");
+    };
+    syncAccent();
+    const t = setInterval(syncAccent, 2000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (!window.electronAPI) return;
+    window.electronAPI.onRecordingStarted?.(() => setIsRecording(true));
+    window.electronAPI.onRecordingStopped?.(() => { setIsRecording(false); setElapsed(0); });
+    const handler = (_e, type) => {
+      if (type === "start") setIsRecording(true);
+      if (type === "stop") { setIsRecording(false); setElapsed(0); }
+    };
+    window.electronAPI.onRecordingHotkey?.(handler);
+  }, []);
+
+  useEffect(() => {
+    if (isRecording) {
+      elapsedRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
+    } else {
+      clearInterval(elapsedRef.current);
+    }
+    return () => clearInterval(elapsedRef.current);
+  }, [isRecording]);
+
+  const fmt = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+
+  const onMouseDown = (e) => {
+    setDragging(true);
+    dragStart.current = { mx: e.screenX, my: e.screenY };
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = async (e) => {
+      const dx = e.screenX - dragStart.current.mx;
+      const dy = e.screenY - dragStart.current.my;
+      dragStart.current = { mx: e.screenX, my: e.screenY };
+      const win = await window.electronAPI?.getWindowPos?.();
+      if (win) {
+        const nx = win.x + dx;
+        const ny = win.y + dy;
+        window.electronAPI?.aurabarMove?.({ x: nx, y: ny });
+      }
+    };
+    const onUp = () => setDragging(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+  }, [dragging]);
+
+  const barStyle = {
+    width: "100vw", height: "100vh",
+    display: "flex", alignItems: "center",
+    background: "rgba(15,18,30,0.92)",
+    backdropFilter: "blur(20px)",
+    borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.08)",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+    padding: "0 40px 0 16px",
+    gap: 8,
+    userSelect: "none",
+    fontFamily: "DM Sans, sans-serif",
+    WebkitAppRegion: "no-drag",
+    overflow: "hidden",
+    flexWrap: "nowrap",
+  };
+
+  const btnStyle = (color) => ({
+    background: color || "rgba(255,255,255,0.08)",
+    border: "none", color: "#fff", borderRadius: 8,
+    padding: "5px 12px", fontSize: 12, cursor: "pointer",
+    display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
+  });
+
+  return (
+    <div style={{...barStyle, position:"relative"}}>
+      <div onMouseDown={onMouseDown} style={{cursor:"grab",color:"rgba(255,255,255,.3)",fontSize:14,padding:"0 2px",flexShrink:0}}>⠿</div>
+      <div style={{fontFamily:"Rajdhani,sans-serif",fontWeight:700,fontSize:12,color:"var(--ac)",letterSpacing:2,flexShrink:0}}>AURA</div>
+      <div style={{width:1,height:16,background:"rgba(255,255,255,.1)",flexShrink:0,margin:"0 2px"}}/>
+      <button style={btnStyle(isRecording ? "#e53935" : "var(--ac)")} onClick={()=>{
+        if (isRecording) {
+          window.electronAPI?.stopBarRecording?.();
+        } else {
+          window.electronAPI?.toggleRecording?.();
+        }
+      }}>
+        {isRecording ? <>⏹ {fmt(elapsed)}</> : <>⏺ Record</>}
+      </button>
+      <button style={btnStyle(shotFlash ? "green" : undefined)} onClick={async()=>{
+        const res = await window.electronAPI?.takeScreenshot?.();
+        if (res?.success) { 
+          setShotFlash(true); 
+          setTimeout(()=>setShotFlash(false), 800);
+          // Refresh screenshots list
+          const sres = await window.electronAPI.getScreenshots?.();
+          if (sres?.success) setScreenshots(sres.screenshots);
+        }
+        else alert("Screenshot failed: " + (res?.error || "Unknown"));
+      }}>📷</button>
+      <button style={btnStyle()} onClick={()=>window.electronAPI?.focusMain?.()}>🎮 Open</button>
+      <div style={{flex:1}}/>
+      <Clock/>
+      {/* Close button - absolute so it can never be hidden */}
+      <div style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)"}}>
+        <button
+          onClick={()=>window.electronAPI?.aurabarHide?.()}
+          style={{background:"rgba(255,255,255,.1)",border:"none",color:"rgba(255,255,255,.6)",borderRadius:6,width:24,height:24,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center"}}
+        >✕</button>
+      </div>
+    </div>
+  );
+}
+
+function Clock() {
+  const [time, setTime] = useState(new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}));
+  useEffect(() => {
+    const t = setInterval(() => setTime(new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})), 10000);
+    return () => clearInterval(t);
+  }, []);
+  return <div style={{fontSize:12,color:"rgba(255,255,255,.5)",flexShrink:0}}>{time}</div>;
 }
