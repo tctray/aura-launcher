@@ -215,6 +215,7 @@ app.commandLine.appendSwitch("allow-http-screen-capture");
 let auraBar = null;
 
 function createAuraBar() {
+  if (auraBar && !auraBar.isDestroyed()) return; // already exists
   const { screen } = require("electron");
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
@@ -340,7 +341,10 @@ app.whenReady().then(() => {
   ipcMain.handle("install-update", () => autoUpdater.quitAndInstall(false, true));
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+      createAuraBar();
+    }
   });
 });
 
