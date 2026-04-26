@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development npx @dotenvx/dotenvx run -- electron .\"",
     "electron:build": "cross-env NODE_ENV=production npm run build && electron-builder --publish always"
   },
   "publish": [

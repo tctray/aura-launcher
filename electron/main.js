@@ -82,7 +82,7 @@ const DISCORD_REDIRECT_URI  = "http://localhost:3000/callback";
 const IGDB_CLIENT_ID        = process.env.TWITCH_CLIENT_ID;
 const IGDB_CLIENT_SECRET    = process.env.TWITCH_CLIENT_SECRET;
 const STEAM_API_KEY         = process.env.STEAM_API_KEY;
-const OPENXBL_KEY           = process.env.OPENXBL_KEY;
+const OPENXBL_API_KEY           = process.env.OPENXBL_API_KEY;
 const YOUTUBE_API_KEY       = process.env.YOUTUBE_API_KEY;
 
 let discordToken  = null;
@@ -505,7 +505,7 @@ ipcMain.handle("import-xbox", async () => {
 ipcMain.handle("xbox-get-profile", async () => {
   try {
     const res = await axios.get("https://xbl.io/api/v2/account", {
-      headers: { "X-Authorization": OPENXBL_KEY, Accept: "application/json" },
+      headers: { "X-Authorization": OPENXBL_API_KEY, Accept: "application/json" },
     });
     return { success: true, profile: res.data };
   } catch(e) { return { success: false, error: e.message }; }
@@ -514,7 +514,7 @@ ipcMain.handle("xbox-get-profile", async () => {
 ipcMain.handle("xbox-get-recent-games", async () => {
   try {
     const res = await axios.get("https://xbl.io/api/v2/player/titleHistory", {
-      headers: { "X-Authorization": OPENXBL_KEY, Accept: "application/json" },
+      headers: { "X-Authorization": OPENXBL_API_KEY, Accept: "application/json" },
     });
     const titles = res.data?.titles || res.data?.games || [];
     return { success: true, games: titles };
@@ -725,7 +725,7 @@ ipcMain.handle("steam-get-friends-profiles", async (_e, steamId) => {
 ipcMain.handle("discord-login", async () => {
   try {
     await startAuthServer();
-    const authUrl = `https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(DISCORD_REDIRECT_URI)}&scope=identify%20relationships.read`;
+    const authUrl = `https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(DISCORD_REDIRECT_URI)}&scope=identify`;
     await shell.openExternal(authUrl);
     return { success: true };
   } catch(e) { return { success: false, error: e.message }; }
@@ -1263,6 +1263,17 @@ ipcMain.handle("stream-open", async (_e, { channel, bounds }) => {
   return { success: true };
 });
 
+ipcMain.handle("get-env-debug", () => ({
+  STEAM_API_KEY: process.env.STEAM_API_KEY ? process.env.STEAM_API_KEY.slice(0, 8) + "..." : "MISSING",
+  DISCORD_CLIENT_ID: process.env.DISCORD_CLIENT_ID ? process.env.DISCORD_CLIENT_ID.slice(0, 8) + "..." : "MISSING",
+  DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET ? "SET" : "MISSING",
+  OPENXBL_API_KEY: process.env.OPENXBL_API_KEY ? process.env.OPENXBL_API_KEY.slice(0, 8) + "..." : "MISSING",
+  IGDB_CLIENT_ID: process.env.IGDB_CLIENT_ID ? "SET" : "MISSING",
+  IGDB_CLIENT_SECRET: process.env.IGDB_CLIENT_SECRET ? "SET" : "MISSING",
+  TWITCH_CLIENT_ID: process.env.TWITCH_CLIENT_ID ? "SET" : "MISSING",
+  TWITCH_CLIENT_SECRET: process.env.TWITCH_CLIENT_SECRET ? "SET" : "MISSING",
+}));
+
 ipcMain.handle("focus-main", () => {
   mainWin?.show();
   mainWin?.focus();
@@ -1416,7 +1427,7 @@ function startAuthServer() {
           <div style="font-size:20px;font-weight:700">Connected to Discord!</div>
           <div style="font-size:13px;color:#a0a8b4">You can close this tab and return to AURA.</div>
         </body></html>`);
-        BrowserWindow.getAllWindows()[0]?.webContents.send("discord-auth-success");
+        mainWin?.webContents.send("discord-auth-success");
       } catch(e) {
         res.writeHead(500); res.end("Auth failed: " + e.message);
       }

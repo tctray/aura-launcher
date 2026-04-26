@@ -82,6 +82,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   aurabarMove:       (pos)   => ipcRenderer.invoke("aurabar-move", pos),
   aurabarHide:       ()      => ipcRenderer.invoke("aurabar-hide"),
   aurabarShow:       ()      => ipcRenderer.invoke("aurabar-show"),
+  getEnvDebug:       ()      => ipcRenderer.invoke("get-env-debug"),
   focusMain:         ()      => ipcRenderer.invoke("focus-main"),
   getWindowPos:      ()      => ipcRenderer.invoke("get-window-pos"),
   toggleRecording:   ()      => ipcRenderer.invoke("toggle-recording"),
