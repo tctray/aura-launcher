@@ -162,16 +162,8 @@ function createWindow() {
       sandbox: false,
     },
   });
-
   mainWin.maximize();
   mainWin.once("ready-to-show", () => mainWin.show());
-
-  // Closing AURA also closes the AURA Bar, so the app actually quits
-  mainWin.on("closed", () => {
-    mainWin = null;
-    if (auraBar && !auraBar.isDestroyed()) auraBar.destroy();
-    auraBar = null;
-  });
 
   // Closing AURA also closes the AURA Bar and fully quits the app
   mainWin.on("closed", () => {
@@ -180,7 +172,6 @@ function createWindow() {
     auraBar = null;
     app.quit();
   });
-
   // Allow getUserMedia with desktop capture source
   mainWin.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     // Allow all media permissions including microphone
