@@ -5,6 +5,8 @@ process.on('uncaughtException', (e) => {
 const path = require("path");
 const fs   = require("fs");
 const { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut } = require("electron");
+const perf = require("./perf");
+perf.register();
 
 // Load .env — written by CI from GitHub Secrets, or local file in dev
 // Load .env — dev reads from project root, packaged reads from resources/
@@ -151,6 +153,21 @@ function createWindow() {
   mainWin.maximize();
   mainWin.once("ready-to-show", () => mainWin.show());
 
+  // Closing AURA also closes the AURA Bar, so the app actually quits
+  mainWin.on("closed", () => {
+    mainWin = null;
+    if (auraBar && !auraBar.isDestroyed()) auraBar.destroy();
+    auraBar = null;
+  });
+
+  // Closing AURA also closes the AURA Bar and fully quits the app
+  mainWin.on("closed", () => {
+    mainWin = null;
+    if (auraBar && !auraBar.isDestroyed()) auraBar.destroy();
+    auraBar = null;
+    app.quit();
+  });
+
   // Allow getUserMedia with desktop capture source
   mainWin.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     // Allow all media permissions including microphone
@@ -213,6 +230,60 @@ app.commandLine.appendSwitch("allow-http-screen-capture");
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 let auraBar = null;
+const BAR_WIDTH = 640;
+const BAR_HEIGHT = 60;           // bar only
+const BAR_HEIGHT_EXPANDED = 160; // bar + performance panel
+const RECORD_HOTKEY = "Alt+Shift+R";
+let currentGameName = null;
+
+function barState() {
+  return {
+    recording: isRecording,
+    recStartedAt: isRecording ? recordingStartTime : null,
+    game: currentGameName,
+    hotkey: "Alt+Shift+R",
+  };
+}
+
+function pushBarState() {
+  if (auraBar && !auraBar.isDestroyed()) auraBar.webContents.send("bar-state", barState());
+}
+
+function toggleRecordingHotkey() {
+  if (isRecording) {
+    stopRecording();
+    mainWin?.webContents.send("recording-hotkey", "stop");
+  } else {
+    startRecording(currentGameName || recordingGame || "General");
+    mainWin?.webContents.send("recording-hotkey", "start");
+  }
+  pushBarState();
+}
+
+ipcMain.handle("bar-get-state", () => barState());
+
+ipcMain.handle("bar-record-toggle", () => {
+  if (!isRecording && !ffmpegPath) return { success: false, error: "Recording unavailable" };
+  toggleRecordingHotkey();
+  return { success: true, recording: isRecording };
+});
+
+ipcMain.handle("bar-set-expanded", (_e, open) => {
+  if (!auraBar || auraBar.isDestroyed()) return;
+  auraBar.setResizable(true);
+  auraBar.setSize(BAR_WIDTH, open ? BAR_HEIGHT_EXPANDED : BAR_HEIGHT);
+  auraBar.setResizable(false);
+});
+
+ipcMain.handle("bar-screenshot", async () => {
+  // Hide the bar so it isn't in the screenshot
+  const wasVisible = auraBar && !auraBar.isDestroyed() && auraBar.isVisible();
+  if (wasVisible) auraBar.hide();
+  await new Promise((r) => setTimeout(r, 200));
+  const result = await captureScreenshot();
+  if (wasVisible) auraBar.showInactive();
+  return result;
+});
 
 function createAuraBar() {
   if (auraBar && !auraBar.isDestroyed()) return; // already exists
@@ -220,10 +291,10 @@ function createAuraBar() {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
 
   auraBar = new BrowserWindow({
-    width: Math.round(width * 0.4),
-    height: 48,
-    x: Math.round(width * 0.3),
-    y: 20,
+    width: BAR_WIDTH,
+    height: BAR_HEIGHT,
+    x: Math.round((width - BAR_WIDTH) / 2),
+    y: 16,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -368,20 +439,69 @@ rpc.on("ready", () => {
 });
 
 // ── Launch Game ───────────────────────────────────────────────────────────────
+// Spawns the game so AURA can see when it closes, then logs the session
+// (playtime + performance summary) back to the app.
 const gameSessions = new Map();
 
 ipcMain.handle("launch-game", async (_e, exePath) => {
   try {
-    const err = await shell.openPath(exePath);
-    if (err) return { success: false, error: err };
-    gameSessions.set(exePath, Date.now());
-    // Update RPC to show what game is being played
+    const startTime = Date.now();
+    const child = spawn(exePath, [], {
+      cwd: path.dirname(exePath),
+      detached: true,
+      stdio: "ignore",
+    });
+
+    // Wait to see if the game actually started
+    const started = await new Promise((resolve) => {
+      child.once("spawn", () => resolve(true));
+      child.once("error", () => resolve(false));
+    });
+
+    // Fallback for games that won't start this way (no session tracking)
+    if (!started) {
+      const err = await shell.openPath(exePath);
+      if (err) return { success: false, error: err };
+      return { success: true };
+    }
+
+    gameSessions.set(exePath, startTime);
+    perf.beginSession(exePath);
+    currentGameName = path.basename(exePath, ".exe");
+    pushBarState();
+
     rpc.setActivity({
       details: `Playing ${path.basename(exePath, ".exe")}`,
       state:   "AURA Game Launcher",
       largeImageKey: "aura_logo",
       startTimestamp: new Date(),
     }).catch(() => {});
+
+    // When the game closes: send the session + performance summary
+    child.on("exit", () => {
+      const endTime = Date.now();
+      const perfSummary = perf.endSession(exePath);
+      gameSessions.delete(exePath);
+      if (currentGameName === path.basename(exePath, ".exe")) currentGameName = null;
+      pushBarState();
+
+      mainWin?.webContents.send("game-session-ended", {
+        exePath,
+        sessionMs: endTime - startTime,
+        startTime,
+        endTime,
+        perf: perfSummary,
+      });
+
+      rpc.setActivity({
+        details: "Browsing Game Library",
+        state:   "AURA Game Launcher",
+        largeImageKey: "aura_logo",
+        startTimestamp: new Date(),
+      }).catch(() => {});
+    });
+
+    child.unref();
     return { success: true };
   } catch(e) { return { success: false, error: e.message }; }
 });
@@ -885,6 +1005,7 @@ function startRecording(gameName, opts = {}) {
       recordingProcess = null;
       mainWin?.webContents.send("recording-stopped", { file: outFile, game: recordingGame });
       auraBar?.webContents.send("recording-stopped");
+      pushBarState();
     });
 
     recordingProcess.stderr.on("data", (data) => {
@@ -893,6 +1014,7 @@ function startRecording(gameName, opts = {}) {
 
     mainWin?.webContents.send("recording-started", { game: recordingGame, file: outFile });
     auraBar?.webContents.send("recording-started");
+    pushBarState();
     return { success: true, file: outFile, game: recordingGame };
   } catch(e) {
     console.error("Recording error:", e.message);
@@ -910,6 +1032,7 @@ function stopRecording() {
     if (recordingProcess) recordingProcess.kill("SIGKILL");
   }, 2000);
   isRecording = false;
+  pushBarState();
   return { success: true };
 }
 
@@ -1217,18 +1340,11 @@ ipcMain.handle("rename-clip", async (_e, { oldPath, newName }) => {
 
 // ── Register F9 hotkey after window ready ─────────────────────────────────────
 function registerHotkeys() {
-  globalShortcut.register("F9", () => {
-    if (isRecording) {
-      stopRecording();
-      mainWin?.webContents.send("recording-hotkey", "stop");
-      auraBar?.webContents.send("recording-hotkey", "stop");
-    } else {
-      const currentGame = recordingGame || "General";
-      startRecording(currentGame);
-      mainWin?.webContents.send("recording-hotkey", "start");
-      auraBar?.webContents.send("recording-hotkey", "start");
-    }
-  });
+  // F9 or Ctrl+Alt+R start/stop recording
+  globalShortcut.register("F9", toggleRecordingHotkey);
+  if (!globalShortcut.register(RECORD_HOTKEY, toggleRecordingHotkey)) {
+    console.log("Record hotkey is in use by another app:", RECORD_HOTKEY);
+  }
 
   // F10 toggles AURA Bar visibility
   globalShortcut.register("F10", () => {
@@ -1244,6 +1360,61 @@ function registerHotkeys() {
 
 
 let streamView = null;
+
+ipcMain.handle("stream-fullscreen", async () => {
+  // Wait up to 2s for streamView to be available
+  let attempts = 0;
+  while (!streamView && attempts < 20) {
+    await new Promise(r => setTimeout(r, 100));
+    attempts++;
+  }
+  if (!streamView) return { success: false, error: "No stream active" };
+  const [w, h] = mainWin.getContentSize();
+  mainWin.removeBrowserView(streamView);
+  mainWin.addBrowserView(streamView);
+  streamView.setBounds({ x: 0, y: 0, width: w, height: h });
+  if (mainWin.chatView) mainWin.removeBrowserView(mainWin.chatView);
+  return { success: true };
+});
+
+ipcMain.handle("stream-set-volume", async (_e, { volume, muted }) => {
+  if (!streamView) return { success: false };
+  try {
+    // Execute JS in the Twitch player to set volume
+    await streamView.webContents.executeJavaScript(`
+      try {
+        const videos = document.querySelectorAll('video');
+        videos.forEach(v => {
+          v.volume = ${muted ? 0 : volume / 100};
+          v.muted = ${muted};
+        });
+      } catch(e) {}
+    `);
+    return { success: true };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle("stream-restore", async (_e, { bounds, chatBounds }) => {
+  console.log("stream-restore called, streamView:", !!streamView);
+  if (!streamView) return { success: false };
+  try {
+    if (!mainWin.getBrowserViews().includes(streamView)) {
+      mainWin.addBrowserView(streamView);
+    }
+    streamView.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) });
+    if (mainWin.chatView && chatBounds) {
+      if (!mainWin.getBrowserViews().includes(mainWin.chatView)) {
+        mainWin.addBrowserView(mainWin.chatView);
+      }
+      mainWin.chatView.setBounds({ x: Math.round(chatBounds.x), y: Math.round(chatBounds.y), width: Math.round(chatBounds.width), height: Math.round(chatBounds.height) });
+    }
+    return { success: true };
+  } catch(e) {
+    return { success: false, error: e.message };
+  }
+});
 
 ipcMain.handle("stream-open", async (_e, { channel, bounds }) => {
   if (streamView) {
@@ -1281,8 +1452,7 @@ ipcMain.handle("focus-main", () => {
 });
 
 ipcMain.handle("get-window-pos", (_e) => {
-  // Return position of the calling window (auraBar)
-  const pos = auraBar?.getPosition() || [0, 0];
+  const pos = mainWin?.getPosition() || [0, 0];
   return { x: pos[0], y: pos[1] };
 });
 
@@ -1315,7 +1485,9 @@ ipcMain.handle("get-screenshots", async () => {
   }
 });
 
-ipcMain.handle("take-screenshot", async () => {
+ipcMain.handle("take-screenshot", () => captureScreenshot());
+
+async function captureScreenshot() {
   try {
     const { desktopCapturer, screen } = require("electron");
     const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 3840, height: 2160 } });
@@ -1339,11 +1511,16 @@ ipcMain.handle("take-screenshot", async () => {
     console.error("Screenshot error:", e);
     return { success: false, error: e.message };
   }
-});
+}
 
 ipcMain.handle("stream-pip", async (_e, bounds) => {
+  console.log("stream-pip called, bounds:", bounds, "chatView:", !!mainWin.chatView, "streamView:", !!streamView);
   if (streamView) {
     streamView.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) });
+  }
+  // Hide chat in PiP mode
+  if (mainWin.chatView) {
+    mainWin.removeBrowserView(mainWin.chatView);
   }
   return { success: true };
 });

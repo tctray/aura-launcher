@@ -1,9 +1,11 @@
 /**
  * AURA — Desktop Game Launcher
- * Full app with profile, themes, Discord, playtime tracking
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import SessionsPage from "./components/sessions";
+import PerformancePage from "./components/performance";
+import { addSession } from "./sessionstore";
 
 const CATEGORIES = ["All","FPS","RPG","Strategy","Action","Adventure","Sports","Simulation","Indie","Other"];
 
@@ -1301,13 +1303,42 @@ function ProfileModal({ profile, onClose, onSave }) {
 }
 
 // ── Streams View ──────────────────────────────────────────────────────────────
-function StreamsView({ games, initialStream, onClear }) {
+function StreamsView({ games, initialStream, onClear, onStreamChange }) {
   const [activeStream, setActiveStream] = useState(initialStream||null);
+
+  const updateStream = (s) => {
+    setActiveStream(s);
+    onStreamChange?.(s);
+  };
   const [streams, setStreams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [customLogins, setCustomLogins] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
   const [inputVal, setInputVal] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
   const [chatOpen, setChatOpen] = useState(true);
+  const [isStreamFull, setIsStreamFull] = useState(false);
+
+  // F key to toggle fullscreen stream
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "f" || e.key === "F") {
+        if (isStreamFull) {
+          setIsStreamFull(false);
+          window.electronAPI?.streamRestore?.({
+            bounds: { x: 0, y: 0, width: 100, height: 100 }, // will be overridden by openViews
+            chatBounds: null,
+          });
+        } else {
+          setIsStreamFull(true);
+          window.electronAPI?.streamFullscreen?.();
+        }
+      }
+      if (e.key === "Escape" && isStreamFull) {
+        setIsStreamFull(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isStreamFull]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState(null);
   const [searching, setSearching] = useState(false);
@@ -1341,6 +1372,13 @@ function StreamsView({ games, initialStream, onClear }) {
 
   const playerContainerRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const [volume, setVolume] = useState(100);
+  const [muted, setMuted] = useState(false);
+
+  const setStreamVolume = (vol, mut) => {
+    if (!window.electronAPI?.isElectron) return;
+    window.electronAPI.streamSetVolume?.({ volume: vol, muted: mut });
+  };
 
   // Open BrowserView when stream selected
   useEffect(() => {
@@ -1348,18 +1386,25 @@ function StreamsView({ games, initialStream, onClear }) {
     const openViews = async () => {
       await new Promise(r => setTimeout(r, 100)); // wait for layout
       if (playerContainerRef.current) {
-        const r = playerContainerRef.current.getBoundingClientRect();
-        await window.electronAPI.streamOpen({
-          channel: activeStream.userLogin || activeStream.user,
-          bounds: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }
+        const pr = playerContainerRef.current.getBoundingClientRect();
+        const cr = chatOpen && chatContainerRef.current ? chatContainerRef.current.getBoundingClientRect() : null;
+        // Try restore first (coming back from PiP), fall back to open
+        const restored = await window.electronAPI.streamRestore?.({
+          bounds: { x: Math.round(pr.x), y: Math.round(pr.y), width: Math.round(pr.width), height: Math.round(pr.height) },
+          chatBounds: cr ? { x: Math.round(cr.x), y: Math.round(cr.y), width: Math.round(cr.width), height: Math.round(cr.height) } : null,
         });
-      }
-      if (chatContainerRef.current && chatOpen) {
-        const r = chatContainerRef.current.getBoundingClientRect();
-        await window.electronAPI.chatOpen({
-          channel: activeStream.userLogin || activeStream.user,
-          bounds: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }
-        });
+        if (!restored?.success) {
+          await window.electronAPI.streamOpen({
+            channel: activeStream.userLogin || activeStream.user,
+            bounds: { x: Math.round(pr.x), y: Math.round(pr.y), width: Math.round(pr.width), height: Math.round(pr.height) }
+          });
+        }
+        if (chatContainerRef.current && chatOpen && !restored?.success) {
+          await window.electronAPI.chatOpen({
+            channel: activeStream.userLogin || activeStream.user,
+            bounds: { x: Math.round(pr.x), y: Math.round(pr.y), width: Math.round(pr.width), height: Math.round(pr.height) }
+          });
+        }
       }
     };
     openViews();
@@ -1403,8 +1448,20 @@ function StreamsView({ games, initialStream, onClear }) {
         </div>
         <div style={{fontSize:10,color:"#9147ff",fontWeight:700}}>{activeStream.game}</div>
         <div style={{fontSize:10,color:"var(--t3)"}}>👁 {fmtViewers(activeStream.viewers)}</div>
+        <button onClick={()=>{setIsStreamFull(f=>{const next=!f;if(next)window.electronAPI?.streamFullscreen?.();else window.electronAPI?.streamRestore?.({bounds:{x:0,y:0,width:100,height:100},chatBounds:null});return next;})}} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>{isStreamFull?"⊠ Exit Full":"⛶ Full"}</button>
         <button onClick={()=>setChatOpen(o=>!o)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>{chatOpen?"Hide Chat":"Show Chat"}</button>
-        <button onClick={()=>{setActiveStream(null);onClear&&onClear();}} style={{background:"rgba(255,77,109,.1)",border:"1px solid rgba(255,77,109,.3)",color:"var(--danger)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>✕ Close</button>
+        {/* Volume controls */}
+        <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+          <button onClick={()=>{const m=!muted;setMuted(m);setStreamVolume(volume,m);}} style={{background:"none",border:"none",color:"var(--t2)",cursor:"pointer",fontSize:14,padding:"0 2px"}}>
+            {muted || volume===0 ? "🔇" : volume < 50 ? "🔉" : "🔊"}
+          </button>
+          <input type="range" min={0} max={100} value={muted ? 0 : volume}
+            onChange={e=>{const v=parseInt(e.target.value);setVolume(v);setMuted(v===0);setStreamVolume(v,v===0);}}
+            style={{width:70,accentColor:"var(--ac)",cursor:"pointer"}}
+          />
+          <span style={{fontSize:10,color:"var(--t3)",minWidth:24}}>{muted?0:volume}%</span>
+        </div>
+        <button onClick={()=>{setActiveStream(null);onStreamChange?.(null);onClear&&onClear();}} style={{background:"rgba(255,77,109,.1)",border:"1px solid rgba(255,77,109,.3)",color:"var(--danger)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>✕ Close</button>
       </div>
     </div>
   ) : null;
@@ -1482,7 +1539,7 @@ function StreamsView({ games, initialStream, onClear }) {
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12}}>
                 {searchResults.channels.map(c=>(
                   <div key={c.id}
-                    onClick={()=>c.isLive&&setActiveStream({id:c.id,user:c.name,userLogin:c.login,title:c.title,game:c.game,viewers:0,thumbnail:c.thumbnail,url:`https://twitch.tv/${c.login}`})}
+                    onClick={()=>c.isLive&&updateStream({id:c.id,user:c.name,userLogin:c.login,title:c.title,game:c.game,viewers:0,thumbnail:c.thumbnail,url:`https://twitch.tv/${c.login}`})}
                     style={{borderRadius:12,overflow:"hidden",cursor:c.isLive?"pointer":"default",background:"var(--card)",border:`1px solid ${c.isLive?"var(--border)":"rgba(255,255,255,.04)"}`,transition:"all .2s",opacity:c.isLive?1:0.5}}
                     onMouseEnter={e=>{if(c.isLive){e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.borderColor="#9147ff55";}}}
                     onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.borderColor=c.isLive?"var(--border)":"rgba(255,255,255,.04)";}}>
@@ -1523,7 +1580,7 @@ function StreamsView({ games, initialStream, onClear }) {
               <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:15,fontWeight:700,letterSpacing:1.5,color:"var(--t1)",marginBottom:12}}>STREAMS</div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:14}}>
                 {searchResults.gameStreams.map(s=>(
-                  <div key={s.id} onClick={()=>setActiveStream(s)}
+                  <div key={s.id} onClick={()=>updateStream(s)}
                     style={{borderRadius:12,overflow:"hidden",cursor:"pointer",background:"var(--card)",border:"1px solid var(--border)",transition:"all .2s"}}
                     onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.borderColor="#9147ff55";}}
                     onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.borderColor="var(--border)";}}>
@@ -1563,7 +1620,7 @@ function StreamsView({ games, initialStream, onClear }) {
           ) : (
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
               {streams.map(s => (
-                <div key={s.id} onClick={()=>setActiveStream(s)} style={{borderRadius:12,overflow:"hidden",cursor:"pointer",background:"var(--card)",border:"1px solid var(--border)",transition:"transform .2s,box-shadow .2s",position:"relative"}}
+                <div key={s.id} onClick={()=>updateStream(s)} style={{borderRadius:12,overflow:"hidden",cursor:"pointer",background:"var(--card)",border:"1px solid var(--border)",transition:"transform .2s,box-shadow .2s",position:"relative"}}
                   onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-4px)";e.currentTarget.style.boxShadow="0 16px 40px rgba(0,0,0,.6),0 0 0 1px #9147ff55";}}
                   onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="none";}}>
                   <div style={{position:"relative",aspectRatio:"16/9",overflow:"hidden"}}>
@@ -2749,8 +2806,67 @@ function useController({ view, goTo, navItems, heroGame, setHeroGame, modal, set
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
+function PipBox({ activeStream, onOpen, onClose, onMove }) {
+  const [pos, setPos] = useState({ x: window.innerWidth - 400, y: window.innerHeight - 250 });
+  const dragging = useRef(false);
+  const dragOffset = useRef({ x: 0, y: 0 });
+
+  const onMouseDown = (e) => {
+    dragging.current = true;
+    dragOffset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    const onMouseMove = async (e) => {
+      if (!dragging.current) return;
+      const nx = Math.max(0, Math.min(window.innerWidth - 360, e.clientX - dragOffset.current.x));
+      const ny = Math.max(0, Math.min(window.innerHeight - 203, e.clientY - dragOffset.current.y));
+      setPos({ x: nx, y: ny });
+      const winPos = await window.electronAPI?.getWindowPos?.() || { x: 0, y: 0 };
+      onMove?.(Math.round(winPos.x + nx), Math.round(winPos.y + ny));
+    };
+    const onMouseUp = () => { dragging.current = false; };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
+  // Notify parent of initial position with window offset
+  useEffect(() => {
+    (async () => {
+      const winPos = await window.electronAPI?.getWindowPos?.() || { x: 0, y: 0 };
+      onMove?.(Math.round(winPos.x + pos.x), Math.round(winPos.y + pos.y));
+    })();
+  }, []);
+
+  return (
+    <div style={{
+      position:"fixed", left:pos.x, top:pos.y, width:360, height:203,
+      borderRadius:12, overflow:"hidden", zIndex:800,
+      boxShadow:"0 8px 32px rgba(0,0,0,.8)",
+      border:"2px solid var(--ac)",
+      background:"#000",
+    }}>
+      <div onMouseDown={onMouseDown} style={{position:"absolute",top:0,left:0,right:0,padding:"6px 10px",background:"linear-gradient(to bottom,rgba(0,0,0,.8),transparent)",display:"flex",alignItems:"center",justifyContent:"space-between",zIndex:1,cursor:"grab"}}>
+        <span style={{fontSize:11,fontWeight:700,color:"#fff",fontFamily:"DM Sans,sans-serif"}}>⠿ {activeStream.user}</span>
+        <div style={{display:"flex",gap:6}}>
+          <button onClick={onOpen} style={{background:"var(--ac)",border:"none",color:"#fff",borderRadius:6,padding:"2px 8px",fontSize:10,cursor:"pointer",fontWeight:700}}>Open</button>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,.15)",border:"none",color:"#fff",borderRadius:6,padding:"2px 8px",fontSize:10,cursor:"pointer"}}>✕</button>
+        </div>
+      </div>
+      <div id="pip-stream-container" style={{width:"100%",height:"100%"}}/>
+    </div>
+  );
+}
+
 export default function App(){
   const [games,setGames]=useState(()=>load());
+  const gamesRef=useRef(games);
+  useEffect(()=>{gamesRef.current=games;},[games]);
   const [profile,setProfile]=useState(()=>loadProfile());
   const [theme,setTheme]=useState(()=>loadTheme());
   const [accent,setAccent]=useState(()=>loadAccent());
@@ -2795,15 +2911,26 @@ export default function App(){
     });
   }, []);
   const [activeStream, setActiveStream] = useState(null);
-  // Move stream BrowserView to PiP when leaving streams view
+// Move stream BrowserView to PiP when leaving streams view
   useEffect(() => {
     if (!activeStream || !window.electronAPI?.isElectron) return;
     if (view === "streams") return;
-    const pip = document.getElementById("pip-stream-container");
-    if (pip) {
-      const r = pip.getBoundingClientRect();
-      window.electronAPI.streamPip({ x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) });
-    }
+    setTimeout(async () => {
+      const pip = document.getElementById("pip-stream-container");
+      if (pip) {
+        const r = pip.getBoundingClientRect();
+        if (r.width > 0) {
+          // Get actual window position to offset correctly
+          const winPos = await window.electronAPI.getWindowPos?.() || { x: 0, y: 0 };
+          window.electronAPI.streamPip({
+            x: Math.round(winPos.x + r.x),
+            y: Math.round(winPos.y + r.y),
+            width: Math.round(r.width),
+            height: Math.round(r.height)
+          });
+        }
+      }
+    }, 150);
   }, [view, activeStream]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bgImage, setBgImage] = useState(()=>localStorage.getItem("aura_bg")||"");
@@ -2837,7 +2964,9 @@ export default function App(){
 
   useEffect(()=>{
     if(!window.electronAPI?.isElectron) return;
-    window.electronAPI.onGameSessionEnded((_event,data)=>{
+    const off = window.electronAPI.onGameSessionEnded((_event,data)=>{
+      addSession(gamesRef.current.find(g=>g.exePath===data.exePath), data);
+      setNowPlaying(np=>np&&np.exePath===data.exePath?null:np);
       setGames(gs=>gs.map(g=>{ if(g.exePath===data.exePath) return {...g,totalTime:(g.totalTime||0)+data.sessionMs,lastSessionMs:data.sessionMs}; return g; }));
       setStats(prev=>{
         const totalMs=(prev.totalPlaytimeMs||0)+data.sessionMs;
@@ -2845,6 +2974,7 @@ export default function App(){
         saveStats(updated);checkAchievements(updated,unlockedAch);return updated;
       });
     });
+    return off;
   },[checkAchievements, unlockedAch]);
 
   const handleThemeChange = useCallback((key) => {
@@ -2981,6 +3111,8 @@ export default function App(){
     {id:"favorites", icon:<Ic.Heart/>,   label:"Favorites",       badge:favs.length||null},
     {id:"streams",   icon:<Ic.Tv/>,      label:"Live Streams"},
     {id:"clips",     icon:<span style={{fontSize:14}}>🎬</span>, label:"Clips"},
+    {id:"sessions",  icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>, label:"Sessions"},
+    {id:"performance",icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M4.5 17a8 8 0 1 1 15 0"/><path d="M12 13l4-4"/></svg>, label:"Performance"},
     {id:"achievements",icon:<Ic.Trophy/>,label:"Achievements",    badge:unlockedCount||null},
     {id:"customize", icon:<Ic.Palette/>, label:"Customize"},
     {id:"settings",  icon:<Ic.Gear/>,    label:"Settings"},
@@ -3173,13 +3305,15 @@ export default function App(){
           )}
 
           {view==="achievements"&&<AchievementsScreen unlockedMap={unlockedAch}/>}
+          {view==="sessions"&&<div style={{flex:1,overflowY:"auto"}}><SessionsPage games={games} accent={accent||(theme==="custom"?customColors?.ac:THEMES[theme]?.ac)||"#FF5722"}/></div>}
+          {view==="performance"&&<div style={{flex:1,overflowY:"auto"}}><PerformancePage games={games} accent={accent||(theme==="custom"?customColors?.ac:THEMES[theme]?.ac)||"#FF5722"}/></div>}
 
           <div style={{display:view==="clips"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
             <ClipsPage nowPlayingGame={nowPlaying?.title}/>
           </div>
 
           <div style={{display:view==="streams"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
-            <StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)}/>
+            <StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)} onStreamChange={s=>setActiveStream(s)}/>
           </div>
 
           {view==="customize"&&<Customize
@@ -3214,23 +3348,7 @@ export default function App(){
 
       {/* PiP stream player - shows when stream is active but not on streams view */}
       {activeStream && view !== "streams" && window.electronAPI?.isElectron && (
-        <div style={{
-          position:"fixed", bottom:24, right:24, width:320, height:180,
-          borderRadius:12, overflow:"hidden", zIndex:800,
-          boxShadow:"0 8px 32px rgba(0,0,0,.8)",
-          border:"2px solid var(--ac)",
-          background:"#000",
-          cursor:"pointer",
-        }}>
-          <div style={{position:"absolute",top:0,left:0,right:0,padding:"6px 10px",background:"linear-gradient(to bottom,rgba(0,0,0,.8),transparent)",display:"flex",alignItems:"center",justifyContent:"space-between",zIndex:1}}>
-            <span style={{fontSize:11,fontWeight:700,color:"#fff",fontFamily:"DM Sans,sans-serif"}}>{activeStream.user}</span>
-            <div style={{display:"flex",gap:6}}>
-              <button onClick={()=>goTo("streams")} style={{background:"var(--ac)",border:"none",color:"#fff",borderRadius:6,padding:"2px 8px",fontSize:10,cursor:"pointer",fontWeight:700}}>Open</button>
-              <button onClick={()=>setActiveStream(null)} style={{background:"rgba(255,255,255,.15)",border:"none",color:"#fff",borderRadius:6,padding:"2px 8px",fontSize:10,cursor:"pointer"}}>✕</button>
-            </div>
-          </div>
-          <div id="pip-stream-container" style={{width:"100%",height:"100%"}}/>
-        </div>
+        <PipBox activeStream={activeStream} onOpen={()=>goTo("streams")} onClose={()=>setActiveStream(null)} onMove={(x,y)=>window.electronAPI.streamPip({x,y,width:360,height:203})}/>
       )}
 
       <AutoUpdater/>
@@ -3241,148 +3359,4 @@ export default function App(){
   );
 }
 
-// ── AURA Bar ──────────────────────────────────────────────────────────────────
-export function AuraBar() {
-  const [isRecording, setIsRecording] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const [dragging, setDragging] = useState(false);
-  const [shotFlash, setShotFlash] = useState(false);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
-  const dragStart = useRef(null);
-  const elapsedRef = useRef(null);
-
-  useEffect(() => {
-    document.body.style.overflow = "hidden";
-    document.body.style.background = "transparent";
-    document.documentElement.style.overflow = "hidden";
-    document.documentElement.style.background = "transparent";
-
-    // Sync accent color from localStorage
-    const syncAccent = () => {
-      const accent = localStorage.getItem("aura_accent") || "#FF6B35";
-      document.documentElement.style.setProperty("--ac", accent);
-      document.documentElement.style.setProperty("--acg", accent + "66");
-    };
-    syncAccent();
-    const t = setInterval(syncAccent, 2000);
-    return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    if (!window.electronAPI) return;
-    window.electronAPI.onRecordingStarted?.(() => setIsRecording(true));
-    window.electronAPI.onRecordingStopped?.(() => { setIsRecording(false); setElapsed(0); });
-    const handler = (_e, type) => {
-      if (type === "start") setIsRecording(true);
-      if (type === "stop") { setIsRecording(false); setElapsed(0); }
-    };
-    window.electronAPI.onRecordingHotkey?.(handler);
-  }, []);
-
-  useEffect(() => {
-    if (isRecording) {
-      elapsedRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
-    } else {
-      clearInterval(elapsedRef.current);
-    }
-    return () => clearInterval(elapsedRef.current);
-  }, [isRecording]);
-
-  const fmt = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
-
-  const onMouseDown = (e) => {
-    setDragging(true);
-    dragStart.current = { mx: e.screenX, my: e.screenY };
-    e.preventDefault();
-  };
-
-  useEffect(() => {
-    if (!dragging) return;
-    const onMove = async (e) => {
-      const dx = e.screenX - dragStart.current.mx;
-      const dy = e.screenY - dragStart.current.my;
-      dragStart.current = { mx: e.screenX, my: e.screenY };
-      const win = await window.electronAPI?.getWindowPos?.();
-      if (win) {
-        const nx = win.x + dx;
-        const ny = win.y + dy;
-        window.electronAPI?.aurabarMove?.({ x: nx, y: ny });
-      }
-    };
-    const onUp = () => setDragging(false);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [dragging]);
-
-  const barStyle = {
-    width: "100vw", height: "100vh",
-    display: "flex", alignItems: "center",
-    background: "rgba(15,18,30,0.92)",
-    backdropFilter: "blur(20px)",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.08)",
-    boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
-    padding: "0 40px 0 16px",
-    gap: 8,
-    userSelect: "none",
-    fontFamily: "DM Sans, sans-serif",
-    WebkitAppRegion: "no-drag",
-    overflow: "hidden",
-    flexWrap: "nowrap",
-  };
-
-  const btnStyle = (color) => ({
-    background: color || "rgba(255,255,255,0.08)",
-    border: "none", color: "#fff", borderRadius: 8,
-    padding: "5px 12px", fontSize: 12, cursor: "pointer",
-    display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
-  });
-
-  return (
-    <div style={{...barStyle, position:"relative"}}>
-      <div onMouseDown={onMouseDown} style={{cursor:"grab",color:"rgba(255,255,255,.3)",fontSize:14,padding:"0 2px",flexShrink:0}}>⠿</div>
-      <div style={{fontFamily:"Rajdhani,sans-serif",fontWeight:700,fontSize:12,color:"var(--ac)",letterSpacing:2,flexShrink:0}}>AURA</div>
-      <div style={{width:1,height:16,background:"rgba(255,255,255,.1)",flexShrink:0,margin:"0 2px"}}/>
-      <button style={btnStyle(isRecording ? "#e53935" : "var(--ac)")} onClick={()=>{
-        if (isRecording) {
-          window.electronAPI?.stopBarRecording?.();
-        } else {
-          window.electronAPI?.toggleRecording?.();
-        }
-      }}>
-        {isRecording ? <>⏹ {fmt(elapsed)}</> : <>⏺ Record</>}
-      </button>
-      <button style={btnStyle(shotFlash ? "green" : undefined)} onClick={async()=>{
-        const res = await window.electronAPI?.takeScreenshot?.();
-        if (res?.success) { 
-          setShotFlash(true); 
-          setTimeout(()=>setShotFlash(false), 800);
-          // Refresh screenshots list
-          const sres = await window.electronAPI.getScreenshots?.();
-          if (sres?.success) setScreenshots(sres.screenshots);
-        }
-        else alert("Screenshot failed: " + (res?.error || "Unknown"));
-      }}>📷</button>
-      <button style={btnStyle()} onClick={()=>window.electronAPI?.focusMain?.()}>🎮 Open</button>
-      <div style={{flex:1}}/>
-      <Clock/>
-      {/* Close button - absolute so it can never be hidden */}
-      <div style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)"}}>
-        <button
-          onClick={()=>window.electronAPI?.aurabarHide?.()}
-          style={{background:"rgba(255,255,255,.1)",border:"none",color:"rgba(255,255,255,.6)",borderRadius:6,width:24,height:24,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center"}}
-        >✕</button>
-      </div>
-    </div>
-  );
-}
-
-function Clock() {
-  const [time, setTime] = useState(new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}));
-  useEffect(() => {
-    const t = setInterval(() => setTime(new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})), 10000);
-    return () => clearInterval(t);
-  }, []);
-  return <div style={{fontSize:12,color:"rgba(255,255,255,.5)",flexShrink:0}}>{time}</div>;
-}
+export { default as AuraBar } from "./components/aurabar";
