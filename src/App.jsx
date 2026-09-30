@@ -2576,6 +2576,14 @@ function AutoUpdater() {
 
 
 // ── Settings ──────────────────────────────────────────────────────────────────
+function AppVersion() {
+  const [v, setV] = useState("");
+  useEffect(() => {
+    window.electronAPI?.checkUpdate?.().then(r => { if (r?.current) setV(`v${r.current}`); });
+  }, []);
+  return <>{v}</>;
+}
+
 function UpdateButton() {
   const [status, setStatus] = useState("idle");
   const [latest, setLatest] = useState(null);
@@ -2625,7 +2633,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       <div className="ss">
         <div className="ss-t">ABOUT</div>
         <div className="ss-card">
-          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · v1.2.0</div></div><UpdateButton/></div>
+          <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · <AppVersion/></div></div><UpdateButton/></div>
           <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>

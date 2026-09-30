@@ -5,6 +5,19 @@ process.on('uncaughtException', (e) => {
 const path = require("path");
 const fs   = require("fs");
 const { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut } = require("electron");
+// Only allow one copy of AURA at a time (a second launch just focuses the first)
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+app.on("second-instance", () => {
+  if (mainWin) {
+    if (mainWin.isMinimized()) mainWin.restore();
+    mainWin.show();
+    mainWin.focus();
+  }
+});
+
 const perf = require("./perf");
 perf.register();
 
@@ -438,6 +451,51 @@ rpc.on("ready", () => {
   });
 });
 
+// ── Process watching (for games that go through a launcher like EA, Steam, Epic) ─
+function runQuiet(cmd, args) {
+  return new Promise((resolve) => {
+    const p = spawn(cmd, args, { windowsHide: true });
+    let out = "";
+    p.stdout.on("data", (d) => { out += d.toString(); });
+    p.on("close", () => resolve(out));
+    p.on("error", () => resolve(""));
+  });
+}
+
+// Is a process with this exact name running?
+async function isNameRunning(exeName) {
+  const out = await runQuiet("tasklist", ["/FI", `IMAGENAME eq ${exeName}`, "/NH"]);
+  return out.toLowerCase().includes(exeName.toLowerCase());
+}
+
+// Is anything running from the game's install folder? Catches games whose real
+// process has a different name than the one in the library.
+async function isFolderRunning(dir) {
+  const safe = dir.replace(/'/g, "''").replace(/\\+$/, "") + "\\";
+  const script =
+    `(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and ` +
+    `$_.ExecutablePath.StartsWith('${safe}', [StringComparison]::OrdinalIgnoreCase) }).Count`;
+  const out = await runQuiet("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]);
+  return parseInt(out.trim(), 10) > 0;
+}
+
+async function isGameRunning(exePath) {
+  if (await isNameRunning(path.basename(exePath))) return true;
+  return isFolderRunning(path.dirname(exePath));
+}
+
+// Waits for the game to appear (up to appearMs), then until it closes
+async function waitForGameToClose(exePath, appearMs) {
+  const appearDeadline = Date.now() + appearMs;
+  let seen = false;
+  while (true) {
+    const running = await isGameRunning(exePath);
+    if (running) seen = true;
+    else if (seen || Date.now() > appearDeadline) return;
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+}
+
 // ── Launch Game ───────────────────────────────────────────────────────────────
 // Spawns the game so AURA can see when it closes, then logs the session
 // (playtime + performance summary) back to the app.
@@ -460,6 +518,7 @@ ipcMain.handle("launch-game", async (_e, exePath) => {
 
     // Fallback for games that won't start this way (no session tracking)
     if (!started) {
+      console.log(`Couldn't track ${path.basename(exePath)} (may need admin), opening normally`);
       const err = await shell.openPath(exePath);
       if (err) return { success: false, error: err };
       return { success: true };
@@ -478,12 +537,14 @@ ipcMain.handle("launch-game", async (_e, exePath) => {
     }).catch(() => {});
 
     // When the game closes: send the session + performance summary
-    child.on("exit", () => {
+    const exeName = path.basename(exePath);
+    const finishSession = () => {
       const endTime = Date.now();
       const perfSummary = perf.endSession(exePath);
       gameSessions.delete(exePath);
       if (currentGameName === path.basename(exePath, ".exe")) currentGameName = null;
       pushBarState();
+      console.log(`Session ended: ${exeName} (${Math.round((endTime - startTime) / 1000)}s)`);
 
       mainWin?.webContents.send("game-session-ended", {
         exePath,
@@ -499,6 +560,22 @@ ipcMain.handle("launch-game", async (_e, exePath) => {
         largeImageKey: "aura_logo",
         startTimestamp: new Date(),
       }).catch(() => {});
+    };
+
+    child.on("exit", async () => {
+      if (process.platform === "win32") {
+        const quick = Date.now() - startTime < 60000;
+        if (await isGameRunning(exePath)) {
+          // The launcher closed but the game is still going
+          console.log(`${exeName} handed off, watching the game until it closes...`);
+          await waitForGameToClose(exePath, 0);
+        } else if (quick) {
+          // Launchers like the EA app can take a while to start the real game
+          console.log(`${exeName} exited quickly, waiting up to 3 minutes for the game to start...`);
+          await waitForGameToClose(exePath, 180000);
+        }
+      }
+      finishSession();
     });
 
     child.unref();
@@ -1572,7 +1649,15 @@ ipcMain.handle("check-update", async () => {
     const res     = await axios.get("https://api.github.com/repos/tctray/aura-launcher/releases/latest");
     const latest  = res.data.tag_name?.replace(/^v/, "");
     const current = app.getVersion();
-    return { success: true, latest, current, hasUpdate: latest !== current };
+    // Only offer versions that are actually newer (never a downgrade)
+    const newer = (x, y) => {
+      const px = String(x).split(".").map(Number), py = String(y).split(".").map(Number);
+      for (let i = 0; i < 3; i++) {
+        if ((px[i] || 0) !== (py[i] || 0)) return (px[i] || 0) > (py[i] || 0);
+      }
+      return false;
+    };
+    return { success: true, latest, current, hasUpdate: !!latest && newer(latest, current) };
   } catch(e) { return { success: false, error: e.message }; }
 });
 

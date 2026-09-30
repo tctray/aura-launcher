@@ -13,7 +13,8 @@
     {
       "provider": "github",
       "owner": "tctray",
-      "repo": "aura-launcher"
+      "repo": "aura-launcher",
+      "releaseType": "release"
     }
   ],
   "build": {
