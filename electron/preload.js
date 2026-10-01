@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
   perfSubscribe: () => ipcRenderer.invoke("perf-subscribe"),
+    openClipEditor: () => ipcRenderer.send("open-clip-editor"),
 perfUnsubscribe: () => ipcRenderer.invoke("perf-unsubscribe"),
 onPerfStats: (cb) => {
   const h = (_e, data) => cb(data);

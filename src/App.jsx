@@ -587,6 +587,7 @@ const Ic = {
   Trophy:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M6 9H4a2 2 0 0 1-2-2V5h4"/><path d="M18 9h2a2 2 0 0 0 2-2V5h-4"/><path d="M12 17v4"/><path d="M8 21h8"/><path d="M6 5h12v6a6 6 0 0 1-12 0V5z"/></svg>,
   Palette:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><circle cx="12" cy="12" r="10"/><circle cx="8.5" cy="14.5" r="1.5" fill="currentColor"/><circle cx="15.5" cy="14.5" r="1.5" fill="currentColor"/><circle cx="12" cy="9" r="1.5" fill="currentColor"/></svg>,
   Tv:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>,
+  Friends:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M18 14c2.2.6 3.5 2.8 3.5 6"/></svg>,
 };
 
 // ── Profile Setup ─────────────────────────────────────────────────────────────
@@ -648,7 +649,7 @@ function FriendItem({ friend, onInvite }) {
   );
 }
 
-function FriendsPanel({ launching, toast }) {
+function FriendsPanel({ launching, toast, onClose, hidden }) {
   const [user,setUser]=useState(null);
   const [friends,setFriends]=useState([]);
   const [loading,setLoading]=useState(false);
@@ -689,10 +690,13 @@ function FriendsPanel({ launching, toast }) {
   const handleInvite=async(friend)=>{ if(!launching){toast("Launch a game first to invite friends","err");return;} const res=await window.electronAPI.discordInviteFriend(friend.id,launching.title); if(res.success) toast(`Invite sent to ${friend.username}!`); else toast(`Invite failed: ${res.error}`,"err"); };
 
   return(
-    <div className="fp">
+    <div className="fp" style={hidden?{display:"none"}:undefined}>
       <div className="fp-hdr">
         <span className="fp-title">FRIENDS</span>
-        {loggedIn&&steamTab==="discord"&&<button className="fp-refresh" onClick={loadFriends} title="Refresh"><Ic.Refresh/></button>}
+        <div style={{display:"flex",alignItems:"center",gap:2}}>
+          {loggedIn&&steamTab==="discord"&&<button className="fp-refresh" onClick={loadFriends} title="Refresh"><Ic.Refresh/></button>}
+          <button className="fp-refresh" onClick={onClose} title="Hide friends" aria-label="Hide friends panel"><Ic.X/></button>
+        </div>
       </div>
       <div className="fp-body">
         <div style={{display:"flex",borderBottom:"1px solid var(--border)",marginBottom:12}}>
@@ -2341,6 +2345,7 @@ function ClipsPage({ nowPlayingGame }) {
           ))}
         </div>}
         <button className="btn-g" onClick={()=>setShowSettings(s=>!s)} style={{fontSize:10,flexShrink:0}}>⚙️ Settings</button>
+        <button className="btn-g" onClick={()=>window.electronAPI?.openClipEditor?.()} style={{fontSize:10,flexShrink:0}}>🎞️ Editor</button>
         <button className="btn-g" onClick={async()=>{
           const res = await window.electronAPI?.setClipFolder();
           if(res?.success) setClipFolderState(res.folder);
@@ -2948,6 +2953,9 @@ export default function App(){
     }, 150);
   }, [view, activeStream]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Friends panel: open/closed, remembered between launches
+  const [friendsOpen, setFriendsOpen] = useState(()=>localStorage.getItem("aura_friends_open")!=="0");
+  useEffect(()=>{ try{localStorage.setItem("aura_friends_open",friendsOpen?"1":"0");}catch{} },[friendsOpen]);
   const [bgImage, setBgImage] = useState(()=>localStorage.getItem("aura_bg")||"");
   const [savedThemes, setSavedThemes] = useState(()=>{
     try { return JSON.parse(localStorage.getItem("aura_saved_themes")||"[]"); } catch { return []; }
@@ -3190,6 +3198,10 @@ export default function App(){
                 {it.badge?<div className="gm-rail-badge"/>:null}
               </div>
             ))}
+            <div className="gm-rail-item" onClick={()=>setFriendsOpen(o=>!o)} title={friendsOpen?"Hide friends":"Show friends"} style={{color:friendsOpen?"var(--ac)":undefined}}>
+              <Ic.Friends/>
+              {sidebarOpen&&<span className="gm-rail-item-label">Friends</span>}
+            </div>
             {profile.avatar
               ? <img src={profile.avatar} alt={profile.username} className="gm-rail-avatar" onClick={()=>setShowProfileModal(true)}/>
               : <div className="gm-rail-avatar-ph" onClick={()=>setShowProfileModal(true)}>🎮</div>
@@ -3220,7 +3232,7 @@ export default function App(){
               )}
             </div>
           </div>
-          <FriendsPanel launching={launching} toast={toast}/>
+          <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onClose={()=>setFriendsOpen(false)}/>
         </div>
         {modal==="add"&&<Modal mode="add" onClose={()=>setModal(null)} onSave={doAdd}/>}
         {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={(p)=>{setProfile(p);saveProfile(p);setShowProfileModal(false);toast("Profile updated!");}}/>}
@@ -3270,7 +3282,10 @@ export default function App(){
                 {sidebarOpen&&it.badge?<span className="sb-badge">{it.badge}</span>:null}
               </div>
             ))}
-            
+            <div className="sb-item" onClick={()=>setFriendsOpen(o=>!o)} title={friendsOpen?"Hide friends":"Show friends"} style={{color:friendsOpen?"var(--ac)":undefined}}>
+              <Ic.Friends/>
+              {sidebarOpen&&<span>Friends</span>}
+            </div>
           </div>
           <div className="sb-foot">
             {sidebarOpen&&<div className="sb-stat">
@@ -3356,7 +3371,7 @@ export default function App(){
           {view==="settings"&&<Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames(DEMO_GAMES);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers}/>}
         </div>
 
-        <FriendsPanel launching={launching} toast={toast}/>
+        <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onClose={()=>setFriendsOpen(false)}/>
       </div>
 
       {modal==="add"&&<Modal mode="add" onClose={()=>setModal(null)} onSave={doAdd}/>}

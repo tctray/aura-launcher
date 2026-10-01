@@ -61,6 +61,7 @@ const axios = require("axios");
 const DiscordRPC = require("discord-rpc");
 const Registry = require("winreg");
 const { spawn } = require("child_process");
+const { registerClipEditor, openClipEditor } = require("./clip-editor/main/clip-editor");
 
 // ── Recording state ───────────────────────────────────────────────────────────
 let ffmpegPath = null;
@@ -426,6 +427,7 @@ app.whenReady().then(() => {
     console.log("Clip server running on port:", port);
   });
 
+  registerClipEditor();
   createWindow();
   createAuraBar();
   registerHotkeys();
@@ -622,6 +624,9 @@ ipcMain.handle("open-external", async (_e, url) => {
   await shell.openExternal(url);
   return { success: true };
 });
+
+// ── Clip editor window ────────────────────────────────────────────────────────
+ipcMain.on("open-clip-editor", () => openClipEditor(mainWin));
 
 // ── Steam import — uses registry to find actual Steam path ────────────────────
 ipcMain.handle("import-steam", async () => {
