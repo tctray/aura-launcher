@@ -20,7 +20,26 @@ app.on("second-instance", () => {
 
 const perf = require("./perf");
 perf.register();
-
+// Social page: keep Instagram/X/Facebook inside AURA, open other links in the browser
+const SOCIAL_HOSTS = ["instagram.com", "x.com", "twitter.com", "facebook.com", "messenger.com",
+  "fbcdn.net", "cdninstagram.com", "accounts.google.com", "appleid.apple.com"];
+const isSocialHost = (url) => {
+  try {
+    const h = new URL(url).hostname;
+    return SOCIAL_HOSTS.some((d) => h === d || h.endsWith("." + d));
+  } catch { return false; }
+};
+app.on("web-contents-created", (_e, contents) => {
+  if (contents.getType() !== "webview") return;
+  contents.setWindowOpenHandler(({ url }) => {
+    if (isSocialHost(url)) contents.loadURL(url);
+    else shell.openExternal(url);
+    return { action: "deny" };
+  });
+  contents.on("will-navigate", (e, url) => {
+    if (!isSocialHost(url)) { e.preventDefault(); shell.openExternal(url); }
+  });
+});
 // Load .env — written by CI from GitHub Secrets, or local file in dev
 // Load .env — dev reads from project root, packaged reads from resources/
 // Note: process.resourcesPath is available immediately in main process

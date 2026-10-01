@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import SessionsPage from "./components/sessions";
 import PerformancePage from "./components/performance";
 import { addSession } from "./sessionstore";
+import SocialPage from "./components/social";
 
 const CATEGORIES = ["All","FPS","RPG","Strategy","Action","Adventure","Sports","Simulation","Indie","Other"];
 
@@ -556,8 +557,14 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .fp-refresh{background:transparent;border:none;color:var(--t3);cursor:pointer;padding:4px;border-radius:4px;transition:all .15s;display:flex;align-items:center;justify-content:center}
 .fp-refresh:hover{color:var(--t1)}
 `;
+const AppIcon = ({ name, size = 16 }) => (
+  <img src={`./${name}.png`} alt="" width={size} height={size}
+       style={{ display: "inline-block", verticalAlign: "middle", objectFit: "contain", flexShrink: 0 }} />
+);
 
 const Ic = {
+    Social:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M21 12a8 8 0 0 1-11.8 7L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01" strokeLinecap="round" strokeWidth="2.5"/></svg>,
+  Clips:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/></svg>,
   Menu:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>,
   MenuClose:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
   Home:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
@@ -3118,7 +3125,8 @@ export default function App(){
     {id:"recent",    icon:<Ic.Clock/>,   label:"Recently Played"},
     {id:"favorites", icon:<Ic.Heart/>,   label:"Favorites",       badge:favs.length||null},
     {id:"streams",   icon:<Ic.Tv/>,      label:"Live Streams"},
-    {id:"clips",     icon:<span style={{fontSize:14}}>🎬</span>, label:"Clips"},
+    {id:"social",    icon:<Ic.Social/>, label:"Social"},
+    {id:"clips",     icon:<Ic.Clips/>,  label:"Clips"},
     {id:"sessions",  icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>, label:"Sessions"},
     {id:"performance",icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M4.5 17a8 8 0 1 1 15 0"/><path d="M12 13l4-4"/></svg>, label:"Performance"},
     {id:"achievements",icon:<Ic.Trophy/>,label:"Achievements",    badge:unlockedCount||null},
@@ -3131,7 +3139,7 @@ export default function App(){
   const { connected, hint, hintHide } = useController({
     view, goTo, navItems: [
       {id:"home"},{id:"library"},{id:"recent"},{id:"favorites"},
-      {id:"streams"},{id:"clips"},{id:"achievements"},{id:"customize"},{id:"settings"},
+      {id:"streams"},{id:"social"},{id:"clips"},{id:"sessions"},{id:"performance"},{id:"achievements"},{id:"customize"},{id:"settings"},
     ],
     heroGame, setHeroGame, modal, setModal, doPlay, doFav, games, sorted,
   });
@@ -3262,6 +3270,7 @@ export default function App(){
                 {sidebarOpen&&it.badge?<span className="sb-badge">{it.badge}</span>:null}
               </div>
             ))}
+            
           </div>
           <div className="sb-foot">
             {sidebarOpen&&<div className="sb-stat">
@@ -3322,6 +3331,9 @@ export default function App(){
 
           <div style={{display:view==="streams"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
             <StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)} onStreamChange={s=>setActiveStream(s)}/>
+          </div>
+                    <div style={{display:view==="social"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden",minHeight:0}}>
+            <SocialPage visible={view==="social"}/>
           </div>
 
           {view==="customize"&&<Customize
