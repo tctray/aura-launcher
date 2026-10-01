@@ -5,7 +5,17 @@ const SITES = [
   { id: "instagram", label: "Instagram", url: "https://www.instagram.com/" },
   { id: "x",         label: "X",         url: "https://x.com/home" },
   { id: "facebook",  label: "Facebook",  url: "https://www.facebook.com/" },
+  { id: "browser",   label: "Browser",   url: "https://www.google.com/" },
 ];
+
+// Turn what's typed in the address bar into a URL (or a Google search)
+function toUrl(text) {
+  const t = text.trim();
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(t)) return "https://" + t;
+  return "https://www.google.com/search?q=" + encodeURIComponent(t);
+}
 
 // Present as regular Chrome (drop the "Electron/…" and app-name tokens),
 // so the sites don't show an "unsupported browser" page.
@@ -21,7 +31,7 @@ function SiteView({ site, active, onState, register }) {
     if (!wv) return;
     register(site.id, wv);
     const update = () => {
-      try { onState(site.id, { canGoBack: wv.canGoBack(), url: wv.getURL() }); } catch {}
+      try { onState(site.id, { canGoBack: wv.canGoBack(), canGoForward: wv.canGoForward(), url: wv.getURL() }); } catch {}
     };
     const start = () => onState(site.id, { loading: true });
     const stop = () => { onState(site.id, { loading: false }); update(); };
@@ -51,6 +61,8 @@ function SiteView({ site, active, onState, register }) {
 
 const icons = {
   back: <path d="M15 18l-6-6 6-6" />,
+  forward: <path d="M9 18l6-6-6-6" />,
+  home: (<><path d="M4 11l8-6.5 8 6.5" /><path d="M6.5 9.5V19h11V9.5" /></>),
   reload: (<><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></>),
   external: (<><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></>),
 };
@@ -83,6 +95,20 @@ export default function SocialPage({ visible = true }) {
   const st = states[active] || {};
   const wv = views.current[active];
   const back = () => { try { if (wv?.canGoBack()) wv.goBack(); } catch {} };
+  const forward = () => { try { if (wv?.canGoForward()) wv.goForward(); } catch {} };
+  const goHome = () => { try { wv?.loadURL(SITES.find((s) => s.id === active).url); } catch {} };
+
+  // Address bar (Browser tab)
+  const [addr, setAddr] = useState(null); // null = show the page's URL
+  useEffect(() => { setAddr(null); }, [active, st.url]);
+  const go = (e) => {
+    e.preventDefault();
+    const url = toUrl(addr ?? st.url ?? "");
+    if (url) { try { wv?.loadURL(url); } catch {} }
+    setAddr(null);
+    e.target.querySelector("input")?.blur();
+  };
+  const isBrowser = active === "browser";
   const reload = () => { try { wv?.reload(); } catch {} };
   const openOutside = () => {
     const url = st.url || SITES.find((s) => s.id === active)?.url;
@@ -118,9 +144,33 @@ export default function SocialPage({ visible = true }) {
             );
           })}
         </div>
-        <div style={{ flex: 1 }} />
         <button style={{ ...tool, opacity: st.canGoBack ? 1 : 0.4 }} onClick={back} disabled={!st.canGoBack}
                 title="Back" aria-label="Back"><Svg name="back" /></button>
+        {isBrowser && (
+          <button style={{ ...tool, opacity: st.canGoForward ? 1 : 0.4 }} onClick={forward} disabled={!st.canGoForward}
+                  title="Forward" aria-label="Forward"><Svg name="forward" /></button>
+        )}
+        {isBrowser ? (
+          <form onSubmit={go} style={{ flex: 1, display: "flex" }}>
+            <input
+              value={addr ?? st.url ?? ""}
+              onChange={(e) => setAddr(e.target.value)}
+              onFocus={(e) => e.target.select()}
+              placeholder="Search Google or type a web address"
+              aria-label="Address"
+              spellCheck={false}
+              style={{
+                flex: 1, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8,
+                padding: "7px 12px", color: "var(--t1)", fontSize: 13, outline: "none", fontFamily: "DM Sans, sans-serif",
+              }}
+            />
+          </form>
+        ) : (
+          <div style={{ flex: 1 }} />
+        )}
+        {isBrowser && (
+          <button style={tool} onClick={goHome} title="Home" aria-label="Home"><Svg name="home" /></button>
+        )}
         <button style={tool} onClick={reload} title="Reload" aria-label="Reload"><Svg name="reload" /></button>
         <button style={tool} onClick={openOutside} title="Open in your browser" aria-label="Open in your browser">
           <Svg name="external" />

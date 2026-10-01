@@ -31,13 +31,15 @@ const isSocialHost = (url) => {
 };
 app.on("web-contents-created", (_e, contents) => {
   if (contents.getType() !== "webview") return;
+  // The Browser tab can go anywhere; the social tabs stay on their own sites
+  const isBrowserTab = contents.session === require("electron").session.fromPartition("persist:social-browser");
   contents.setWindowOpenHandler(({ url }) => {
-    if (isSocialHost(url)) contents.loadURL(url);
+    if (isBrowserTab || isSocialHost(url)) contents.loadURL(url);
     else shell.openExternal(url);
     return { action: "deny" };
   });
   contents.on("will-navigate", (e, url) => {
-    if (!isSocialHost(url)) { e.preventDefault(); shell.openExternal(url); }
+    if (!isBrowserTab && !isSocialHost(url)) { e.preventDefault(); shell.openExternal(url); }
   });
 });
 // Load .env — written by CI from GitHub Secrets, or local file in dev
