@@ -61,8 +61,14 @@ const axios = require("axios");
 const DiscordRPC = require("discord-rpc");
 const Registry = require("winreg");
 const { spawn } = require("child_process");
-const { registerClipEditor, openClipEditor } = require("./clip-editor/main/clip-editor");
 
+let registerClipEditor = () => {};
+let openClipEditor = () => dialog.showErrorBox("Clip editor unavailable", "The clip editor couldn't load in this build of AURA.");
+try {
+  ({ registerClipEditor, openClipEditor } = require("./clip-editor/main/clip-editor"));
+} catch (e) {
+  console.error("Clip editor unavailable:", e.message);
+}
 // ── Recording state ───────────────────────────────────────────────────────────
 let ffmpegPath = null;
 let recordingProcess = null;
