@@ -2,33 +2,41 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
   perfSubscribe: () => ipcRenderer.invoke("perf-subscribe"),
-    openClipEditor: () => ipcRenderer.send("open-clip-editor"),
-perfUnsubscribe: () => ipcRenderer.invoke("perf-unsubscribe"),
-onPerfStats: (cb) => {
-  const h = (_e, data) => cb(data);
-  ipcRenderer.on("perf-stats", h);
-  return () => ipcRenderer.removeListener("perf-stats", h);
-},
+  openClipEditor: () => ipcRenderer.send("open-clip-editor"),
+  settingsSync: (patch) => ipcRenderer.invoke("settings-sync", patch),
+  onQuickRecordToggle: (cb) => {
+    const h = (_e, data) => cb(data);
+    ipcRenderer.on("quick-record-toggle", h);
+    return () => ipcRenderer.removeListener("quick-record-toggle", h);
+  },
+  quickRecordState: (state) => ipcRenderer.invoke("quick-record-state", state),
+  getQuickCaptureSource: () => ipcRenderer.invoke("get-quick-capture-source"),
+  perfUnsubscribe: () => ipcRenderer.invoke("perf-unsubscribe"),
+  onPerfStats: (cb) => {
+    const h = (_e, data) => cb(data);
+    ipcRenderer.on("perf-stats", h);
+    return () => ipcRenderer.removeListener("perf-stats", h);
+  },
   barGetState: () => ipcRenderer.invoke("bar-get-state"),
-barToggleRecord: () => ipcRenderer.invoke("bar-record-toggle"),
-barSetExpanded: (open) => ipcRenderer.invoke("bar-set-expanded", open),
-barScreenshot: () => ipcRenderer.invoke("bar-screenshot"),
-barOpenAura: () => ipcRenderer.invoke("focus-main"),
-barClose: () => ipcRenderer.invoke("aurabar-hide"),
-onBarState: (cb) => {
-  const h = (_e, data) => cb(data);
-  ipcRenderer.on("bar-state", h);
-  return () => ipcRenderer.removeListener("bar-state", h);
-},
+  barToggleRecord: () => ipcRenderer.invoke("bar-record-toggle"),
+  barSetExpanded: (open) => ipcRenderer.invoke("bar-set-expanded", open),
+  barScreenshot: () => ipcRenderer.invoke("bar-screenshot"),
+  barOpenAura: () => ipcRenderer.invoke("focus-main"),
+  barClose: () => ipcRenderer.invoke("aurabar-hide"),
+  onBarState: (cb) => {
+    const h = (_e, data) => cb(data);
+    ipcRenderer.on("bar-state", h);
+    return () => ipcRenderer.removeListener("bar-state", h);
+  },
 
   isElectron: true,
 
   // ── Game launching ──────────────────────────────────────────────────────────
   launchGame:          (exePath) => ipcRenderer.invoke("launch-game", exePath),
-onGameSessionEnded: (cb) => {
-  ipcRenderer.on("game-session-ended", cb);
-  return () => ipcRenderer.removeListener("game-session-ended", cb);
-},
+  onGameSessionEnded: (cb) => {
+    ipcRenderer.on("game-session-ended", cb);
+    return () => ipcRenderer.removeListener("game-session-ended", cb);
+  },
   // ── File pickers ────────────────────────────────────────────────────────────
   pickExe:   () => ipcRenderer.invoke("pick-exe"),
   pickImage: () => ipcRenderer.invoke("pick-image"),

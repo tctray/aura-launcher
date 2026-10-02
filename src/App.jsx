@@ -87,6 +87,187 @@ const saveAchievements = (a) => { try { localStorage.setItem("aura_achievements"
 const loadStats = () => { try { const s=localStorage.getItem("aura_stats"); return s?JSON.parse(s):{totalLaunches:0,gamesAdded:0,totalPlaytimeHours:0,favoritesCount:0,streakDays:0,gamesPlayedCount:0,lastPlayedDate:null,playedGameIds:[]}; } catch { return {totalLaunches:0,gamesAdded:0,totalPlaytimeHours:0,favoritesCount:0,streakDays:0,gamesPlayedCount:0,lastPlayedDate:null,playedGameIds:[]}; } };
 const saveStats = (s) => { try { localStorage.setItem("aura_stats",JSON.stringify(s)); } catch {} };
 
+// ── App settings (Settings page) ──────────────────────────────────────────────
+const SETTINGS_DEFAULTS = {
+  // Display
+  anim: true,             // launch overlay
+  counts: true,           // play counts on cards
+  cardSize: "md",         // "sm" | "md" | "lg"
+  zoom: 1,                // UI scale 0.8 – 1.3
+  reduceMotion: false,
+  noBlur: false,
+  windowMode: "maximized",// "maximized" | "fullscreen" | "windowed"
+  // Sound
+  uiSounds: true,
+  uiVolume: 0.5,          // 0 – 1
+  streamVolume: 0.8,      // 0 – 1, streams and trailers
+  // Recording
+  micDevice: "",
+  systemDevice: "",
+  micVolume: 1,           // 0 – 2
+  systemVolume: 1,        // 0 – 2
+  recordSourceId: "",     // screen/window chosen for the AURA Bar and F9
+  recordSourceName: "",
+};
+const MAIN_SETTING_KEYS = ["windowMode","zoom","micDevice","systemDevice","micVolume","systemVolume"];
+const loadSettings = () => {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("aura_settings") || "{}"); } catch {}
+  if (saved.large !== undefined && saved.cardSize === undefined) saved.cardSize = saved.large ? "lg" : "md";
+  delete saved.large;
+  return { ...SETTINGS_DEFAULTS, ...saved };
+};
+let SETTINGS = loadSettings();
+const settingsListeners = new Set();
+const syncSettingsToMain = (patch) => {
+  const forMain = {};
+  for (const k of MAIN_SETTING_KEYS) if (patch[k] !== undefined) forMain[k] = patch[k] === "" ? null : patch[k];
+  if (Object.keys(forMain).length) window.electronAPI?.settingsSync?.(forMain);
+};
+const updateSettings = (patch) => {
+  SETTINGS = { ...SETTINGS, ...patch };
+  try { localStorage.setItem("aura_settings", JSON.stringify(SETTINGS)); } catch {}
+  settingsListeners.forEach((fn) => fn(SETTINGS));
+  syncSettingsToMain(patch);
+};
+function useSettings() {
+  const [s, setS] = useState(SETTINGS);
+  useEffect(() => {
+    settingsListeners.add(setS);
+    return () => settingsListeners.delete(setS);
+  }, []);
+  return s;
+}
+
+// UI sounds, synthesized with Web Audio (no sound files needed)
+let sfxCtx = null;
+let lastBigSfx = 0;
+const playSfx = (kind) => {
+  if (!SETTINGS.uiSounds || SETTINGS.uiVolume <= 0) return;
+  // Don't stack a notification blip on top of a launch or achievement sound
+  const now = Date.now();
+  if (kind === "launch" || kind === "achievement") lastBigSfx = now;
+  else if (kind === "notify" && now - lastBigSfx < 600) return;
+  try {
+    sfxCtx = sfxCtx || new AudioContext();
+    const ctx = sfxCtx;
+    const t = ctx.currentTime;
+    const vol = SETTINGS.uiVolume * 0.25;
+    const tone = (freq, start, dur, type = "sine", peak = 1) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = type;
+      o.frequency.setValueAtTime(freq, t + start);
+      g.gain.setValueAtTime(0.0001, t + start);
+      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol * peak), t + start + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + start + dur);
+      o.connect(g).connect(ctx.destination);
+      o.start(t + start);
+      o.stop(t + start + dur + 0.02);
+    };
+    switch (kind) {
+      case "click":  tone(1400, 0, 0.04, "triangle", 0.35); break;
+      case "launch": tone(440, 0, 0.12); tone(660, 0.08, 0.14); tone(880, 0.16, 0.3); break;
+      case "notify": tone(880, 0, 0.1, "sine", 0.6); tone(1320, 0.08, 0.16, "sine", 0.6); break;
+      case "error":  tone(320, 0, 0.14, "square", 0.25); tone(220, 0.11, 0.2, "square", 0.25); break;
+      case "achievement": tone(660, 0, 0.1); tone(880, 0.08, 0.1); tone(1100, 0.16, 0.1); tone(1320, 0.24, 0.35); break;
+      default: break;
+    }
+  } catch {}
+};
+
+// ── Quick recording (AURA Bar button and F9) ─────────────────────────────────
+// Records the screen under the mouse plus whatever you're hearing (game sound
+// through any headset or speakers) and your mic, mixed with the Settings volumes.
+const quickRec = { recorder: null, cleanup: null, starting: false };
+const isQuickRecording = () => !!quickRec.recorder || quickRec.starting;
+
+async function findMicStream() {
+  if (SETTINGS.micVolume <= 0) return null;
+  try {
+    const first = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const wanted = (SETTINGS.micDevice || "").toLowerCase();
+    if (!wanted) return first;
+    const inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+    const match = inputs.find((d) => d.label.toLowerCase() === wanted)
+      || inputs.find((d) => d.label.toLowerCase().includes(wanted.replace(/^microphone\s*/i, "").replace(/[()]/g, "").trim()));
+    if (!match || first.getAudioTracks()[0]?.getSettings().deviceId === match.deviceId) return first;
+    first.getTracks().forEach((t) => t.stop());
+    return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: match.deviceId } }, video: false });
+  } catch (e) {
+    console.log("Quick record: no mic", e.message);
+    return null;
+  }
+}
+
+async function startQuickRecording(game, sourceId) {
+  if (isQuickRecording()) return true;
+  quickRec.starting = true;
+  let screenStream = null;
+  try {
+    // Screen-share route: main.js answers this request with the chosen screen
+    // and audio: "loopback", which is how Electron captures computer sound.
+    await window.electronAPI.setCaptureSource(sourceId);
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
+    const micStream = await findMicStream();
+
+    const ctx = new AudioContext();
+    try { await ctx.resume(); } catch {}
+    const dest = ctx.createMediaStreamDestination();
+    const gameGain = ctx.createGain();
+    gameGain.gain.value = SETTINGS.systemVolume;
+    gameGain.connect(dest);
+    screenStream.getAudioTracks().forEach((t) => ctx.createMediaStreamSource(new MediaStream([t])).connect(gameGain));
+    if (micStream) {
+      const micGain = ctx.createGain();
+      micGain.gain.value = SETTINGS.micVolume;
+      micGain.connect(dest);
+      micStream.getAudioTracks().forEach((t) => ctx.createMediaStreamSource(new MediaStream([t])).connect(micGain));
+    }
+    console.log("Quick record audio: system tracks =", screenStream.getAudioTracks().length,
+      "| mic tracks =", micStream ? micStream.getAudioTracks().length : 0, "| audio engine =", ctx.state);
+
+    const combined = new MediaStream([...screenStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm";
+    const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 6000000 });
+    await window.electronAPI.startFfmpegPipe(game);
+
+    const pending = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) pending.push(e.data.arrayBuffer().then((buf) => window.electronAPI.pipeToFfmpeg(new Uint8Array(buf))));
+    };
+    recorder.onstop = async () => {
+      await Promise.all(pending); // make sure the last chunk is saved before converting
+      await window.electronAPI.stopFfmpegPipe();
+      quickRec.cleanup?.();
+      quickRec.recorder = null;
+      quickRec.cleanup = null;
+      window.electronAPI.quickRecordState({ recording: false });
+    };
+    quickRec.cleanup = () => {
+      [screenStream, micStream, combined].forEach((st) => st?.getTracks().forEach((t) => t.stop()));
+      ctx.close().catch(() => {});
+    };
+    recorder.start(500);
+    quickRec.recorder = recorder;
+    window.electronAPI.quickRecordState({ recording: true, game });
+    return true;
+  } catch (e) {
+    console.error("Quick record failed:", e);
+    if (quickRec.cleanup) quickRec.cleanup();
+    else screenStream?.getTracks().forEach((t) => t.stop());
+    quickRec.cleanup = null;
+    window.electronAPI.quickRecordState({ recording: false });
+    return false;
+  } finally {
+    quickRec.starting = false;
+  }
+}
+
+function stopQuickRecording() {
+  if (quickRec.recorder && quickRec.recorder.state !== "inactive") quickRec.recorder.stop();
+}
+
 const fmtTime = (ms) => {
   if (!ms) return null;
   const h = Math.floor(ms / 3600000);
@@ -556,6 +737,28 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .fp-empty{text-align:center;padding:20px;color:var(--t3);font-size:11px}
 .fp-refresh{background:transparent;border:none;color:var(--t3);cursor:pointer;padding:4px;border-radius:4px;transition:all .15s;display:flex;align-items:center;justify-content:center}
 .fp-refresh:hover{color:var(--t1)}
+
+/* DISPLAY SETTINGS */
+.cards-sm .grid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px}
+.cards-lg .grid{grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:18px}
+.cards-sm .gm-card{width:112px}
+.cards-lg .gm-card{width:176px}
+.hide-counts .card-plays{display:none}
+.reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{animation-duration:0s!important;animation-delay:0s!important;transition:none!important;scroll-behavior:auto!important}
+.reduce-motion .card:hover,.reduce-motion .gm-card:hover,.reduce-motion .twitch-card:hover,.reduce-motion .gm-mf-card:hover{transform:none!important}
+.reduce-motion .card:hover .card-img,.reduce-motion .twitch-card:hover .twitch-thumb{transform:none!important}
+.no-blur *,.no-blur *::before,.no-blur *::after{backdrop-filter:none!important}
+.no-blur .spotlight-bg,.no-blur .hero-bg{filter:brightness(.3)!important}
+.no-blur .app-bg-overlay{background:rgba(0,0,0,.7)}
+
+/* SETTINGS CONTROLS */
+.set-range{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.set-range input{width:150px;accent-color:var(--ac);cursor:pointer}
+.set-range span{font-size:11px;color:var(--t2);min-width:38px;text-align:right;font-variant-numeric:tabular-nums}
+.seg{display:flex;background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:2px;flex-shrink:0}
+.seg button{background:transparent;border:none;color:var(--t2);font-size:11px;font-weight:600;padding:6px 12px;border-radius:7px;cursor:pointer;font-family:'DM Sans',sans-serif}
+.seg button.on{background:var(--ac);color:#fff}
+.set-select{width:240px;flex-shrink:0;padding:7px 10px;font-size:11.5px}
 `;
 const AppIcon = ({ name, size = 16 }) => (
   <img src={`./${name}.png`} alt="" width={size} height={size}
@@ -860,8 +1063,15 @@ function HeroView({ game, onBack, onPlay, onFav }) {
                 width="100%" height="100%"
                 src={videoId.startsWith("__search__")
                   ? `https://www.youtube.com/embed?listType=search&list=${videoId.replace("__search__","")}`
-                  : `https://www.youtube.com/embed/${videoId}?autoplay=1`
+                  : `https://www.youtube.com/embed/${videoId}?autoplay=1&enablejsapi=1`
                 }
+                onLoad={(e)=>{
+                  // Apply the default stream/trailer volume through the YouTube player API
+                  const w=e.target.contentWindow;
+                  const v=Math.round(SETTINGS.streamVolume*100);
+                  const send=(func,args=[])=>w?.postMessage(JSON.stringify({event:"command",func,args}),"*");
+                  [600,1500].forEach(d=>setTimeout(()=>{ if(v===0) send("mute"); else { send("unMute"); send("setVolume",[v]); } },d));
+                }}
                 allow="autoplay; encrypted-media"
                 allowFullScreen
                 style={{border:"none",display:"block"}}
@@ -1383,8 +1593,8 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
 
   const playerContainerRef = useRef(null);
   const chatContainerRef = useRef(null);
-  const [volume, setVolume] = useState(100);
-  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(() => Math.round(SETTINGS.streamVolume * 100));
+  const [muted, setMuted] = useState(() => SETTINGS.streamVolume === 0);
 
   const setStreamVolume = (vol, mut) => {
     if (!window.electronAPI?.isElectron) return;
@@ -1409,6 +1619,9 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
             channel: activeStream.userLogin || activeStream.user,
             bounds: { x: Math.round(pr.x), y: Math.round(pr.y), width: Math.round(pr.width), height: Math.round(pr.height) }
           });
+          // Apply the default volume once the Twitch player has loaded its video
+          const v = Math.round(SETTINGS.streamVolume * 100);
+          [2500, 6000].forEach(d => setTimeout(() => window.electronAPI.streamSetVolume?.({ volume: v, muted: v === 0 }), d));
         }
         if (chatContainerRef.current && chatOpen && !restored?.success) {
           await window.electronAPI.chatOpen({
@@ -1938,10 +2151,13 @@ function ClipsPage({ nowPlayingGame }) {
     if (ad.success && ad.devices.length) {
       const realDevices = ad.devices.filter(d => !d.startsWith("@"));
       setAudioDevices(realDevices);
+      // Prefer the devices chosen in Settings, otherwise guess
       const stereoMix = realDevices.find(d => d.includes("Stereo Mix"));
-      if (stereoMix) setSelectedSystem(stereoMix);
       const mic = realDevices.find(d => d.toLowerCase().includes("microphone"));
-      if (mic) setSelectedMic(mic);
+      const sys = realDevices.includes(SETTINGS.systemDevice) ? SETTINGS.systemDevice : stereoMix;
+      const micPick = realDevices.includes(SETTINGS.micDevice) ? SETTINGS.micDevice : mic;
+      if (sys) setSelectedSystem(sys);
+      if (micPick) setSelectedMic(micPick);
     }
     setLoading(false);
   };
@@ -2008,7 +2224,9 @@ function ClipsPage({ nowPlayingGame }) {
   const handleRecord = async () => {
     if (!window.electronAPI?.isElectron) return;
     if (isRecording) {
-      mediaRecorderRef.current?.stop();
+      if (isQuickRecording()) stopQuickRecording();
+      else if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") mediaRecorderRef.current.stop();
+      else await window.electronAPI.stopRecording();
       setIsRecording(false);
     } else {
       setPickerLoading(true);
@@ -2041,6 +2259,8 @@ function ClipsPage({ nowPlayingGame }) {
           isScreen: source.isScreen,
           micDevice: selectedMic,
           systemDevice: selectedSystem,
+          micVolume: SETTINGS.micVolume,
+          systemVolume: SETTINGS.systemVolume,
         });
         if (res.success) {
           setIsRecording(true);
@@ -2077,21 +2297,33 @@ function ClipsPage({ nowPlayingGame }) {
         console.log("Mic not available:", e.message);
       }
 
-      // Mix system audio + mic using AudioContext
+      // Mix system audio + mic using AudioContext.
+      // An AudioContext created after several awaits can start "suspended",
+      // which silently records no sound, so make sure it's running.
       const audioCtx = new AudioContext();
+      try { await audioCtx.resume(); } catch {}
+      console.log("Recording audio: system tracks =", stream.getAudioTracks().length,
+        "| mic tracks =", micStream ? micStream.getAudioTracks().length : 0,
+        "| audio engine =", audioCtx.state);
       const destination = audioCtx.createMediaStreamDestination();
 
       // Add system audio tracks
+      const gameGain = audioCtx.createGain();
+      gameGain.gain.value = SETTINGS.systemVolume;
+      gameGain.connect(destination);
       stream.getAudioTracks().forEach(track => {
         const src = audioCtx.createMediaStreamSource(new MediaStream([track]));
-        src.connect(destination);
+        src.connect(gameGain);
       });
 
       // Add mic tracks
       if (micStream) {
+        const micGain = audioCtx.createGain();
+        micGain.gain.value = SETTINGS.micVolume;
+        micGain.connect(destination);
         micStream.getAudioTracks().forEach(track => {
           const src = audioCtx.createMediaStreamSource(new MediaStream([track]));
-          src.connect(destination);
+          src.connect(micGain);
         });
       }
 
@@ -2367,13 +2599,13 @@ function ClipsPage({ nowPlayingGame }) {
         <div style={{padding:"12px 24px",borderBottom:"1px solid var(--border)",background:"var(--panel)",display:"flex",gap:16,alignItems:"center",flexShrink:0,flexWrap:"wrap"}}>
           <div style={{display:"flex",flexDirection:"column",gap:4}}>
             <label style={{fontSize:10,color:"var(--t2)",fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>Microphone</label>
-            <select className="fs" value={selectedMic} onChange={e=>setSelectedMic(e.target.value)} style={{fontSize:11,padding:"5px 10px",minWidth:220}}>
+            <select className="fs" value={selectedMic} onChange={e=>{setSelectedMic(e.target.value);updateSettings({micDevice:e.target.value});}} style={{fontSize:11,padding:"5px 10px",minWidth:220}}>
               {audioDevices.filter(d=>!d.startsWith("@")).map(d=><option key={d} value={d}>{d}</option>)}
             </select>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:4}}>
             <label style={{fontSize:10,color:"var(--t2)",fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>System Audio</label>
-            <select className="fs" value={selectedSystem} onChange={e=>setSelectedSystem(e.target.value)} style={{fontSize:11,padding:"5px 10px",minWidth:220}}>
+            <select className="fs" value={selectedSystem} onChange={e=>{setSelectedSystem(e.target.value);updateSettings({systemDevice:e.target.value});}} style={{fontSize:11,padding:"5px 10px",minWidth:220}}>
               {audioDevices.filter(d=>!d.startsWith("@")).map(d=><option key={d} value={d}>{d}</option>)}
             </select>
           </div>
@@ -2621,15 +2853,82 @@ function UpdateButton() {
   return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Check</button>;
 }
 
+function SetRange({value,min,max,step,onChange,format}){
+  return (
+    <div className="set-range">
+      <input type="range" min={min} max={max} step={step} value={value} onChange={e=>onChange(parseFloat(e.target.value))}/>
+      <span>{format(value)}</span>
+    </div>
+  );
+}
+
+function Seg({value,options,onChange}){
+  return (
+    <div className="seg">
+      {options.map(([v,label])=>(<button key={v} className={value===v?"on":""} onClick={()=>onChange(v)}>{label}</button>))}
+    </div>
+  );
+}
+
 function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetchCovers}){
-  const [s,setS]=useState(()=>{try{return JSON.parse(localStorage.getItem("aura_settings")||"{}")}catch{return{}}});
-  const tog=k=>{const n={...s,[k]:!s[k]};setS(n);try{localStorage.setItem("aura_settings",JSON.stringify(n))}catch{}};
-  const rows=[{k:"anim",l:"Launch Animation",d:"Show launch overlay when starting a game"},{k:"large",l:"Large Card Grid",d:"Bigger cards for easier reading"},{k:"counts",l:"Show Play Counts",d:"Display session counts on each card"}];
+  const s=useSettings();
+  const set=(patch)=>updateSettings(patch);
+  const pct=(v)=>`${Math.round(v*100)}%`;
+  const [devices,setDevices]=useState(null);
+  useEffect(()=>{
+    if(!window.electronAPI?.isElectron){ setDevices([]); return; }
+    window.electronAPI.getAudioDevices().then(r=>setDevices(r?.success?r.devices.filter(d=>!d.startsWith("@")):[])).catch(()=>setDevices([]));
+  },[]);
+  const deviceOptions=(current)=>{
+    const list=devices||[];
+    const opts=current&&!list.includes(current)?[current,...list]:list;
+    return [<option key="" value="">Automatic</option>,...opts.map(d=><option key={d} value={d}>{d}</option>)];
+  };
+  const Tog=({k})=>(<div className={`tog ${s[k]?"on":""}`} onClick={()=>set({[k]:!s[k]})}/>);
   return(
     <div className="sc">
       <div className="ss">
         <div className="ss-t">DISPLAY</div>
-        <div className="ss-card">{rows.map(r=>(<div className="sr" key={r.k}><div><div className="sr-l">{r.l}</div><div className="sr-s">{r.d}</div></div><div className={`tog ${s[r.k]?"on":""}`} onClick={()=>tog(r.k)}/></div>))}</div>
+        <div className="ss-card">
+          <div className="sr"><div><div className="sr-l">UI Scale</div><div className="sr-s">Make everything in AURA bigger or smaller</div></div>
+            <SetRange value={s.zoom} min={0.8} max={1.3} step={0.05} onChange={v=>set({zoom:v})} format={pct}/></div>
+          <div className="sr"><div><div className="sr-l">Card Size</div><div className="sr-s">Size of game cards in the library and shelves</div></div>
+            <Seg value={s.cardSize} options={[["sm","Small"],["md","Medium"],["lg","Large"]]} onChange={v=>set({cardSize:v})}/></div>
+          <div className="sr"><div><div className="sr-l">Window Mode</div><div className="sr-s">How AURA opens. Press F11 to toggle fullscreen anytime</div></div>
+            <Seg value={s.windowMode} options={[["maximized","Maximized"],["fullscreen","Fullscreen"],["windowed","Windowed"]]} onChange={v=>set({windowMode:v})}/></div>
+          <div className="sr"><div><div className="sr-l">Reduce Animations</div><div className="sr-s">Turn off motion, hover lifts and transitions</div></div><Tog k="reduceMotion"/></div>
+          <div className="sr"><div><div className="sr-l">Disable Blur Effects</div><div className="sr-s">Faster on older PCs and integrated graphics</div></div><Tog k="noBlur"/></div>
+          <div className="sr"><div><div className="sr-l">Launch Animation</div><div className="sr-s">Show launch overlay when starting a game</div></div><Tog k="anim"/></div>
+          <div className="sr"><div><div className="sr-l">Show Play Counts</div><div className="sr-s">Display playtime or session counts on each card</div></div><Tog k="counts"/></div>
+        </div>
+      </div>
+      <div className="ss">
+        <div className="ss-t">SOUND</div>
+        <div className="ss-card">
+          <div className="sr"><div><div className="sr-l">UI Sounds</div><div className="sr-s">Clicks, game launch, notifications and achievements</div></div><Tog k="uiSounds"/></div>
+          <div className="sr" style={{opacity:s.uiSounds?1:.5}}><div><div className="sr-l">UI Sound Volume</div><div className="sr-s">How loud AURA's own sounds are</div></div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <SetRange value={s.uiVolume} min={0} max={1} step={0.05} onChange={v=>set({uiVolume:v})} format={pct}/>
+              <button className="btn-gh" style={{fontSize:11,padding:"5px 10px"}} onClick={()=>playSfx("notify")}>Test</button>
+            </div></div>
+          <div className="sr"><div><div className="sr-l">Stream &amp; Trailer Volume</div><div className="sr-s">Starting volume for Twitch streams and game trailers</div></div>
+            <SetRange value={s.streamVolume} min={0} max={1} step={0.05} onChange={v=>set({streamVolume:v})} format={pct}/></div>
+        </div>
+      </div>
+      <div className="ss">
+        <div className="ss-t">RECORDING</div>
+        <div className="ss-card">
+          <div className="sr"><div><div className="sr-l">Recording Screen</div><div className="sr-s">{s.recordSourceName?`AURA Bar and F9 record: ${s.recordSourceName}`:"You'll be asked the first time you record with the bar or F9"}</div></div>
+            {s.recordSourceId&&<button className="btn-gh" style={{fontSize:11,padding:"5px 12px"}} onClick={()=>set({recordSourceId:"",recordSourceName:""})}>Choose again</button>}</div>
+          <div className="sr"><div><div className="sr-l">Microphone</div><div className="sr-s">{devices===null?"Looking for devices…":"Default mic for clips and the F9 hotkey"}</div></div>
+            <select className="fs set-select" value={s.micDevice} onChange={e=>set({micDevice:e.target.value})}>{deviceOptions(s.micDevice)}</select></div>
+          <div className="sr"><div><div className="sr-l">System Audio</div><div className="sr-s">Game sound source, usually "Stereo Mix"</div></div>
+            <select className="fs set-select" value={s.systemDevice} onChange={e=>set({systemDevice:e.target.value})}>{deviceOptions(s.systemDevice)}</select></div>
+          <div className="sr"><div><div className="sr-l">Mic Volume</div><div className="sr-s">Your voice in recordings</div></div>
+            <SetRange value={s.micVolume} min={0} max={2} step={0.05} onChange={v=>set({micVolume:v})} format={pct}/></div>
+          <div className="sr"><div><div className="sr-l">Game Volume</div><div className="sr-s">Game and system sound in recordings</div></div>
+            <SetRange value={s.systemVolume} min={0} max={2} step={0.05} onChange={v=>set({systemVolume:v})} format={pct}/></div>
+        </div>
       </div>
       <div className="ss">
         <div className="ss-t">LIBRARY</div>
@@ -2907,6 +3206,86 @@ export default function App(){
   const [splash,setSplash]=useState(true);
   const [splashHide,setSplashHide]=useState(false);
   const [showProfileModal,setShowProfileModal]=useState(false);
+  const settings=useSettings();
+
+  // Apply display settings as classes on <html>
+  useEffect(()=>{
+    const cl=document.documentElement.classList;
+    cl.toggle("reduce-motion",!!settings.reduceMotion);
+    cl.toggle("no-blur",!!settings.noBlur);
+    cl.toggle("hide-counts",!settings.counts);
+    ["sm","md","lg"].forEach(z=>cl.toggle(`cards-${z}`,settings.cardSize===z));
+  },[settings.reduceMotion,settings.noBlur,settings.counts,settings.cardSize]);
+
+  // Send saved window/zoom/recording settings to the main process on startup
+  useEffect(()=>{ syncSettingsToMain(SETTINGS); },[]);
+
+  // AURA Bar record button and F9. The first time, ask which screen to record;
+  // after that, reuse the saved choice so recording is hands-free.
+  const [quickPicker,setQuickPicker]=useState({open:false,loading:false,sources:[]});
+  const quickGameRef=useRef("General");
+  const closeQuickPicker=()=>setQuickPicker({open:false,loading:false,sources:[]});
+  const openQuickPicker=async(game)=>{
+    quickGameRef.current=game||"General";
+    window.electronAPI.focusMain?.();
+    setQuickPicker({open:true,loading:true,sources:[]});
+    const res=await window.electronAPI.getCaptureSources();
+    setQuickPicker({open:true,loading:false,sources:res?.success?res.sources:[]});
+  };
+  const pickQuickSource=async(src)=>{
+    closeQuickPicker();
+    updateSettings({recordSourceId:src.id,recordSourceName:src.name});
+    const ok=await startQuickRecording(quickGameRef.current,src.id);
+    if(!ok) toast("Recording couldn't start. Check the terminal for details.","err");
+  };
+  useEffect(()=>{
+    if(!window.electronAPI?.onQuickRecordToggle) return;
+    return window.electronAPI.onQuickRecordToggle(async({game})=>{
+      if(isQuickRecording()){ stopQuickRecording(); return; }
+      if(SETTINGS.recordSourceId){
+        const res=await window.electronAPI.getCaptureSources();
+        const stillThere=res?.success&&res.sources.some(x=>x.id===SETTINGS.recordSourceId);
+        if(stillThere&&await startQuickRecording(game,SETTINGS.recordSourceId)) return;
+      }
+      openQuickPicker(game);
+    });
+  },[]);
+
+  const quickPickerModal=quickPicker.open&&(
+    <div className="mbk" onClick={e=>e.target===e.currentTarget&&closeQuickPicker()}>
+      <div className="modal" style={{width:720}}>
+        <div className="mh"><div className="mt">WHAT DO YOU WANT TO RECORD?</div><button className="mc" onClick={closeQuickPicker}><Ic.X/></button></div>
+        <div className="mb">
+          <div style={{fontSize:11,color:"var(--t2)",marginBottom:14}}>AURA remembers your choice, so the bar button and F9 start recording straight away next time. You can change it in Settings.</div>
+          {quickPicker.loading?<div className="empty" style={{height:160}}>Loading screens…</div>:(
+            ["Screens","Windows"].map(group=>{
+              const list=quickPicker.sources.filter(x=>group==="Screens"?x.isScreen:!x.isScreen);
+              if(!list.length) return null;
+              return (<div key={group} style={{marginBottom:16}}>
+                <div className="fl" style={{marginBottom:8}}>{group}</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:10}}>
+                  {list.map(x=>(
+                    <button key={x.id} onClick={()=>pickQuickSource(x)} style={{all:"unset",cursor:"pointer",borderRadius:10,overflow:"hidden",border:"2px solid var(--border)",background:"var(--card)"}}
+                      onMouseEnter={e=>e.currentTarget.style.borderColor="var(--ac)"} onMouseLeave={e=>e.currentTarget.style.borderColor="var(--border)"}>
+                      <img src={x.thumbnail} alt="" style={{width:"100%",aspectRatio:"16/9",objectFit:"cover",display:"block",background:"#000"}}/>
+                      <div style={{padding:"7px 9px",fontSize:11,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{x.isScreen?"🖥️ ":""}{x.name}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>);
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  // Click sound for buttons and menu items
+  useEffect(()=>{
+    const onDown=(e)=>{ if(e.target.closest?.("button,.sb-item,.gm-rail-item,.chip,.tog,.gm-card,.card,.gm-mf-card,.twitch-card")) playSfx("click"); };
+    document.addEventListener("pointerdown",onDown);
+    return()=>document.removeEventListener("pointerdown",onDown);
+  },[]);
 
   const [nowPlaying, setNowPlaying] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -2980,6 +3359,7 @@ export default function App(){
       newlyUnlocked.forEach(a => {
         const id = uid();
         setAchToasts(t => [...t, { id, achievement: a }]);
+        playSfx("achievement");
         setTimeout(() => setAchToasts(t => t.filter(x => x.id !== id)), 4000);
       });
     }
@@ -3008,7 +3388,7 @@ export default function App(){
   const handleAccentChange = useCallback((color) => { setAccent(color);saveAccent(color||"");applyTheme(theme,color,customColors); }, [theme, customColors]);
   const handleCustomColorsChange = useCallback((colors) => { setCustomColors(colors);saveCustomTheme(colors);applyTheme("custom",accent,colors); }, [accent]);
   const updateStats = useCallback((patch) => { setStats(prev=>{ const updated={...prev,...patch};saveStats(updated);checkAchievements(updated,unlockedAch);return updated; }); }, [checkAchievements, unlockedAch]);
-  const toast=useCallback((msg,type="ok")=>{ const id=uid();setToasts(t=>[...t,{id,msg,type}]);setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),3000); },[]);
+  const toast=useCallback((msg,type="ok")=>{ playSfx(type==="err"?"error":"notify"); const id=uid();setToasts(t=>[...t,{id,msg,type}]);setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),3000); },[]);
 
   const saveCustomTheme2 = useCallback((named) => {
     const updated = [...savedThemes.filter(t=>t.name!==named.name), named];
@@ -3036,7 +3416,7 @@ export default function App(){
     if(window.electronAPI?.isElectron){
       const result=await window.electronAPI.launchGame(game.exePath);
       setLaunching(null);
-      if(result.success){ toast(`${game.title} launched!`); setNowPlaying(game); setRecGame(game.title); }
+      if(result.success){ playSfx("launch"); toast(`${game.title} launched!`); setNowPlaying(game); setRecGame(game.title); }
       else toast(`Launch failed: ${result.error}`,"err");
     } else {
       setTimeout(()=>{setLaunching(null);toast(`${game.title} launched!`);setNowPlaying(game);},2200);
@@ -3236,11 +3616,12 @@ export default function App(){
         </div>
         {modal==="add"&&<Modal mode="add" onClose={()=>setModal(null)} onSave={doAdd}/>}
         {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={(p)=>{setProfile(p);saveProfile(p);setShowProfileModal(false);toast("Profile updated!");}}/>}
-        {launching&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
+        {launching&&settings.anim&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
         {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
+        {quickPickerModal}
         <AutoUpdater/>
         <ControllerHUD/>
-        {isRecording&&<RecordingIndicator game={recGame} elapsed={recElapsed} onStop={async()=>{await window.electronAPI?.stopRecording();setIsRecording(false);}}/>}
+        {isRecording&&<RecordingIndicator game={recGame} elapsed={recElapsed} onStop={async()=>{ if(isQuickRecording()) stopQuickRecording(); else await window.electronAPI?.stopRecording(); setIsRecording(false);}}/>}
         <div className="tc">
           {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
           {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}
@@ -3378,7 +3759,7 @@ export default function App(){
       {modal==="edit"&&editT&&<Modal mode="edit" init={editT} onClose={()=>{setModal(null);setEditT(null);}} onSave={doEdit}/>}
       {modal==="delete"&&delT&&<DelModal game={delT} onClose={()=>{setModal(null);setDelT(null);}} onOk={doDel}/>}
       {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={(p)=>{setProfile(p);saveProfile(p);setShowProfileModal(false);toast("Profile updated!");}}/>}
-      {launching&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
+      {launching&&settings.anim&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
       {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
 
       {/* PiP stream player - shows when stream is active but not on streams view */}
@@ -3386,6 +3767,7 @@ export default function App(){
         <PipBox activeStream={activeStream} onOpen={()=>goTo("streams")} onClose={()=>setActiveStream(null)} onMove={(x,y)=>window.electronAPI.streamPip({x,y,width:360,height:203})}/>
       )}
 
+      {quickPickerModal}
       <AutoUpdater/>
       <ControllerHUD/>
       <div className="tc">

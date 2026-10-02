@@ -61,7 +61,7 @@ const axios = require("axios");
 const DiscordRPC = require("discord-rpc");
 const Registry = require("winreg");
 const { spawn } = require("child_process");
-
+// Load the clip editor, but never let it stop AURA from starting
 let registerClipEditor = () => {};
 let openClipEditor = () => dialog.showErrorBox("Clip editor unavailable", "The clip editor couldn't load in this build of AURA.");
 try {
@@ -69,6 +69,47 @@ try {
 } catch (e) {
   console.error("Clip editor unavailable:", e.message);
 }
+
+// ── App settings the main process needs (window, zoom, recording) ─────────────
+// The Settings page keeps these in sync through the "settings-sync" IPC call.
+const appSettings = {
+  windowMode: "maximized",   // "maximized" | "fullscreen" | "windowed"
+  zoom: 1,                   // UI scale, 0.8 – 1.3
+  micDevice: null,
+  systemDevice: null,
+  micVolume: 1,              // 0 – 2
+  systemVolume: 1,           // 0 – 2
+};
+const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
+function loadAppSettings() {
+  try { Object.assign(appSettings, JSON.parse(fs.readFileSync(settingsFile(), "utf8"))); } catch {}
+}
+function saveAppSettings() {
+  try { fs.writeFileSync(settingsFile(), JSON.stringify(appSettings, null, 2)); } catch (e) { console.error("Settings save failed:", e.message); }
+}
+function applyWindowMode(mode) {
+  if (!mainWin) return;
+  if (mode === "fullscreen") {
+    mainWin.setFullScreen(true);
+    return;
+  }
+  if (mainWin.isFullScreen()) mainWin.setFullScreen(false);
+  if (mode === "windowed") {
+    mainWin.unmaximize();
+    mainWin.setSize(1280, 800);
+    mainWin.center();
+  } else {
+    mainWin.maximize();
+  }
+}
+// BrowserView bounds are in window pixels; the page measures in CSS pixels,
+// which differ once the UI is zoomed.
+function zoomBounds(b) {
+  if (!b) return b;
+  const z = mainWin?.webContents.getZoomFactor() || 1;
+  return { x: Math.round(b.x * z), y: Math.round(b.y * z), width: Math.round(b.width * z), height: Math.round(b.height * z) };
+}
+
 // ── Recording state ───────────────────────────────────────────────────────────
 let ffmpegPath = null;
 let recordingProcess = null;
@@ -186,12 +227,21 @@ function createWindow() {
       webviewTag: true,
       webSecurity: false,
       enableBlinkFeatures: "GetDisplayMedia",
+      autoplayPolicy: "no-user-gesture-required", // lets recording audio start without a fresh click
+      backgroundThrottling: false, // keep recording smoothly while AURA is minimized behind a game
       allowRunningInsecureContent: true,
       sandbox: false,
     },
   });
-  mainWin.maximize();
+  applyWindowMode(appSettings.windowMode);
   mainWin.once("ready-to-show", () => mainWin.show());
+  mainWin.webContents.on("did-finish-load", () => {
+    mainWin?.webContents.setZoomFactor(appSettings.zoom || 1);
+  });
+  // F11 toggles fullscreen, so there's always a way out of fullscreen mode
+  mainWin.webContents.on("before-input-event", (_e, input) => {
+    if (input.type === "keyDown" && input.key === "F11") mainWin.setFullScreen(!mainWin.isFullScreen());
+  });
 
   // Closing AURA also closes the AURA Bar and fully quits the app
   mainWin.on("closed", () => {
@@ -203,7 +253,9 @@ function createWindow() {
   // Allow getUserMedia with desktop capture source
   mainWin.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     // Allow all media permissions including microphone
-    const allowed = ["media", "audioCapture", "desktopCapture", "mediaKeySystem"];
+    // "display-capture" is what getDisplayMedia asks for. Without it, screen recording
+    // with computer sound is refused and AURA falls back to Stereo Mix.
+    const allowed = ["media", "audioCapture", "desktopCapture", "display-capture", "mediaKeySystem"];
     callback(allowed.includes(permission) || permission.includes("media") || permission.includes("audio"));
   });
 
@@ -282,15 +334,45 @@ function pushBarState() {
 }
 
 function toggleRecordingHotkey() {
-  if (isRecording) {
+  // An FFmpeg screen-grab recording is running (older method): stop it
+  if (recordingProcess) {
     stopRecording();
     mainWin?.webContents.send("recording-hotkey", "stop");
-  } else {
-    startRecording(currentGameName || recordingGame || "General");
-    mainWin?.webContents.send("recording-hotkey", "start");
+    pushBarState();
+    return;
   }
+  // Quick recording happens in the AURA window, which captures the screen together
+  // with whatever you hear (any headset or speakers), unlike "Stereo Mix".
+  if (mainWin && !mainWin.isDestroyed()) {
+    mainWin.webContents.send("quick-record-toggle", { game: currentGameName || recordingGame || "General" });
+    return;
+  }
+  startRecording(currentGameName || recordingGame || "General");
   pushBarState();
 }
+
+// The AURA window reports when a quick recording starts or stops
+ipcMain.handle("quick-record-state", (_e, { recording, game }) => {
+  isRecording = !!recording;
+  if (recording) {
+    recordingGame = game || "General";
+    recordingStartTime = Date.now();
+    mainWin?.webContents.send("recording-started", { game: recordingGame });
+  } else {
+    recordingStartTime = null;
+  }
+  pushBarState();
+  return { success: true };
+});
+
+// Pick the screen the mouse is on, for hands-free recording
+ipcMain.handle("get-quick-capture-source", async () => {
+  const { desktopCapturer, screen } = require("electron");
+  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const match = sources.find((s) => s.display_id === String(display.id)) || sources[0];
+  return match ? { id: match.id, name: match.name } : null;
+});
 
 ipcMain.handle("bar-get-state", () => barState());
 
@@ -433,6 +515,7 @@ app.whenReady().then(() => {
     console.log("Clip server running on port:", port);
   });
 
+  loadAppSettings();
   registerClipEditor();
   createWindow();
   createAuraBar();
@@ -633,6 +716,20 @@ ipcMain.handle("open-external", async (_e, url) => {
 
 // ── Clip editor window ────────────────────────────────────────────────────────
 ipcMain.on("open-clip-editor", () => openClipEditor(mainWin));
+
+// ── Settings sync from the Settings page ──────────────────────────────────────
+ipcMain.handle("settings-sync", (_e, patch = {}) => {
+  const prevMode = appSettings.windowMode;
+  const prevZoom = appSettings.zoom;
+  for (const key of Object.keys(appSettings)) {
+    if (patch[key] !== undefined) appSettings[key] = patch[key];
+  }
+  appSettings.zoom = Math.min(1.3, Math.max(0.8, Number(appSettings.zoom) || 1));
+  saveAppSettings();
+  if (appSettings.windowMode !== prevMode) applyWindowMode(appSettings.windowMode);
+  if (appSettings.zoom !== prevZoom) mainWin?.webContents.setZoomFactor(appSettings.zoom);
+  return { ...appSettings };
+});
 
 // ── Steam import — uses registry to find actual Steam path ────────────────────
 ipcMain.handle("import-steam", async () => {
@@ -1059,8 +1156,11 @@ function startRecording(gameName, opts = {}) {
     gdigrabInput = `title=${opts.sourceName}`;
   }
 
-  const micDevice = opts.micDevice || "Microphone (Arctis Nova 7 Gen 2)";
-  const systemAudio = opts.systemDevice || "Stereo Mix (Realtek(R) Audio)";
+  const micDevice = opts.micDevice || appSettings.micDevice || "Microphone (Arctis Nova 7 Gen 2)";
+  const systemAudio = opts.systemDevice || appSettings.systemDevice || "Stereo Mix (Realtek(R) Audio)";
+  const vol = (v, d) => (Number.isFinite(+v) ? Math.min(2, Math.max(0, +v)) : d);
+  const micVolume = vol(opts.micVolume, vol(appSettings.micVolume, 1));
+  const systemVolume = vol(opts.systemVolume, vol(appSettings.systemVolume, 1));
 
   const args = [
     "-thread_queue_size", "512",
@@ -1074,16 +1174,18 @@ function startRecording(gameName, opts = {}) {
     "-thread_queue_size", "512",
     "-f", "dshow",
     "-i", `audio=${micDevice}`,
-    "-filter_complex", "[1:a][2:a]amix=inputs=2:duration=longest[aout]",
+    "-filter_complex", `[1:a]volume=${systemVolume.toFixed(2)}[sys];[2:a]volume=${micVolume.toFixed(2)}[mic];[sys][mic]amix=inputs=2:duration=longest[aout]`,
     "-map", "0:v",
     "-map", "[aout]",
     "-vcodec", "libx264",
     "-preset", "ultrafast",
     "-crf", "23",
+    "-g", "60",            // keyframe every 2s so each fragment is written promptly
     "-pix_fmt", "yuv420p",
     "-acodec", "aac",
     "-b:a", "128k",
-    "-movflags", "+faststart",
+    // Fragmented MP4: the file is playable even if FFmpeg is stopped abruptly
+    "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
     "-y",
     outFile
   ];
@@ -1125,20 +1227,27 @@ function startRecording(gameName, opts = {}) {
 
 function stopRecording() {
   if (!isRecording || !recordingProcess) return { success: false, error: "Not recording" };
+  const proc = recordingProcess;
   try {
-    recordingProcess.stdin.write("q");
+    proc.stdin.write("q\n");
+    proc.stdin.end();
   } catch {}
+  // Only force-kill if FFmpeg hasn't finished writing after 15 seconds
   setTimeout(() => {
-    if (recordingProcess) recordingProcess.kill("SIGKILL");
-  }, 2000);
+    if (recordingProcess === proc) proc.kill("SIGKILL");
+  }, 15000);
   isRecording = false;
   pushBarState();
   return { success: true };
 }
 
 // Get available audio devices
+let audioDeviceCache = null;
 ipcMain.handle("get-audio-devices", async () => {
   if (!ffmpegPath) return { success: false, devices: [] };
+  if (audioDeviceCache && Date.now() - audioDeviceCache.at < 60000) {
+    return { success: true, devices: audioDeviceCache.devices };
+  }
   try {
     const result = await Promise.race([
       new Promise((resolve) => {
@@ -1160,7 +1269,8 @@ ipcMain.handle("get-audio-devices", async () => {
         if (match) devices.push(match[1]);
       }
     }
-    console.log("Audio devices found:", devices);
+    console.log("Audio devices found:", devices.filter((d) => !d.startsWith("@")));
+    if (devices.length) audioDeviceCache = { at: Date.now(), devices };
     return { success: true, devices };
   } catch(e) {
     return { success: false, devices: [] };
@@ -1256,6 +1366,7 @@ ipcMain.handle("stop-ffmpeg-pipe", async () => {
       "-c:v", "libx264",
       "-preset", "ultrafast",
       "-crf", "23",
+      "-pix_fmt", "yuv420p",
       "-c:a", "aac",
       "-b:a", "128k",
       "-movflags", "+faststart",
@@ -1263,16 +1374,21 @@ ipcMain.handle("stop-ffmpeg-pipe", async () => {
       outFile
     ];
 
-    await new Promise((resolve) => {
+    let convertLog = "";
+    const code = await new Promise((resolve) => {
       const proc = spawn(ffmpegPath, args, { windowsHide: true });
-      proc.stderr.on("data", d => console.log("convert:", d.toString().slice(0, 100)));
-      proc.on("close", (code) => {
-        console.log("convert closed:", code, "->", outFile);
-        // Delete temp webm
-        try { fs.unlinkSync(webmFile); } catch {}
-        resolve(code);
-      });
+      proc.stderr.on("data", d => { convertLog = (convertLog + d.toString()).slice(-2000); });
+      proc.on("error", () => resolve(-1));
+      proc.on("close", resolve);
     });
+    console.log("convert closed:", code, "->", outFile);
+    if (code === 0) {
+      try { fs.unlinkSync(webmFile); } catch {}
+    } else {
+      // Keep the original recording so nothing is lost
+      console.error("Conversion failed, keeping", webmFile, "\n", convertLog.split("\n").slice(-6).join("\n"));
+      try { fs.unlinkSync(outFile); } catch {}
+    }
 
     mainWin?.webContents.send("recording-stopped", { file: outFile });
     auraBar?.webContents.send("recording-stopped");
@@ -1503,12 +1619,12 @@ ipcMain.handle("stream-restore", async (_e, { bounds, chatBounds }) => {
     if (!mainWin.getBrowserViews().includes(streamView)) {
       mainWin.addBrowserView(streamView);
     }
-    streamView.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) });
+    streamView.setBounds(zoomBounds(bounds));
     if (mainWin.chatView && chatBounds) {
       if (!mainWin.getBrowserViews().includes(mainWin.chatView)) {
         mainWin.addBrowserView(mainWin.chatView);
       }
-      mainWin.chatView.setBounds({ x: Math.round(chatBounds.x), y: Math.round(chatBounds.y), width: Math.round(chatBounds.width), height: Math.round(chatBounds.height) });
+      mainWin.chatView.setBounds(zoomBounds(chatBounds));
     }
     return { success: true };
   } catch(e) {
@@ -1526,7 +1642,7 @@ ipcMain.handle("stream-open", async (_e, { channel, bounds }) => {
     webPreferences: { contextIsolation: true, nodeIntegration: false }
   });
   mainWin.addBrowserView(streamView);
-  streamView.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+  streamView.setBounds(zoomBounds(bounds));
   streamView.setAutoResize({ width: false, height: false });
   streamView.webContents.loadURL(
     `https://player.twitch.tv/?channel=${channel}&parent=aura-launcher&autoplay=true&muted=false`
@@ -1616,7 +1732,7 @@ async function captureScreenshot() {
 ipcMain.handle("stream-pip", async (_e, bounds) => {
   console.log("stream-pip called, bounds:", bounds, "chatView:", !!mainWin.chatView, "streamView:", !!streamView);
   if (streamView) {
-    streamView.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) });
+    streamView.setBounds(zoomBounds(bounds));
   }
   // Hide chat in PiP mode
   if (mainWin.chatView) {
@@ -1626,7 +1742,7 @@ ipcMain.handle("stream-pip", async (_e, bounds) => {
 });
 
 ipcMain.handle("stream-resize", async (_e, bounds) => {
-  if (streamView) streamView.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+  if (streamView) streamView.setBounds(zoomBounds(bounds));
   return { success: true };
 });
 
@@ -1650,7 +1766,7 @@ ipcMain.handle("chat-open", async (_e, { channel, bounds }) => {
     webPreferences: { contextIsolation: true, nodeIntegration: false }
   });
   mainWin.addBrowserView(mainWin.chatView);
-  mainWin.chatView.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+  mainWin.chatView.setBounds(zoomBounds(bounds));
   mainWin.chatView.webContents.loadURL(
     `https://www.twitch.tv/embed/${channel}/chat?parent=aura-launcher&darkpopout`
   );
