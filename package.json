@@ -1,7 +1,7 @@
 {
   "name": "aura",
   "private": true,
-  "version": "1.7.0",
+  "version": "1.7.1",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -17,8 +17,12 @@
       "releaseType": "release"
     }
   ],
-  "build": {
+ "build": {
     "appId": "com.aura.launcher",
+    "nsis": {
+      "include": "build/installer.nsh",
+      "artifactName": "AURA-Installer-${version}.${ext}"
+    },
     "productName": "aura",
     "asarUnpack": [
       "node_modules/@ffmpeg-installer/**",
