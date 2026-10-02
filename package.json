@@ -1,7 +1,7 @@
 {
   "name": "aura",
   "private": true,
-  "version": "1.7.2",
+  "version": "1.7.3",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -17,7 +17,7 @@
       "releaseType": "release"
     }
   ],
- "build": {
+  "build": {
     "appId": "com.aura.launcher",
     "nsis": {
       "include": "build/installer.nsh",
