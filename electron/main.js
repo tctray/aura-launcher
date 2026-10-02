@@ -521,9 +521,22 @@ app.whenReady().then(() => {
   createAuraBar();
   registerHotkeys();
 
-  ipcMain.handle("download-update", () => {
-    try { autoUpdater.downloadUpdate(); } catch(e) { console.error(e); }
-    return { success: true };
+  ipcMain.handle("download-update", async () => {
+    // Auto-update only works in the installed app; in dev mode, open the release page
+    if (!app.isPackaged) {
+      shell.openExternal("https://github.com/tctray/aura-launcher/releases/latest");
+      return { success: false, error: "Updates only download in the installed app", openedPage: true };
+    }
+    try {
+      // The updater must have checked (and found the update) before it can download it
+      await autoUpdater.checkForUpdates();
+      await autoUpdater.downloadUpdate(); // progress is sent to the window as it downloads
+      return { success: true };
+    } catch (e) {
+      console.error("Update download failed:", e.message);
+      shell.openExternal("https://github.com/tctray/aura-launcher/releases/latest");
+      return { success: false, error: e.message, openedPage: true };
+    }
   });
   ipcMain.handle("install-update", () => autoUpdater.quitAndInstall(false, true));
 

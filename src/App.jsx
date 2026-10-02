@@ -2800,7 +2800,7 @@ function AutoUpdater() {
           <div className="update-msg" style={{marginBottom:10}}>A new version is ready to download.</div>
         )}
         {state==="available"&&(
-          <button className="update-restart-btn" onClick={()=>{window.electronAPI.downloadUpdate?.();setState("downloading");}}>↓ Download Now</button>
+          <button className="update-restart-btn" onClick={async()=>{setState("downloading");const r=await window.electronAPI.downloadUpdate?.();if(!r?.success) setDismissed(true);}}>↓ Download Now</button>
         )}
         {state==="ready"&&(
           <>
@@ -2841,10 +2841,19 @@ function UpdateButton() {
   if (status === "latest")   return <span style={{fontSize:11,color:"var(--ac)"}}>Up to date ✓</span>;
   if (status === "error")    return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Retry</button>;
   if (status === "update")   return (
-    <button className="btn-p" onClick={()=>window.electronAPI.downloadUpdate?.()} style={{fontSize:11,padding:"5px 14px",animation:"pulse 2s infinite"}}>
+    <button className="btn-p" onClick={async()=>{
+      setStatus("downloading");
+      const r = await window.electronAPI.downloadUpdate?.();
+      setStatus(r?.success ? "ready" : "page");
+    }} style={{fontSize:11,padding:"5px 14px",animation:"pulse 2s infinite"}}>
       v{latest} — Download
     </button>
   );
+  if (status === "downloading") return <span style={{fontSize:11,color:"var(--t2)"}}>Downloading v{latest}… progress shows bottom right</span>;
+  if (status === "ready") return (
+    <button className="btn-p" onClick={()=>window.electronAPI.installUpdate?.()} style={{fontSize:11,padding:"5px 14px"}}>⚡ Restart &amp; Update</button>
+  );
+  if (status === "page") return <span style={{fontSize:11,color:"var(--t2)"}}>Opened the download page in your browser</span>;
   return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Check</button>;
 }
 
