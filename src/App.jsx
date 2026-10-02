@@ -179,7 +179,18 @@ const playSfx = (kind) => {
 // ── Quick recording (AURA Bar button and F9) ─────────────────────────────────
 // Records the screen under the mouse plus whatever you're hearing (game sound
 // through any headset or speakers) and your mic, mixed with the Settings volumes.
-const quickRec = { recorder: null, cleanup: null, starting: false };
+const quickRec = { recorder: null, cleanup: null, starting: false, handingOff: false };
+
+// Prefer H.264 (MP4): the PC's video hardware usually encodes it, so recording is
+// lighter while gaming, and saving the clip is a quick repackage instead of a re-encode.
+const RECORDER_TYPES = [
+  "video/mp4;codecs=avc1.640028,mp4a.40.2",
+  "video/mp4;codecs=avc1,mp4a.40.2",
+  "video/webm;codecs=h264,opus",
+  "video/webm;codecs=vp9,opus",
+  "video/webm",
+];
+const pickRecorderType = () => RECORDER_TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || "video/webm";
 const isQuickRecording = () => !!quickRec.recorder || quickRec.starting;
 
 async function findMicStream() {
@@ -202,6 +213,7 @@ async function findMicStream() {
 
 async function startQuickRecording(game, sourceId) {
   if (isQuickRecording()) return true;
+  if (quickRec.handingOff) return false; // previous clip is still being handed over (a split second)
   quickRec.starting = true;
   let screenStream = null;
   try {
@@ -228,21 +240,18 @@ async function startQuickRecording(game, sourceId) {
       "| mic tracks =", micStream ? micStream.getAudioTracks().length : 0, "| audio engine =", ctx.state);
 
     const combined = new MediaStream([...screenStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
-    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm";
-    const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 6000000 });
-    await window.electronAPI.startFfmpegPipe(game);
+    const mimeType = pickRecorderType();
+    const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 8000000 });
+    await window.electronAPI.startFfmpegPipe(game, mimeType);
 
     const pending = [];
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) pending.push(e.data.arrayBuffer().then((buf) => window.electronAPI.pipeToFfmpeg(new Uint8Array(buf))));
     };
     recorder.onstop = async () => {
-      await Promise.all(pending); // make sure the last chunk is saved before converting
-      await window.electronAPI.stopFfmpegPipe();
-      quickRec.cleanup?.();
-      quickRec.recorder = null;
-      quickRec.cleanup = null;
-      window.electronAPI.quickRecordState({ recording: false });
+      await Promise.all(pending); // make sure the last chunk is saved before finishing
+      await window.electronAPI.stopFfmpegPipe(); // returns at once; the MP4 is finished in the background
+      quickRec.handingOff = false;
     };
     quickRec.cleanup = () => {
       [screenStream, micStream, combined].forEach((st) => st?.getTracks().forEach((t) => t.stop()));
@@ -265,7 +274,15 @@ async function startQuickRecording(game, sourceId) {
 }
 
 function stopQuickRecording() {
-  if (quickRec.recorder && quickRec.recorder.state !== "inactive") quickRec.recorder.stop();
+  const rec = quickRec.recorder;
+  if (!rec) return;
+  // Report "stopped" immediately so the bar and F9 respond at once
+  quickRec.recorder = null;
+  quickRec.handingOff = true;
+  if (rec.state !== "inactive") rec.stop();
+  quickRec.cleanup?.();
+  quickRec.cleanup = null;
+  window.electronAPI.quickRecordState({ recording: false });
 }
 
 // Recordings started from the Clips page's Record button
@@ -2325,12 +2342,10 @@ function ClipsPage({ nowPlayingGame }) {
       ]);
 
       chunksRef.current = [];
-      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-        ? "video/webm;codecs=vp9,opus"
-        : "video/webm";
+      const mimeType = pickRecorderType();
 
-      const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 3000000 });
-      await window.electronAPI.startFfmpegPipe(game);
+      const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 8000000 });
+      await window.electronAPI.startFfmpegPipe(game, mimeType);
 
       const pending = [];
       recorder.ondataavailable = (e) => {

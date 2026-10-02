@@ -86,7 +86,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getAudioDevices:   ()      => ipcRenderer.invoke("get-audio-devices"),
   getClipServerPort:  ()      => ipcRenderer.invoke("get-clip-server-port"),
   setCaptureSource:  (id)    => ipcRenderer.invoke("set-capture-source", id),
-  startFfmpegPipe:   (game)  => ipcRenderer.invoke("start-ffmpeg-pipe", game),
+  startFfmpegPipe:   (game, mime) => ipcRenderer.invoke("start-ffmpeg-pipe", game, mime),
   pipeToFfmpeg:      (buf)   => ipcRenderer.invoke("pipe-to-ffmpeg", buf),
   stopFfmpegPipe:    ()      => ipcRenderer.invoke("stop-ffmpeg-pipe"),
   trimClip:          (opts)  => ipcRenderer.invoke("trim-clip", opts),

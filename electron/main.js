@@ -360,6 +360,7 @@ ipcMain.handle("quick-record-state", (_e, { recording, game }) => {
     mainWin?.webContents.send("recording-started", { game: recordingGame });
   } else {
     recordingStartTime = null;
+    mainWin?.webContents.send("recording-stopped", { saving: true });
   }
   pushBarState();
   return { success: true };
@@ -443,7 +444,7 @@ ipcMain.handle("aurabar-hide", () => { auraBar?.hide(); });
 ipcMain.handle("aurabar-show", () => { auraBar?.show(); });
 
 ipcMain.handle("aurabar-get-state", () => ({
-  isRecording: !!global.pipeChunks,
+  isRecording,
   clipServerPort: global.clipServerPort,
   clipServerToken: global.clipServerToken,
 }));
@@ -1350,7 +1351,62 @@ ipcMain.handle("set-capture-source", (_e, sourceId) => {
   return { success: true };
 });
 
-ipcMain.handle("start-ffmpeg-pipe", async (_e, gameName) => {
+// ── In-window recordings (AURA Bar, F9 and the Clips page Record button) ──────
+// The window records with MediaRecorder and streams the data here, straight to disk.
+// When it stops, the file is turned into a normal MP4 in the background, so the
+// Stop button responds instantly even while a game is hogging the PC.
+let pipe = null; // { stream, rawFile, outFile, mime }
+
+// Newer FFmpeg (ffmpeg-static) handles the recorder's files better than the
+// older bundled build; fall back to the recording FFmpeg if it's missing.
+const convertFfmpegPath = (() => {
+  try {
+    const p = require("ffmpeg-static");
+    return p ? p.replace("app.asar", "app.asar.unpacked") : null;
+  } catch { return null; }
+})() || ffmpegPath;
+
+function runFfmpeg(args) {
+  return new Promise((resolve) => {
+    let log = "";
+    const proc = spawn(convertFfmpegPath, args, { windowsHide: true });
+    proc.stderr.on("data", (d) => { log = (log + d.toString()).slice(-2000); });
+    proc.on("error", () => resolve({ code: -1, log }));
+    proc.on("close", (code) => resolve({ code, log }));
+  });
+}
+
+async function finishPipeRecording({ rawFile, outFile, mime, game }) {
+  const h264 = /avc1|h264/i.test(mime || "");
+  const aacAudio = /mp4a/i.test(mime || "");
+  let result = { code: -1, log: "" };
+  if (h264) {
+    // Already H.264: just repackage (takes a second, no quality loss)
+    result = await runFfmpeg(["-y", "-fflags", "+genpts", "-i", rawFile,
+      "-c:v", "copy", "-c:a", aacAudio ? "copy" : "aac", "-b:a", "160k",
+      "-movflags", "+faststart", outFile]);
+    console.log("repackage closed:", result.code, "->", outFile);
+  }
+  if (result.code !== 0) {
+    // Re-encode (VP9 recordings, or if repackaging failed)
+    result = await runFfmpeg(["-y", "-fflags", "+genpts", "-i", rawFile,
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
+      "-af", "aresample=async=1", "-c:a", "aac", "-b:a", "160k",
+      "-movflags", "+faststart", outFile]);
+    console.log("convert closed:", result.code, "->", outFile);
+  }
+  if (result.code === 0) {
+    try { fs.unlinkSync(rawFile); } catch {}
+  } else {
+    // Keep the original recording so nothing is lost
+    console.error("Conversion failed, keeping", rawFile, "\n", result.log.split("\n").slice(-6).join("\n"));
+    try { fs.unlinkSync(outFile); } catch {}
+  }
+  mainWin?.webContents.send("recording-stopped", { file: result.code === 0 ? outFile : rawFile, game });
+  auraBar?.webContents.send("recording-stopped");
+}
+
+ipcMain.handle("start-ffmpeg-pipe", async (_e, gameName, mime) => {
   // Let the AURA Bar know a recording is running, so its button shows Stop
   isRecording = true;
   recordingGame = gameName || "General";
@@ -1360,74 +1416,35 @@ ipcMain.handle("start-ffmpeg-pipe", async (_e, gameName) => {
     const gameDir = path.join(getClipFolder(), gameName || "General");
     ensureDir(gameDir);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    pipeOutFile = path.join(gameDir, `clip-${timestamp}.mp4`);
-    const webmFile = pipeOutFile.replace(".mp4", ".webm");
-    global.pipeWebmFile = webmFile;
-    global.pipeChunks = [];
-    console.log("Recording to webm:", webmFile);
-    // Notify bar recording started
+    const outFile = path.join(gameDir, `clip-${timestamp}.mp4`);
+    const rawFile = /mp4/i.test(mime || "") ? outFile.replace(/\.mp4$/, ".raw.mp4") : outFile.replace(/\.mp4$/, ".webm");
+    pipe = { stream: fs.createWriteStream(rawFile), rawFile, outFile, mime: mime || "video/webm", game: recordingGame };
+    console.log("Recording to:", rawFile, "(" + pipe.mime + ")");
     auraBar?.webContents.send("recording-started");
-    return { success: true, file: pipeOutFile };
+    return { success: true, file: outFile };
   } catch(e) {
     return { success: false, error: e.message };
   }
 });
 
 ipcMain.handle("pipe-to-ffmpeg", (_e, buffer) => {
-  if (global.pipeChunks) {
-    global.pipeChunks.push(Buffer.from(buffer));
-  }
+  pipe?.stream.write(Buffer.from(buffer));
   return { success: true };
 });
 
 ipcMain.handle("stop-ffmpeg-pipe", async () => {
+  const job = pipe;
+  pipe = null;
+  // Show "not recording" right away
+  isRecording = false;
+  recordingStartTime = null;
+  pushBarState();
+  auraBar?.webContents.send("recording-stopped");
+  if (!job) return { success: false };
   try {
-    if (!global.pipeChunks || !global.pipeWebmFile) return { success: false };
-    const webmFile = global.pipeWebmFile;
-    const outFile = webmFile.replace(".webm", ".mp4");
-
-    // Write all chunks to webm file
-    const combined = Buffer.concat(global.pipeChunks);
-    fs.writeFileSync(webmFile, combined);
-    global.pipeChunks = [];
-    console.log("Webm saved:", webmFile, combined.length, "bytes");
-
-    // Convert webm to mp4 with ffmpeg
-    const args = [
-      "-i", webmFile,
-      "-c:v", "libx264",
-      "-preset", "ultrafast",
-      "-crf", "23",
-      "-pix_fmt", "yuv420p",
-      "-c:a", "aac",
-      "-b:a", "128k",
-      "-movflags", "+faststart",
-      "-y",
-      outFile
-    ];
-
-    let convertLog = "";
-    const code = await new Promise((resolve) => {
-      const proc = spawn(ffmpegPath, args, { windowsHide: true });
-      proc.stderr.on("data", d => { convertLog = (convertLog + d.toString()).slice(-2000); });
-      proc.on("error", () => resolve(-1));
-      proc.on("close", resolve);
-    });
-    console.log("convert closed:", code, "->", outFile);
-    if (code === 0) {
-      try { fs.unlinkSync(webmFile); } catch {}
-    } else {
-      // Keep the original recording so nothing is lost
-      console.error("Conversion failed, keeping", webmFile, "\n", convertLog.split("\n").slice(-6).join("\n"));
-      try { fs.unlinkSync(outFile); } catch {}
-    }
-
-    isRecording = false;
-    recordingStartTime = null;
-    pushBarState();
-    mainWin?.webContents.send("recording-stopped", { file: outFile });
-    auraBar?.webContents.send("recording-stopped");
-    return { success: true };
+    await new Promise((resolve) => job.stream.end(resolve));
+    finishPipeRecording(job); // runs in the background
+    return { success: true, file: job.outFile };
   } catch(e) {
     return { success: false, error: e.message };
   }
@@ -1603,8 +1620,10 @@ function registerHotkeys() {
     if (auraBar.isVisible()) {
       auraBar.hide();
     } else {
-      auraBar.show();
-      auraBar.focus();
+      // showInactive: don't steal focus from the game (that can minimize it)
+      auraBar.showInactive();
+      auraBar.setAlwaysOnTop(true, "screen-saver");
+      auraBar.moveTop();
     }
   });
 }
