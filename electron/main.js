@@ -1201,10 +1201,24 @@ function startRecording(gameName, opts = {}) {
     recordingStartTime = Date.now();
     recordingOutFile = outFile;
 
-    recordingProcess.on("close", (code) => {
+    recordingProcess.on("close", async (code) => {
       console.log("ffmpeg closed:", code);
       isRecording = false;
       recordingProcess = null;
+      pushBarState();
+      // The live file is written in fragments (so it survives a crash). Rewrite it
+      // as a normal MP4 so players show the exact length and can seek accurately.
+      const tmp = outFile.replace(/\.mp4$/, ".fixing.mp4");
+      const ok = await new Promise((resolve) => {
+        const fix = spawn(ffmpegPath, ["-y", "-i", outFile, "-c", "copy", "-movflags", "+faststart", tmp], { windowsHide: true });
+        fix.on("error", () => resolve(false));
+        fix.on("close", (c) => resolve(c === 0));
+      });
+      if (ok) {
+        try { fs.renameSync(tmp, outFile); } catch (e) { console.error("Could not replace recording:", e.message); }
+      } else {
+        try { fs.unlinkSync(tmp); } catch {}
+      }
       mainWin?.webContents.send("recording-stopped", { file: outFile, game: recordingGame });
       auraBar?.webContents.send("recording-stopped");
       pushBarState();
@@ -1324,6 +1338,11 @@ ipcMain.handle("set-capture-source", (_e, sourceId) => {
 });
 
 ipcMain.handle("start-ffmpeg-pipe", async (_e, gameName) => {
+  // Let the AURA Bar know a recording is running, so its button shows Stop
+  isRecording = true;
+  recordingGame = gameName || "General";
+  recordingStartTime = Date.now();
+  pushBarState();
   try {
     const gameDir = path.join(getClipFolder(), gameName || "General");
     ensureDir(gameDir);
@@ -1390,6 +1409,9 @@ ipcMain.handle("stop-ffmpeg-pipe", async () => {
       try { fs.unlinkSync(outFile); } catch {}
     }
 
+    isRecording = false;
+    recordingStartTime = null;
+    pushBarState();
     mainWin?.webContents.send("recording-stopped", { file: outFile });
     auraBar?.webContents.send("recording-stopped");
     return { success: true };
@@ -1673,15 +1695,14 @@ ipcMain.handle("get-window-pos", (_e) => {
 });
 
 ipcMain.handle("stop-bar-recording", () => {
-  mainWin?.webContents.send("bar-stop-recording");
+  if (recordingProcess) stopRecording();
+  mainWin?.webContents.send("bar-stop-recording"); // stops in-window recordings
   return { success: true };
 });
 
+// Same start/stop logic as F9, so the bar always stops whatever is recording
 ipcMain.handle("toggle-recording", async () => {
-  // Focus main window and send toggle
-  mainWin?.show();
-  mainWin?.focus();
-  mainWin?.webContents.send("bar-toggle-recording");
+  toggleRecordingHotkey();
   return { success: true };
 });
 

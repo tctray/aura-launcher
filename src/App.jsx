@@ -268,6 +268,17 @@ function stopQuickRecording() {
   if (quickRec.recorder && quickRec.recorder.state !== "inactive") quickRec.recorder.stop();
 }
 
+// Recordings started from the Clips page's Record button
+const clipsRecorders = new Set();
+const isAnyRecording = () =>
+  isQuickRecording() || [...clipsRecorders].some((r) => r.state !== "inactive");
+// Stop every kind of recording, whichever button started it
+function stopAllRecording() {
+  stopQuickRecording();
+  clipsRecorders.forEach((r) => { if (r.state !== "inactive") r.stop(); });
+  window.electronAPI?.stopRecording?.(); // the older FFmpeg method, if running
+}
+
 const fmtTime = (ms) => {
   if (!ms) return null;
   const h = Math.floor(ms / 3600000);
@@ -2171,25 +2182,10 @@ function ClipsPage({ nowPlayingGame }) {
       if (action === "start") setIsRecording(true);
       if (action === "stop") { setIsRecording(false); loadClips(); }
     });
-    window.electronAPI.onBarToggleRecording?.(() => {
-      setIsRecording(prev => {
-        if (prev) {
-          mediaRecorderRef.current?.stop();
-        } else {
-          setShowPicker(true);
-          window.electronAPI.getCaptureSources().then(res => {
-            if (res.success) setPickerSources(res.sources);
-            setPickerLoading(false);
-          });
-        }
-        return prev;
-      });
-    });
-
     // From App-level bar handler
     const onBarRecord = () => {
-      if (isRecording) {
-        mediaRecorderRef.current?.stop();
+      if (isAnyRecording()) {
+        stopAllRecording();
       } else {
         setShowPicker(true);
         window.electronAPI.getCaptureSources().then(res => {
@@ -2200,10 +2196,6 @@ function ClipsPage({ nowPlayingGame }) {
     };
     window.addEventListener("aura-bar-record", onBarRecord);
 
-    // Bar stop button
-    window.electronAPI.onBarStopRecording?.(() => {
-      mediaRecorderRef.current?.stop();
-    });
 
     return () => window.removeEventListener("aura-bar-record", onBarRecord);
   }, []);
@@ -2340,14 +2332,16 @@ function ClipsPage({ nowPlayingGame }) {
       const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 3000000 });
       await window.electronAPI.startFfmpegPipe(game);
 
-      recorder.ondataavailable = async (e) => {
+      const pending = [];
+      recorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
-          const buf = await e.data.arrayBuffer();
-          window.electronAPI.pipeToFfmpeg(new Uint8Array(buf));
+          pending.push(e.data.arrayBuffer().then(buf => window.electronAPI.pipeToFfmpeg(new Uint8Array(buf))));
         }
       };
 
       recorder.onstop = async () => {
+        clipsRecorders.delete(recorder);
+        await Promise.all(pending); // make sure the last seconds are saved before converting
         await window.electronAPI.stopFfmpegPipe();
         combined.getTracks().forEach(t => t.stop());
         audioCtx.close();
@@ -2355,6 +2349,7 @@ function ClipsPage({ nowPlayingGame }) {
       };
 
       recorder.start(500);
+      clipsRecorders.add(recorder);
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
       setRecGame(game);
@@ -3241,7 +3236,7 @@ export default function App(){
   useEffect(()=>{
     if(!window.electronAPI?.onQuickRecordToggle) return;
     return window.electronAPI.onQuickRecordToggle(async({game})=>{
-      if(isQuickRecording()){ stopQuickRecording(); return; }
+      if(isAnyRecording()){ stopAllRecording(); return; }
       if(SETTINGS.recordSourceId){
         const res=await window.electronAPI.getCaptureSources();
         const stillThere=res?.success&&res.sources.some(x=>x.id===SETTINGS.recordSourceId);
@@ -3300,8 +3295,11 @@ export default function App(){
       if (action === "start") setIsRecording(true);
       if (action === "stop") setIsRecording(false);
     });
+    // Bar stop button: stop whatever is recording
+    window.electronAPI.onBarStopRecording?.(() => stopAllRecording());
     // Bar record button - navigate to clips and show picker
     window.electronAPI.onBarToggleRecording?.(() => {
+      if (isAnyRecording()) { stopAllRecording(); return; }
       goTo("clips");
       // Small delay to let clips page mount
       setTimeout(() => {
