@@ -9,6 +9,7 @@ import { addSession } from "./sessionstore";
 import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
+import MessagesPage, { AuraFriendsTab, MessagesIcon, useAuraSocial } from "./components/messages";
 
 const CATEGORIES = ["All","FPS","RPG","Strategy","Action","Adventure","Sports","Simulation","Indie","Other"];
 
@@ -887,7 +888,7 @@ function FriendsPanel({ launching, toast, onClose, hidden }) {
   const [friends,setFriends]=useState([]);
   const [loading,setLoading]=useState(false);
   const [loggedIn,setLoggedIn]=useState(false);
-  const [steamTab,setSteamTab]=useState("discord");
+  const [steamTab,setSteamTab]=useState("aura");
   const [steamId,setSteamId]=useState(()=>localStorage.getItem("aura_steam_id")||"");
   const [steamProfile,setSteamProfile]=useState(null);
   const [steamGames,setSteamGames]=useState([]);
@@ -930,10 +931,12 @@ function FriendsPanel({ launching, toast, onClose, hidden }) {
       </div>
       <div className="fp-body">
         <div style={{display:"flex",borderBottom:"1px solid var(--border)",marginBottom:12}}>
-          {["discord","steam"].map(t=>(
+          {["aura","discord","steam"].map(t=>(
             <button key={t} onClick={()=>setSteamTab(t)} style={{flex:1,padding:"8px 0",border:"none",background:"transparent",color:steamTab===t?"var(--ac)":"var(--t3)",fontSize:10,fontWeight:700,cursor:"pointer",borderBottom:steamTab===t?"2px solid var(--ac)":"2px solid transparent",textTransform:"uppercase",letterSpacing:1}}>{t}</button>
           ))}
         </div>
+
+        {steamTab==="aura"&&<AuraFriendsTab/>}
 
         {steamTab==="discord"&&(
           <>
@@ -3388,6 +3391,8 @@ function AuraApp(){
   // Favorites and playtime follow the signed-in account (see cloudsync.js)
   useCloudGames(games,setGames,toast);
   useCloudProfile({unlockedAch,setUnlockedAch,stats,setStats,theme,setTheme,accent,setAccent,customColors,setCustomColors,savedThemes,setSavedThemes,bgImage,setBgImage,settings,updateSettings,games,toast});
+  // AURA friends and messages (see components/messages)
+  const social=useAuraSocial({view,toast,goTo:(id)=>goTo(id)});
 
   const saveCustomTheme2 = useCallback((named) => {
     const updated = [...savedThemes.filter(t=>t.name!==named.name), named];
@@ -3513,6 +3518,7 @@ function AuraApp(){
     {id:"favorites", icon:<Ic.Heart/>,   label:"Favorites",       badge:favs.length||null},
     {id:"streams",   icon:<Ic.Tv/>,      label:"Live Streams"},
     {id:"social",    icon:<Ic.Social/>, label:"Social"},
+    {id:"messages",  icon:<MessagesIcon/>, label:"Messages",        badge:social.unread||null},
     {id:"clips",     icon:<Ic.Clips/>,  label:"Clips"},
     {id:"sessions",  icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>, label:"Sessions"},
     {id:"performance",icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M4.5 17a8 8 0 1 1 15 0"/><path d="M12 13l4-4"/></svg>, label:"Performance"},
@@ -3526,7 +3532,7 @@ function AuraApp(){
   const { connected, hint, hintHide } = useController({
     view, goTo, navItems: [
       {id:"home"},{id:"library"},{id:"recent"},{id:"favorites"},
-      {id:"streams"},{id:"social"},{id:"clips"},{id:"sessions"},{id:"performance"},{id:"achievements"},{id:"customize"},{id:"settings"},
+      {id:"streams"},{id:"social"},{id:"messages"},{id:"clips"},{id:"sessions"},{id:"performance"},{id:"achievements"},{id:"customize"},{id:"settings"},
     ],
     heroGame, setHeroGame, modal, setModal, doPlay, doFav, games, sorted,
   });
@@ -3687,7 +3693,7 @@ function AuraApp(){
         </aside>
 
         <div className="main">
-          {view!=="streams"&&<header className="hdr">
+          {view!=="streams"&&view!=="messages"&&<header className="hdr">
             <div className="hdr-title">{heroGame ? heroGame.title : view.toUpperCase()}</div>
             <div className="srch"><Ic.Search/><input value={srch} onChange={e=>setSrch(e.target.value)} placeholder="Search games…"/></div>
             <div className="hdr-r">
@@ -3758,6 +3764,8 @@ function AuraApp(){
             }}
           />}
 
+          {view==="messages"&&<MessagesPage nowPlaying={nowPlaying}/>}
+
           {view==="settings"&&<Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames(DEMO_GAMES);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers}/>}
         </div>
 
@@ -3780,6 +3788,8 @@ function AuraApp(){
       <AutoUpdater/>
       <ControllerHUD/>
       <div className="tc">
+        {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
+        {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}
       </div>
     </>
   );

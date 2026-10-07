@@ -398,6 +398,9 @@ ipcMain.handle("sessions:get", cloudHandler(auraCloud.getMySessions));
 ipcMain.handle("sessions:save", cloudHandler(auraCloud.saveMySessions));
 ipcMain.handle("sessions:delete", cloudHandler(auraCloud.deleteMySessions));
 
+// AURA friends and messages. The work happens in social.js
+require("./social").register({ ipcMain, cloudHandler, cloud: auraCloud, getWindow: () => mainWin });
+
 
 
 // Pick the screen the mouse is on, for hands-free recording
@@ -489,6 +492,17 @@ function notifyBar(channel, data) {
 }
 
 app.whenReady().then(() => {
+  // YouTube refuses to play embedded videos ("Error 153") unless the request says which site
+  // or app is embedding them. The installed app is loaded from a file, which sends nothing,
+  // so fill that in here. In dev (http://localhost) the browser already sends it.
+  require("electron").session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ["https://www.youtube.com/embed*", "https://www.youtube-nocookie.com/embed*"] },
+    (details, callback) => {
+      const headers = details.requestHeaders;
+      if (!headers.Referer && !headers.referer) headers.Referer = "https://taurreantraylor.com/";
+      callback({ requestHeaders: headers });
+    }
+  );
   // Start local HTTP server for video file serving
   const clipServerToken = require("crypto").randomBytes(32).toString("hex");
   global.clipServerToken = clipServerToken;

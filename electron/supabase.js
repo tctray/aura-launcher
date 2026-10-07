@@ -332,4 +332,5 @@ async function getAccessToken() {
   return data?.session?.access_token || null;
 }
 
-module.exports = { signUp, logIn, logOut, getSession, resendConfirmation, getMyProfile, saveProfile, getProfile, getMyGames, saveMyGames, getMyData, saveMyData, getMySessionIds, getMySessions, saveMySessions, deleteMySessions, getAccessToken };
+// social.js (friends and messages) uses the same signed-in connection through these two
+module.exports = { signUp, logIn, logOut, getSession, resendConfirmation, getMyProfile, saveProfile, getProfile, getMyGames, saveMyGames, getMyData, saveMyData, getMySessionIds, getMySessions, saveMySessions, deleteMySessions, getAccessToken, internals: { client, currentUser } };

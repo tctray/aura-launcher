@@ -155,3 +155,26 @@ contextBridge.exposeInMainWorld("auraCloud", {
   saveMySessions: (sessions) => ipcRenderer.invoke("sessions:save", sessions),
   deleteMySessions: (ids) => ipcRenderer.invoke("sessions:delete", ids),
 });
+
+// AURA friends and messages. Each call is answered by electron/social.js
+contextBridge.exposeInMainWorld("auraSocial", {
+  start: () => ipcRenderer.invoke("social:start"),
+  stop: () => ipcRenderer.invoke("social:stop"),
+  listFriends: () => ipcRenderer.invoke("social:listFriends"),
+  findUser: (username) => ipcRenderer.invoke("social:findUser", username),
+  requestFriend: (userId) => ipcRenderer.invoke("social:requestFriend", userId),
+  acceptFriend: (friendshipId) => ipcRenderer.invoke("social:acceptFriend", friendshipId),
+  removeFriend: (friendshipId) => ipcRenderer.invoke("social:removeFriend", friendshipId),
+  getProfile: (userId) => ipcRenderer.invoke("social:getProfile", userId),
+  listConversations: () => ipcRenderer.invoke("social:listConversations"),
+  openConversation: (userId) => ipcRenderer.invoke("social:openConversation", userId),
+  getMessages: (conversationId, before) => ipcRenderer.invoke("social:getMessages", conversationId, before),
+  sendMessage: (conversationId, content) => ipcRenderer.invoke("social:sendMessage", conversationId, content),
+  markRead: (conversationId) => ipcRenderer.invoke("social:markRead", conversationId),
+  // New messages and friend changes pushed from the main process
+  onEvent: (cb) => {
+    const h = (_e, data) => cb(data);
+    ipcRenderer.on("social:event", h);
+    return () => ipcRenderer.removeListener("social:event", h);
+  },
+});
