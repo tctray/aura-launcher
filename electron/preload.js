@@ -118,6 +118,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   takeScreenshot:    ()      => ipcRenderer.invoke("take-screenshot"),
   streamPip:    (bounds) => ipcRenderer.invoke("stream-pip", bounds),
   streamFullscreen:()      => ipcRenderer.invoke("stream-fullscreen"),
+  streamExitFull:  ()      => ipcRenderer.invoke("stream-exit-full"),
+  // Esc was pressed inside the Twitch player while it filled the window
+  onStreamExitFull:(cb)    => { const h = () => cb(); ipcRenderer.on("stream-exit-full", h); return () => ipcRenderer.removeListener("stream-exit-full", h); },
   streamSetVolume:(opts)  => ipcRenderer.invoke("stream-set-volume", opts),
   streamRestore: (opts)  => ipcRenderer.invoke("stream-restore", opts),
   streamOpen:   (opts)   => ipcRenderer.invoke("stream-open", opts),

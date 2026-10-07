@@ -1479,6 +1479,26 @@ function registerHotkeys() {
 
 let streamView = null;
 
+// ── Stream full view ──────────────────────────────────────────────────────────
+// The Twitch player is a separate layer drawn on top of AURA's page, so when it fills the window
+// it also covers AURA's buttons. Two things make sure there is always a way out:
+//   - a slim strip at the top is left uncovered, where the page shows "Exit full view"
+//   - Esc leaves full view even when the keyboard is inside the Twitch player
+const STREAM_BAR = 44; // height of that strip, in page pixels (the page draws a bar the same height)
+function fillWindowWithStream() {
+  if (!streamView || !mainWin) return;
+  const [w, h] = mainWin.getContentSize();
+  const bar = Math.round(STREAM_BAR * (mainWin.webContents.getZoomFactor() || 1));
+  streamView.setBounds({ x: 0, y: bar, width: w, height: Math.max(1, h - bar) });
+}
+function leaveStreamFull() {
+  if (!streamView || !streamView.__auraFull) return false;
+  streamView.__auraFull = false;
+  // Straight back to where it was; the page then lines it up exactly
+  if (streamView.__auraBefore) { try { streamView.setBounds(streamView.__auraBefore); } catch {} }
+  return true;
+}
+
 ipcMain.handle("stream-fullscreen", async () => {
   // Wait up to 2s for streamView to be available
   let attempts = 0;
@@ -1486,14 +1506,37 @@ ipcMain.handle("stream-fullscreen", async () => {
     await new Promise(r => setTimeout(r, 100));
     attempts++;
   }
-  if (!streamView) return { success: false, error: "No stream active" };
-  const [w, h] = mainWin.getContentSize();
-  mainWin.removeBrowserView(streamView);
-  mainWin.addBrowserView(streamView);
-  streamView.setBounds({ x: 0, y: 0, width: w, height: h });
+  if (!streamView || !mainWin) return { success: false, error: "No stream active" };
+  const view = streamView;
+  if (!view.__auraFull) view.__auraBefore = view.getBounds();
+  view.__auraFull = true;
+  mainWin.removeBrowserView(view);
+  mainWin.addBrowserView(view);
+  fillWindowWithStream();
   if (mainWin.chatView) mainWin.removeBrowserView(mainWin.chatView);
+  if (!view.__auraEsc) {
+    view.__auraEsc = true;
+    // Keys pressed inside the Twitch player never reach AURA's page, so Esc is caught here
+    view.webContents.on("before-input-event", (e, input) => {
+      if (input.type !== "keyDown" || input.key !== "Escape" || !view.__auraFull) return;
+      e.preventDefault();
+      view.webContents.executeJavaScript("document.fullscreenElement && document.exitFullscreen()").catch(() => {});
+      if (streamView === view) leaveStreamFull();
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.focus();
+        mainWin.webContents.send("stream-exit-full");
+      }
+    });
+  }
+  if (!mainWin.__auraStreamResize) {
+    mainWin.__auraStreamResize = true;
+    mainWin.on("resize", () => { if (streamView && streamView.__auraFull) fillWindowWithStream(); });
+  }
   return { success: true };
 });
+
+// The page asks for this before it puts the player back in its place
+ipcMain.handle("stream-exit-full", async () => ({ success: true, wasFull: leaveStreamFull() }));
 
 ipcMain.handle("stream-set-volume", async (_e, { volume, muted }) => {
   if (!streamView) return { success: false };

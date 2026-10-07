@@ -1539,28 +1539,65 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
   const [chatOpen, setChatOpen] = useState(true);
   const [isStreamFull, setIsStreamFull] = useState(false);
 
-  // F key to toggle fullscreen stream
+  // ── Full view ───────────────────────────────────────────────────────────────
+  // The Twitch player is a separate layer on top of AURA, so in full view it covers AURA's own
+  // buttons. A slim bar stays at the top with a way out, and Esc always leaves full view.
+  const fullRef = useRef(false);
+  // Puts the player and the chat back over their boxes on the page
+  const placeViews = () => {
+    if (!window.electronAPI?.isElectron || fullRef.current) return;
+    const box = (el) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 ? { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) } : null;
+    };
+    const bounds = box(playerContainerRef.current);
+    if (bounds) window.electronAPI.streamRestore?.({ bounds, chatBounds: box(chatContainerRef.current) });
+  };
+  const setFull = (next) => {
+    next = !!next;
+    if (!window.electronAPI?.isElectron) return;
+    fullRef.current = next;
+    setIsStreamFull(next);
+    if (next) {
+      Promise.resolve(window.electronAPI.streamFullscreen?.()).then((r) => {
+        if (!r || r.success !== true) { fullRef.current = false; setIsStreamFull(false); }
+      }).catch(() => { fullRef.current = false; setIsStreamFull(false); });
+    } else {
+      Promise.resolve(window.electronAPI.streamExitFull?.()).catch(() => {}).then(() => { placeViews(); setTimeout(placeViews, 250); });
+    }
+  };
+
+  // F toggles full view (not while typing in a text box). Esc leaves it.
   useEffect(() => {
+    if (!activeStream) { fullRef.current = false; setIsStreamFull(false); return; }
     const onKey = (e) => {
-      if (e.key === "f" || e.key === "F") {
-        if (isStreamFull) {
-          setIsStreamFull(false);
-          window.electronAPI?.streamRestore?.({
-            bounds: { x: 0, y: 0, width: 100, height: 100 }, // will be overridden by openViews
-            chatBounds: null,
-          });
-        } else {
-          setIsStreamFull(true);
-          window.electronAPI?.streamFullscreen?.();
-        }
-      }
-      if (e.key === "Escape" && isStreamFull) {
-        setIsStreamFull(false);
-      }
+      if (e.key === "Escape") { if (fullRef.current) setFull(false); return; }
+      if (e.key !== "f" && e.key !== "F") return;
+      const el = e.target;
+      const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+      if (typing || e.ctrlKey || e.altKey || e.metaKey || e.repeat) return;
+      setFull(!fullRef.current);
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [isStreamFull]);
+    // Esc pressed inside the Twitch player arrives here from the main process
+    const off = window.electronAPI?.onStreamExitFull?.(() => { if (fullRef.current) setFull(false); else placeViews(); });
+    return () => { window.removeEventListener("keydown", onKey); if (typeof off === "function") off(); };
+  }, [activeStream]);
+
+  // Keep the player and chat lined up with the page when the window or the side panels change size
+  useEffect(() => {
+    if (!activeStream || !window.electronAPI?.isElectron) return;
+    let timer = null;
+    const soon = () => { clearTimeout(timer); timer = setTimeout(placeViews, 80); };
+    window.addEventListener("resize", soon);
+    const watcher = typeof ResizeObserver === "function" ? new ResizeObserver(soon) : null;
+    if (watcher && playerContainerRef.current) watcher.observe(playerContainerRef.current);
+    // Once the player and chat have opened, line both up (the chat used to open over the player)
+    const after = [700, 1800].map((ms) => setTimeout(placeViews, ms));
+    return () => { window.removeEventListener("resize", soon); if (watcher) watcher.disconnect(); clearTimeout(timer); after.forEach(clearTimeout); };
+  }, [activeStream, chatOpen]);
+  useEffect(() => () => { fullRef.current = false; }, []);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState(null);
   const [searching, setSearching] = useState(false);
@@ -1673,7 +1710,7 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
         </div>
         <div style={{fontSize:10,color:"#9147ff",fontWeight:700}}>{activeStream.game}</div>
         <div style={{fontSize:10,color:"var(--t3)"}}>👁 {fmtViewers(activeStream.viewers)}</div>
-        <button onClick={()=>{setIsStreamFull(f=>{const next=!f;if(next)window.electronAPI?.streamFullscreen?.();else window.electronAPI?.streamRestore?.({bounds:{x:0,y:0,width:100,height:100},chatBounds:null});return next;})}} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>{isStreamFull?"⊠ Exit Full":"⛶ Full"}</button>
+        <button onClick={()=>setFull(!fullRef.current)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>{isStreamFull?"⊠ Exit Full":"⛶ Full"}</button>
         <button onClick={()=>setChatOpen(o=>!o)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>{chatOpen?"Hide Chat":"Show Chat"}</button>
         {/* Volume controls */}
         <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
@@ -1717,6 +1754,16 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
 
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"var(--bg)",height:"100%"}}>
+      {/* Full view: the only part of AURA the player doesn't cover. Always a way out. */}
+      {isStreamFull && activeStream && window.electronAPI?.isElectron && (
+        <div className="stream-full-bar" style={{position:"fixed",top:0,left:0,right:0,height:44,zIndex:5000,background:"#0e0e10",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,padding:"0 16px",boxSizing:"border-box"}}>
+          <div style={{width:8,height:8,borderRadius:"50%",background:"#eb0400",boxShadow:"0 0 6px #eb0400",flexShrink:0}}/>
+          <div style={{flex:1,minWidth:0,fontFamily:"Rajdhani,sans-serif",fontSize:14,fontWeight:700,color:"var(--t1)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeStream.user}<span style={{fontFamily:"DM Sans,sans-serif",fontSize:11,fontWeight:400,color:"var(--t2)",marginLeft:10}}>{activeStream.title}</span></div>
+          <span style={{fontSize:11,color:"var(--t2)",flexShrink:0}}>Press Esc to exit</span>
+          <button onClick={()=>setFull(false)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>Exit full view</button>
+          <button onClick={()=>{setFull(false);setActiveStream(null);onStreamChange?.(null);onClear&&onClear();}} style={{background:"rgba(255,77,109,.1)",border:"1px solid rgba(255,77,109,.3)",color:"var(--danger)",borderRadius:6,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>✕ Close stream</button>
+        </div>
+      )}
       {/* Header */}
       <div style={{padding:"12px 24px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
         <div style={{width:8,height:8,borderRadius:"50%",background:"#eb0400",boxShadow:"0 0 8px #eb0400",animation:"pulse 2s infinite",flexShrink:0}}/>
