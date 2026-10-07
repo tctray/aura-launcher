@@ -7,6 +7,8 @@ import SessionsPage from "./components/sessions";
 import PerformancePage from "./components/performance";
 import { addSession } from "./sessionstore";
 import SocialPage from "./components/social";
+import { AuthGate, LogoutButton, useAccount } from "./components/auth";
+import { useCloudGames, useCloudProfile } from "./cloudsync";
 
 const CATEGORIES = ["All","FPS","RPG","Strategy","Action","Adventure","Sports","Simulation","Indie","Other"];
 
@@ -597,7 +599,7 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .gm-rail-item.on{background:var(--acd);color:var(--ac);}
 .gm-rail-item.on::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:60%;background:var(--ac);border-radius:0 3px 3px 0;}
 .gm-rail-badge{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;background:var(--ac);border:2px solid var(--bg);}
-.gm-rail-avatar{width:36px;height:36px;border-radius:50%;object-fit:cover;border:2px solid var(--ac);cursor:pointer;margin-top:auto;margin-bottom:8px;}
+.gm-rail-avatar{width:56px;height:56px;border-radius:25%;object-fit:cover;border:1px solid var(--ac);cursor:pointer;margin-top:auto;margin-bottom:8px;}
 .gm-rail-avatar-ph{width:36px;height:36px;border-radius:50%;background:var(--acd);border:2px solid var(--ac);display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;margin-top:auto;margin-bottom:8px;}
 .gm-main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;}
 
@@ -890,8 +892,6 @@ function FriendsPanel({ launching, toast, onClose, hidden }) {
   const [steamProfile,setSteamProfile]=useState(null);
   const [steamGames,setSteamGames]=useState([]);
   const [steamFriends,setSteamFriends]=useState([]);
-  const [xboxProfile,setXboxProfile]=useState(null);
-  const [xboxGames,setXboxGames]=useState([]);
 
   useEffect(()=>{
     if(!window.electronAPI?.isElectron) return;
@@ -922,8 +922,7 @@ function FriendsPanel({ launching, toast, onClose, hidden }) {
 
   return(
     <div className="fp" style={hidden?{display:"none"}:undefined}>
-      <div className="fp-hdr">
-        <span className="fp-title">FRIENDS</span>
+      <div className="fp-hdr" style={{justifyContent:"flex-end"}}>
         <div style={{display:"flex",alignItems:"center",gap:2}}>
           {loggedIn&&steamTab==="discord"&&<button className="fp-refresh" onClick={loadFriends} title="Refresh"><Ic.Refresh/></button>}
           <button className="fp-refresh" onClick={onClose} title="Hide friends" aria-label="Hide friends panel"><Ic.X/></button>
@@ -931,7 +930,7 @@ function FriendsPanel({ launching, toast, onClose, hidden }) {
       </div>
       <div className="fp-body">
         <div style={{display:"flex",borderBottom:"1px solid var(--border)",marginBottom:12}}>
-          {["discord","steam","xbox"].map(t=>(
+          {["discord","steam"].map(t=>(
             <button key={t} onClick={()=>setSteamTab(t)} style={{flex:1,padding:"8px 0",border:"none",background:"transparent",color:steamTab===t?"var(--ac)":"var(--t3)",fontSize:10,fontWeight:700,cursor:"pointer",borderBottom:steamTab===t?"2px solid var(--ac)":"2px solid transparent",textTransform:"uppercase",letterSpacing:1}}>{t}</button>
           ))}
         </div>
@@ -998,35 +997,6 @@ function FriendsPanel({ launching, toast, onClose, hidden }) {
                   <div className="fp-section-label">Offline — {steamFriends.filter(f=>f.status==="offline").length}</div>
                   {steamFriends.filter(f=>f.status==="offline").map(f=>(<div key={f.id} className="friend-item"><div className="friend-avatar-wrap"><img className="friend-avatar" src={f.avatar} alt={f.username}/><div className="friend-status-dot offline"/></div><div className="friend-info"><div className="friend-name">{f.username}</div><div className="friend-activity">Offline</div></div></div>))}
                 </div>)}
-              </div>
-            )}
-          </div>
-        )}
-
-        {steamTab==="xbox"&&(
-          <div>
-            {!xboxProfile?(
-              <div className="fp-login">
-                <div className="fp-login-icon">🎮</div>
-                <div className="fp-login-t">Connect Xbox</div>
-                <div className="fp-login-s">Shows your Xbox achievements and recent games</div>
-                <button className="btn-p" style={{fontSize:11,padding:"7px 16px"}} onClick={async()=>{const res=await window.electronAPI.xboxGetProfile();if(res.success) setXboxProfile(res.profile);else toast("Xbox connection failed — check your API key","err");}}>Connect Xbox</button>
-              </div>
-            ):(
-              <div>
-                <div className="fp-user" style={{marginBottom:12}}>
-                  <div style={{flex:1,minWidth:0}}><div className="fp-username">Xbox Connected</div><div className="fp-tag">OpenXBL</div></div>
-                  <button className="btn-gh" onClick={()=>setXboxProfile(null)} style={{fontSize:10,padding:"4px 8px"}}>Logout</button>
-                </div>
-                <button className="btn-p" style={{width:"100%",justifyContent:"center",marginBottom:8}} onClick={async()=>{
-                  const res=await window.electronAPI.xboxGetRecentGames();
-                  if(res.success){
-                    const titles=Array.isArray(res.games)?res.games:res.games?.titles||[];
-                    setXboxGames(titles);
-                    if(!titles.length) toast("No recent Xbox games found","err");
-                  } else toast(res.error||"Could not load Xbox games","err");
-                }}>Load Recent Games</button>
-                {xboxGames.length>0&&(<div><div className="fp-section-label">Recent Games</div>{xboxGames.slice(0,10).map(g=>(<div key={g.titleId} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid var(--border)"}}>{g.displayImage&&<img src={g.displayImage} alt={g.name} style={{width:32,height:32,borderRadius:4}}/>}<div style={{flex:1,minWidth:0}}><div style={{fontSize:11,fontWeight:600,color:"var(--t1)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</div><div style={{fontSize:9,color:"var(--t3)"}}>{g.achievement?.currentAchievements||0} / {g.achievement?.totalAchievements||0} achievements</div></div></div>))}</div>)}
               </div>
             )}
           </div>
@@ -3201,7 +3171,11 @@ function PipBox({ activeStream, onOpen, onClose, onMove }) {
   );
 }
 
-export default function App(){
+function AuraApp(){
+  // The signed-in AURA account (see components/auth)
+  const account=useAccount();
+  // Logging out closes this screen, so stop any recording first
+  useEffect(()=>()=>{ if(isAnyRecording()) stopAllRecording(); },[]);
   const [games,setGames]=useState(()=>load());
   const gamesRef=useRef(games);
   useEffect(()=>{gamesRef.current=games;},[games]);
@@ -3411,6 +3385,9 @@ export default function App(){
   const handleCustomColorsChange = useCallback((colors) => { setCustomColors(colors);saveCustomTheme(colors);applyTheme("custom",accent,colors); }, [accent]);
   const updateStats = useCallback((patch) => { setStats(prev=>{ const updated={...prev,...patch};saveStats(updated);checkAchievements(updated,unlockedAch);return updated; }); }, [checkAchievements, unlockedAch]);
   const toast=useCallback((msg,type="ok")=>{ playSfx(type==="err"?"error":"notify"); const id=uid();setToasts(t=>[...t,{id,msg,type}]);setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),3000); },[]);
+  // Favorites and playtime follow the signed-in account (see cloudsync.js)
+  useCloudGames(games,setGames,toast);
+  useCloudProfile({unlockedAch,setUnlockedAch,stats,setStats,theme,setTheme,accent,setAccent,customColors,setCustomColors,savedThemes,setSavedThemes,bgImage,setBgImage,settings,updateSettings,games,toast});
 
   const saveCustomTheme2 = useCallback((named) => {
     const updated = [...savedThemes.filter(t=>t.name!==named.name), named];
@@ -3589,9 +3566,15 @@ export default function App(){
             <button className="gm-rail-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu">
               {sidebarOpen?<Ic.MenuClose/>:<Ic.Menu/>}
             </button>
-            <div style={{display:"flex",flexDirection:"column",alignItems:sidebarOpen?"flex-start":"center",marginBottom:16,gap:4,width:"100%",paddingLeft:sidebarOpen?4:0}}>
-              <div className="gm-rail-logo" style={{background:"transparent",boxShadow:"none",overflow:"hidden",padding:2}}><img src="./aura-logo.png" alt="AURA" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
-              {sidebarOpen&&<div style={{fontFamily:"Rajdhani,sans-serif",fontSize:9,fontWeight:700,letterSpacing:3,background:"linear-gradient(90deg,var(--ac),var(--ac2))",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",marginLeft:4}}>AURA</div>}
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",marginBottom:16,gap:4,width:"100%"}}>
+              <div className="gm-rail-logo" style={{background:"transparent",boxShadow:"none",overflow:"hidden",padding:2,width:sidebarOpen?"auto":48,height:sidebarOpen?76:68,maxWidth:"100%",marginBottom:sidebarOpen?0:16}}><img src="./aura-logo.png" alt="AURA" style={{width:sidebarOpen?"auto":"100%",height:"100%",maxWidth:"100%",objectFit:"contain"}}/></div>
+            </div>
+            {/* Profile, centered at the top of the rail */}
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,width:"100%",marginBottom:8}}>
+              {profile.avatar
+                ? <img src={profile.avatar} alt={profile.username} className="gm-rail-avatar" style={{margin:0}} onClick={()=>setShowProfileModal(true)}/>
+                : <div className="gm-rail-avatar-ph" style={{margin:0}} onClick={()=>setShowProfileModal(true)}>🎮</div>
+              }
             </div>
             {navItems.map(it=>(
               <div key={it.id} className={`gm-rail-item ${view===it.id?"on":""}`} onClick={()=>goTo(it.id)} title={it.label}>
@@ -3604,10 +3587,10 @@ export default function App(){
               <Ic.Friends/>
               {sidebarOpen&&<span className="gm-rail-item-label">Friends</span>}
             </div>
-            {profile.avatar
-              ? <img src={profile.avatar} alt={profile.username} className="gm-rail-avatar" onClick={()=>setShowProfileModal(true)}/>
-              : <div className="gm-rail-avatar-ph" onClick={()=>setShowProfileModal(true)}>🎮</div>
-            }
+            {/* Log out, at the bottom of the rail */}
+            <div style={{marginTop:"auto",paddingTop:8,width:"100%",display:"flex",flexDirection:"column",alignItems:"center",flexShrink:0}}>
+              <LogoutButton rail open={sidebarOpen}/>
+            </div>
           </aside>
           <div className="gm-main" style={{position:"relative"}}>
             <div className="gm-search-bar">
@@ -3637,7 +3620,7 @@ export default function App(){
           <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onClose={()=>setFriendsOpen(false)}/>
         </div>
         {modal==="add"&&<Modal mode="add" onClose={()=>setModal(null)} onSave={doAdd}/>}
-        {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={(p)=>{setProfile(p);saveProfile(p);setShowProfileModal(false);toast("Profile updated!");}}/>}
+        {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={async(p)=>{const r=await account.saveProfile(p);if(!r.ok){toast(r.error,"err");return;}setProfile(r.profile);saveProfile(r.profile);setShowProfileModal(false);toast("Profile updated!");}}/>}
         {launching&&settings.anim&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
         {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
         {quickPickerModal}
@@ -3663,18 +3646,18 @@ export default function App(){
           <div className="sb-logo">
             {sidebarOpen
               ? <>
-                  <img src="./aura-logo.png" alt="AURA" style={{height:28,width:"auto",objectFit:"contain"}}/>
+                  <img src="./aura-logo.png" alt="AURA" style={{align:"center",height:44,width:"auto",maxWidth:"calc(100% - 44px)",objectFit:"contain"}}/>
                   <button className="sb-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu"><Ic.MenuClose/></button>
                 </>
               : <>
                   <button className="sb-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu" style={{margin:"0 auto"}}><Ic.Menu/></button>
-                  <img src="./aura-logo.png" alt="AURA" style={{width:32,height:32,objectFit:"contain",margin:"0 auto"}}/>
+                  <img src="./aura-logo.png" alt="AURA" style={{width:48,height:48,objectFit:"contain",margin:"0 auto"}}/>
                 </>
             }
           </div>
-          <div className="sb-profile" onClick={()=>setShowProfileModal(true)}>
+          <div className="sb-profile" style={{flexDirection:"column",justifyContent:"center",textAlign:"center",gap:8}} onClick={()=>setShowProfileModal(true)}>
             {profile.avatar?<img src={profile.avatar} alt={profile.username} className="sb-pav"/>:<div className="sb-pav-ph">🎮</div>}
-            {sidebarOpen&&<div style={{flex:1,minWidth:0}}><div className="sb-pname">{profile.username}</div><div className="sb-pedit">Edit profile</div></div>}
+            {sidebarOpen&&<div style={{minWidth:0,maxWidth:"100%"}}><div className="sb-pname">{profile.username}</div><div className="sb-pedit">Edit profile</div></div>}
           </div>
           <div className="sb-sec">
             {sidebarOpen&&<div className="sb-sl">Navigate</div>}
@@ -3696,6 +3679,10 @@ export default function App(){
               <div className="sb-stat-v">{fmtTime(totalPlaytime)||"0m"}</div>
               <div className="sb-stat-s">across {games.length} games</div>
             </div>}
+          </div>
+          {/* Log out, at the bottom of the sidebar */}
+          <div style={{paddingBottom:10,flexShrink:0}}>
+            <LogoutButton open={sidebarOpen}/>
           </div>
         </aside>
 
@@ -3780,7 +3767,7 @@ export default function App(){
       {modal==="add"&&<Modal mode="add" onClose={()=>setModal(null)} onSave={doAdd}/>}
       {modal==="edit"&&editT&&<Modal mode="edit" init={editT} onClose={()=>{setModal(null);setEditT(null);}} onSave={doEdit}/>}
       {modal==="delete"&&delT&&<DelModal game={delT} onClose={()=>{setModal(null);setDelT(null);}} onOk={doDel}/>}
-      {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={(p)=>{setProfile(p);saveProfile(p);setShowProfileModal(false);toast("Profile updated!");}}/>}
+      {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={async(p)=>{const r=await account.saveProfile(p);if(!r.ok){toast(r.error,"err");return;}setProfile(r.profile);saveProfile(r.profile);setShowProfileModal(false);toast("Profile updated!");}}/>}
       {launching&&settings.anim&&(<div className="launch"><div className="l-spin"/><div className="l-t">LAUNCHING</div><div className="l-s">{launching.title}</div><div className="l-p">{launching.exePath}</div></div>)}
       {nowPlaying&&<NowPlayingBar game={nowPlaying} onClose={()=>setNowPlaying(null)}/>}
 
@@ -3799,3 +3786,18 @@ export default function App(){
 }
 
 export { default as AuraBar } from "./components/aurabar";
+
+// ── AURA account ──────────────────────────────────────────────────────────────
+// Shows the log in / sign up page until someone is signed in, then loads AURA.
+// Each account gets a fresh copy of the app, so nothing carries over after a log out.
+export default function App(){
+  // Apply the saved theme straight away so the login page matches it
+  useState(()=>{ applyTheme(loadTheme(),loadAccent(),loadCustomTheme()); return null; });
+  // Cover art from this PC's library, shown behind the login form
+  const covers=useMemo(()=>load().map(g=>g.cover).filter(Boolean),[]);
+  return (
+    <AuthGate loadProfile={loadProfile} saveProfile={saveProfile} covers={covers} calm={!!SETTINGS.reduceMotion}>
+      {(accountKey)=><AuraApp key={accountKey}/>}
+    </AuthGate>
+  );
+}

@@ -53,8 +53,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // ── Epic & Xbox ─────────────────────────────────────────────────────────────
   importEpic:          () => ipcRenderer.invoke("import-epic"),
   importXbox:          () => ipcRenderer.invoke("import-xbox"),
-  xboxGetProfile:      () => ipcRenderer.invoke("xbox-get-profile"),
-  xboxGetRecentGames:  () => ipcRenderer.invoke("xbox-get-recent-games"),
 
   // ── Cover art (IGDB) ────────────────────────────────────────────────────────
   fetchCoverArt:   (title)  => ipcRenderer.invoke("fetch-cover-art", title),
@@ -137,4 +135,23 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onUpdateReady:     (cb) => ipcRenderer.on("update-ready",     ()      => cb()),
   downloadUpdate:    ()   => ipcRenderer.invoke("download-update"),
   installUpdate:     ()   => ipcRenderer.invoke("install-update"),
+});
+
+contextBridge.exposeInMainWorld("auraCloud", {
+  signUp: (email, password, username) => ipcRenderer.invoke("auth:signUp", email, password, username),
+  logIn: (email, password) => ipcRenderer.invoke("auth:logIn", email, password),
+  logOut: () => ipcRenderer.invoke("auth:logOut"),
+  getSession: () => ipcRenderer.invoke("auth:getSession"),
+  resendConfirmation: (email) => ipcRenderer.invoke("auth:resendConfirmation", email),
+  getMyProfile: () => ipcRenderer.invoke("profile:getMine"),
+  saveProfile: (username, avatarUrl) => ipcRenderer.invoke("profile:save", username, avatarUrl),
+  getProfile: (username) => ipcRenderer.invoke("profile:get", username),
+  getMyGames: () => ipcRenderer.invoke("games:getMine"),
+  saveMyGames: (games) => ipcRenderer.invoke("games:saveMine", games),
+  getMyData: () => ipcRenderer.invoke("data:getMine"),
+  saveMyData: (entries) => ipcRenderer.invoke("data:saveMine", entries),
+  getMySessionIds: () => ipcRenderer.invoke("sessions:getIds"),
+  getMySessions: (ids) => ipcRenderer.invoke("sessions:get", ids),
+  saveMySessions: (sessions) => ipcRenderer.invoke("sessions:save", sessions),
+  deleteMySessions: (ids) => ipcRenderer.invoke("sessions:delete", ids),
 });

@@ -5,7 +5,7 @@ const SITES = [
   { id: "instagram", label: "Instagram", url: "https://www.instagram.com/" },
   { id: "x",         label: "X",         url: "https://x.com/home" },
   { id: "facebook",  label: "Facebook",  url: "https://www.facebook.com/" },
-  { id: "browser",   label: "Browser",   url: "https://www.google.com/" },
+  { id: "browser",   label: "Browser",   url: "about:blank" }, // starts on AURA's start page
 ];
 
 // Turn what's typed in the address bar into a URL (or a Google search)
@@ -96,19 +96,36 @@ export default function SocialPage({ visible = true }) {
   const wv = views.current[active];
   const back = () => { try { if (wv?.canGoBack()) wv.goBack(); } catch {} };
   const forward = () => { try { if (wv?.canGoForward()) wv.goForward(); } catch {} };
-  const goHome = () => { try { wv?.loadURL(SITES.find((s) => s.id === active).url); } catch {} };
+  // Browser tab start page
+  const [browserHome, setBrowserHome] = useState(true);
+  const browserUrl = states.browser?.url;
+  useEffect(() => {
+    if (browserUrl && browserUrl !== "about:blank") setBrowserHome(false);
+  }, [browserUrl]);
+  const openInBrowserTab = (url) => {
+    const view = views.current.browser;
+    if (!view || !url) return;
+    try { view.loadURL(url); } catch { view.src = url; }
+    setBrowserHome(false);
+  };
+
+  const goHome = () => {
+    if (active === "browser") { setBrowserHome(true); return; }
+    try { wv?.loadURL(SITES.find((s) => s.id === active).url); } catch {}
+  };
 
   // Address bar (Browser tab)
   const [addr, setAddr] = useState(null); // null = show the page's URL
   useEffect(() => { setAddr(null); }, [active, st.url]);
   const go = (e) => {
     e.preventDefault();
-    const url = toUrl(addr ?? st.url ?? "");
-    if (url) { try { wv?.loadURL(url); } catch {} }
+    const url = toUrl(addr ?? (showStart ? "" : st.url) ?? "");
+    if (url) openInBrowserTab(url);
     setAddr(null);
     e.target.querySelector("input")?.blur();
   };
   const isBrowser = active === "browser";
+  const showStart = isBrowser && (browserHome || !st.url || st.url === "about:blank");
   const reload = () => { try { wv?.reload(); } catch {} };
   const openOutside = () => {
     const url = st.url || SITES.find((s) => s.id === active)?.url;
@@ -153,7 +170,7 @@ export default function SocialPage({ visible = true }) {
         {isBrowser ? (
           <form onSubmit={go} style={{ flex: 1, display: "flex" }}>
             <input
-              value={addr ?? st.url ?? ""}
+              value={addr ?? (showStart ? "" : st.url) ?? ""}
               onChange={(e) => setAddr(e.target.value)}
               onFocus={(e) => e.target.select()}
               placeholder="Search Google or type a web address"
@@ -184,6 +201,68 @@ export default function SocialPage({ visible = true }) {
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
         {SITES.filter((s) => opened.has(s.id)).map((s) => (
           <SiteView key={s.id} site={s} active={s.id === active} onState={onState} register={register} />
+        ))}
+        {showStart && <StartPage onGo={openInBrowserTab} />}
+      </div>
+    </div>
+  );
+}
+
+// ── Browser start page ───────────────────────────────────────────────────────
+const QUICK_LINKS = [
+  { label: "YouTube", url: "https://www.youtube.com/" },
+  { label: "Twitch", url: "https://www.twitch.tv/" },
+  { label: "Reddit", url: "https://www.reddit.com/" },
+  { label: "Steam Store", url: "https://store.steampowered.com/" },
+];
+
+function StartPage({ onGo }) {
+  const [q, setQ] = useState("");
+  const submit = (e) => {
+    e.preventDefault();
+    const url = toUrl(q);
+    if (url) onGo(url);
+  };
+  return (
+    <div style={{
+      position: "absolute", inset: 0, background: "var(--bg)", display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center", gap: 28, padding: 24,
+    }}>
+      <div role="img" aria-label="AURA" style={{
+        width: 116, height: 116,
+        background: "linear-gradient(135deg, var(--ac), var(--ac2))",
+        WebkitMaskImage: "url(./aura-mark.png)", maskImage: "url(./aura-mark.png)",
+        WebkitMaskSize: "contain", maskSize: "contain",
+        WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center", maskPosition: "center",
+        filter: "drop-shadow(0 8px 28px var(--acg))",
+      }} />
+      <form onSubmit={submit} style={{ width: "100%", maxWidth: 560 }}>
+        <input
+          autoFocus
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search Google or type a web address"
+          aria-label="Search or web address"
+          spellCheck={false}
+          style={{
+            width: "100%", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 999,
+            padding: "14px 22px", color: "var(--t1)", fontSize: 15, outline: "none", fontFamily: "DM Sans, sans-serif",
+            boxShadow: "0 8px 30px rgba(0,0,0,.35)",
+          }}
+          onFocus={(e) => { e.target.style.borderColor = "var(--ac)"; }}
+          onBlur={(e) => { e.target.style.borderColor = "var(--border)"; }}
+        />
+      </form>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+        {QUICK_LINKS.map((l) => (
+          <button key={l.label} onClick={() => onGo(l.url)}
+            style={{
+              background: "var(--card)", border: "1px solid var(--border)", color: "var(--t2)", borderRadius: 999,
+              padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "DM Sans, sans-serif",
+            }}>
+            {l.label}
+          </button>
         ))}
       </div>
     </div>

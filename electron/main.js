@@ -158,37 +158,41 @@ function getAutoResolution() {
 
 
 
-// ── Credentials from .env ─────────────────────────────────────────────────────
-// Never hardcode these — keep them in electron/.env or your project root .env
-const DISCORD_CLIENT_ID     = process.env.DISCORD_CLIENT_ID;
-const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+// ── AURA server ───────────────────────────────────────────────────────────────
+// The secret keys (Twitch/IGDB, Steam, YouTube, Discord) live on the AURA server, not in
+// this app. AURA asks the server, and the server checks the AURA login before answering.
+const AURA_SERVER_URL = "https://cvyppf02p0.c36.airoapp.ai";
+// Discord's client ID is public (it's part of the login link), so it can stay in the app
+const DISCORD_CLIENT_ID     = process.env.DISCORD_CLIENT_ID || "1490124739669266664";
 const DISCORD_REDIRECT_URI  = "http://localhost:3000/callback";
-const IGDB_CLIENT_ID        = process.env.TWITCH_CLIENT_ID;
-const IGDB_CLIENT_SECRET    = process.env.TWITCH_CLIENT_SECRET;
-const STEAM_API_KEY         = process.env.STEAM_API_KEY;
-const OPENXBL_API_KEY           = process.env.OPENXBL_API_KEY;
-const YOUTUBE_API_KEY       = process.env.YOUTUBE_API_KEY;
+
+// Ask the AURA server for something. Answers { success, ... } like the old handlers did.
+async function auraServer(route, body = {}) {
+  let token = null;
+  try { token = await auraCloud.getAccessToken(); }
+  catch (e) { return { success: false, error: "AURA couldn't read your login on this PC (" + (e?.message || "unknown problem") + ")." }; }
+  if (!token) return { success: false, error: "AURA couldn't find your login on this PC. Log out and log back in." };
+  try {
+    const res = await axios.post(AURA_SERVER_URL + route, body, {
+      // Sent twice: some hosts drop the standard Authorization header before the server sees it
+      headers: { Authorization: `Bearer ${token}`, "X-Aura-Token": token },
+      timeout: 30000,
+      validateStatus: () => true,
+    });
+    if (res.data && typeof res.data === "object" && typeof res.data.success === "boolean") return res.data;
+    return { success: false, error: `The AURA server answered with an error (${res.status}).` };
+  } catch {
+    return { success: false, error: "Couldn't reach the AURA server. Check your internet connection." };
+  }
+}
 
 let discordToken  = null;
 let authServer    = null;
-let igdbToken     = null;
-let igdbTokenExp  = 0;
 let mainWin       = null;
 
 // ── Auto-updater ──────────────────────────────────────────────────────────────
 autoUpdater.autoDownload         = false;
 autoUpdater.autoInstallOnAppQuit = true;
-
-// ── IGDB/Twitch token — refreshes when expired ────────────────────────────────
-async function getIGDBToken() {
-  if (igdbToken && Date.now() < igdbTokenExp) return igdbToken;
-  const res = await axios.post(
-    `https://id.twitch.tv/oauth2/token?client_id=${IGDB_CLIENT_ID}&client_secret=${IGDB_CLIENT_SECRET}&grant_type=client_credentials`
-  );
-  igdbToken    = res.data.access_token;
-  igdbTokenExp = Date.now() + (res.data.expires_in - 300) * 1000; // 5min buffer
-  return igdbToken;
-}
 
 // ── Find Steam install path from registry ─────────────────────────────────────
 function getSteamPath() {
@@ -365,6 +369,36 @@ ipcMain.handle("quick-record-state", (_e, { recording, game }) => {
   pushBarState();
   return { success: true };
 });
+
+
+// ── AURA accounts (sign up, log in, profiles). The work happens in supabase.js ─
+const auraCloud = require("./supabase");
+// Every account call answers { success: true, data } or { success: false, error }
+const cloudHandler = (fn) => async (_e, ...args) => {
+  try {
+    return { success: true, data: (await fn(...args)) ?? null };
+  } catch (e) {
+    return { success: false, error: e?.message || "Something went wrong" };
+  }
+};
+ipcMain.handle("auth:signUp", cloudHandler(auraCloud.signUp));
+ipcMain.handle("auth:logIn", cloudHandler(auraCloud.logIn));
+ipcMain.handle("auth:logOut", cloudHandler(auraCloud.logOut));
+ipcMain.handle("auth:getSession", cloudHandler(auraCloud.getSession));
+ipcMain.handle("auth:resendConfirmation", cloudHandler(auraCloud.resendConfirmation));
+ipcMain.handle("profile:getMine", cloudHandler(auraCloud.getMyProfile));
+ipcMain.handle("profile:save", cloudHandler(auraCloud.saveProfile));
+ipcMain.handle("profile:get", cloudHandler(auraCloud.getProfile));
+ipcMain.handle("games:getMine", cloudHandler(auraCloud.getMyGames));
+ipcMain.handle("games:saveMine", cloudHandler(auraCloud.saveMyGames));
+ipcMain.handle("data:getMine", cloudHandler(auraCloud.getMyData));
+ipcMain.handle("data:saveMine", cloudHandler(auraCloud.saveMyData));
+ipcMain.handle("sessions:getIds", cloudHandler(auraCloud.getMySessionIds));
+ipcMain.handle("sessions:get", cloudHandler(auraCloud.getMySessions));
+ipcMain.handle("sessions:save", cloudHandler(auraCloud.saveMySessions));
+ipcMain.handle("sessions:delete", cloudHandler(auraCloud.deleteMySessions));
+
+
 
 // Pick the screen the mouse is on, for hands-free recording
 ipcMain.handle("get-quick-capture-source", async () => {
@@ -833,224 +867,34 @@ ipcMain.handle("import-xbox", async () => {
   } catch(e) { return { success: false, error: e.message }; }
 });
 
-ipcMain.handle("xbox-get-profile", async () => {
-  try {
-    const res = await axios.get("https://xbl.io/api/v2/account", {
-      headers: { "X-Authorization": OPENXBL_API_KEY, Accept: "application/json" },
-    });
-    return { success: true, profile: res.data };
-  } catch(e) { return { success: false, error: e.message }; }
-});
-
-ipcMain.handle("xbox-get-recent-games", async () => {
-  try {
-    const res = await axios.get("https://xbl.io/api/v2/player/titleHistory", {
-      headers: { "X-Authorization": OPENXBL_API_KEY, Accept: "application/json" },
-    });
-    const titles = res.data?.titles || res.data?.games || [];
-    return { success: true, games: titles };
-  } catch(e) { return { success: false, error: e.message }; }
-});
-
 // ── IGDB cover art ────────────────────────────────────────────────────────────
-ipcMain.handle("fetch-cover-art", async (_e, title) => {
-  try {
-    const token = await getIGDBToken();
-    const res   = await axios.post(
-      "https://api.igdb.com/v4/games",
-      `search "${title}"; fields name,cover.image_id; limit 1;`,
-      { headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}`, "Content-Type": "text/plain" } }
-    );
-    const imageId = res.data?.[0]?.cover?.image_id;
-    if (!imageId) return { success: false, error: "No cover found" };
-    return { success: true, url: `https://images.igdb.com/igdb/image/upload/t_cover_big/${imageId}.webp` };
-  } catch(e) { return { success: false, error: e.message }; }
-});
+ipcMain.handle("fetch-cover-art", async (_e, title) => auraServer("/api/covers/one", { title }));
 
 ipcMain.handle("fetch-covers-bulk", async (_e, games) => {
-  try {
-    const token  = await getIGDBToken();
-    const covers = {};
-    for (const game of games) {
-      try {
-        const res = await axios.post(
-          "https://api.igdb.com/v4/games",
-          `search "${game.title}"; fields name,cover.image_id; limit 1;`,
-          { headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}`, "Content-Type": "text/plain" } }
-        );
-        const imageId = res.data?.[0]?.cover?.image_id;
-        if (imageId) covers[game.id] = `https://images.igdb.com/igdb/image/upload/t_cover_big/${imageId}.webp`;
-      } catch {}
-    }
-    return { success: true, covers };
-  } catch(e) { return { success: false, error: e.message }; }
+  // Sent in small groups so a big library doesn't make one very long request
+  const list = (Array.isArray(games) ? games : []).filter((g) => g && g.title).map((g) => ({ id: g.id, title: g.title }));
+  const covers = {};
+  for (let i = 0; i < list.length; i += 20) {
+    const res = await auraServer("/api/covers/bulk", { games: list.slice(i, i + 20) });
+    if (!res.success) return Object.keys(covers).length ? { success: true, covers } : res;
+    Object.assign(covers, res.covers || {});
+  }
+  return { success: true, covers };
 });
 
 // ── Twitch live streams ────────────────────────────────────────────────────────
-ipcMain.handle("fetch-twitch-streams", async (_e, { gameNames, userLogins }) => {
-  try {
-    const token   = await getIGDBToken();
-    let gameIds   = [];
+ipcMain.handle("fetch-twitch-streams", async (_e, opts = {}) =>
+  auraServer("/api/twitch/streams", { gameNames: opts?.gameNames, userLogins: opts?.userLogins }));
 
-    if (gameNames?.length) {
-      // Batch game name lookups
-      for (const name of gameNames.slice(0, 10)) {
-        try {
-          const r = await axios.get("https://api.twitch.tv/helix/games", {
-            headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
-            params:  { name },
-          });
-          const id = r.data?.data?.[0]?.id;
-          if (id) gameIds.push(id);
-        } catch {}
-      }
-    }
-
-    const params = new URLSearchParams();
-    params.append("first", "20");
-    gameIds.forEach(id  => params.append("game_id",   id));
-    userLogins?.slice(0, 10).forEach(u => params.append("user_login", u.trim().toLowerCase()));
-
-    const r = await axios.get(`https://api.twitch.tv/helix/streams?${params}`, {
-      headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
-    });
-
-    const streams = (r.data?.data || []).map(s => ({
-      id:        s.id,
-      user:      s.user_name,
-      userLogin: s.user_login,
-      title:     s.title,
-      game:      s.game_name,
-      viewers:   s.viewer_count,
-      thumbnail: s.thumbnail_url.replace("{width}", "440").replace("{height}", "248"),
-      url:       `https://twitch.tv/${s.user_login}`,
-    }));
-
-    return { success: true, streams };
-  } catch(e) {
-    console.error("Twitch streams error:", e.message);
-    return { success: false, error: e.message };
-  }
-});
-
-ipcMain.handle("search-twitch", async (_e, { query, type }) => {
-  // type: "streams" | "channels" | "games"
-  try {
-    const token = await getIGDBToken();
-
-    if (type === "games") {
-      const r = await axios.get("https://api.twitch.tv/helix/search/categories", {
-        headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
-        params: { query, first: 10 },
-      });
-      return { success: true, results: (r.data?.data || []).map(g => ({
-        id: g.id, name: g.name, thumbnail: g.box_art_url?.replace("{width}","140").replace("{height}","190"),
-      }))};
-    }
-
-    if (type === "channels") {
-      const r = await axios.get("https://api.twitch.tv/helix/search/channels", {
-        headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
-        params: { query, first: 20 },
-      });
-      return { success: true, results: (r.data?.data || []).map(c => ({
-        id: c.id, name: c.display_name, login: c.broadcaster_login,
-        thumbnail: c.thumbnail_url, game: c.game_name, isLive: c.is_live,
-        title: c.title,
-      }))};
-    }
-
-    // Default: search streams by game name or channel
-    const [chanRes, gameRes] = await Promise.allSettled([
-      axios.get("https://api.twitch.tv/helix/search/channels", {
-        headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
-        params: { query, first: 10 },
-      }),
-      axios.get("https://api.twitch.tv/helix/search/categories", {
-        headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
-        params: { query, first: 5 },
-      }),
-    ]);
-
-    const channels = chanRes.status === "fulfilled"
-      ? (chanRes.value.data?.data || []).map(c => ({
-          id: c.id, name: c.display_name, login: c.broadcaster_login,
-          thumbnail: c.thumbnail_url, game: c.game_name, isLive: c.is_live, title: c.title,
-        }))
-      : [];
-
-    const games = gameRes.status === "fulfilled"
-      ? (gameRes.value.data?.data || []).map(g => ({
-          id: g.id, name: g.name, thumbnail: g.box_art_url?.replace("{width}","140").replace("{height}","190"),
-        }))
-      : [];
-
-    // If game found, also fetch live streams for it
-    let gameStreams = [];
-    if (games.length) {
-      try {
-        const params = new URLSearchParams();
-        params.append("first", "10");
-        games.slice(0, 3).forEach(g => params.append("game_id", g.id));
-        const sr = await axios.get(`https://api.twitch.tv/helix/streams?${params}`, {
-          headers: { "Client-ID": IGDB_CLIENT_ID, Authorization: `Bearer ${token}` },
-        });
-        gameStreams = (sr.data?.data || []).map(s => ({
-          id: s.id, user: s.user_name, userLogin: s.user_login,
-          title: s.title, game: s.game_name, viewers: s.viewer_count,
-          thumbnail: s.thumbnail_url.replace("{width}","440").replace("{height}","248"),
-          url: `https://twitch.tv/${s.user_login}`,
-        }));
-      } catch {}
-    }
-
-    return { success: true, channels, games, gameStreams };
-  } catch(e) {
-    return { success: false, error: e.message };
-  }
-});
+ipcMain.handle("search-twitch", async (_e, opts = {}) =>
+  auraServer("/api/twitch/search", { query: opts?.query, type: opts?.type }));
 
 
-ipcMain.handle("steam-get-profile", async (_e, steamId) => {
-  try {
-    const res = await axios.get(
-      `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=${STEAM_API_KEY}&steamids=${steamId}`
-    );
-    const players = res.data?.response?.players;
-    if (!players?.length) return { success: false, error: "Profile not found" };
-    return { success: true, player: players[0] };
-  } catch(e) { return { success: false, error: e.message }; }
-});
+ipcMain.handle("steam-get-profile", async (_e, steamId) => auraServer("/api/steam/profile", { steamId: String(steamId || "").trim() }));
 
-ipcMain.handle("steam-get-playtime", async (_e, steamId) => {
-  try {
-    const res = await axios.get(
-      `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${STEAM_API_KEY}&steamid=${steamId}&include_appinfo=true&include_played_free_games=true`
-    );
-    return { success: true, games: res.data?.response?.games || [] };
-  } catch(e) { return { success: false, error: e.message }; }
-});
+ipcMain.handle("steam-get-playtime", async (_e, steamId) => auraServer("/api/steam/playtime", { steamId: String(steamId || "").trim() }));
 
-ipcMain.handle("steam-get-friends-profiles", async (_e, steamId) => {
-  try {
-    const fr = await axios.get(
-      `https://api.steampowered.com/ISteamUser/GetFriendList/v1/?key=${STEAM_API_KEY}&steamid=${steamId}&relationship=friend`
-    );
-    const ids = (fr.data?.friendslist?.friends || []).map(f => f.steamid).slice(0, 100).join(",");
-    if (!ids) return { success: true, friends: [] };
-    const sr = await axios.get(
-      `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=${STEAM_API_KEY}&steamids=${ids}`
-    );
-    const friends = (sr.data?.response?.players || []).map(p => ({
-      id:       p.steamid,
-      username: p.personaname,
-      avatar:   p.avatarmedium,
-      status:   p.personastate > 0 ? "online" : "offline",
-      activity: p.gameextrainfo || null,
-    }));
-    return { success: true, friends };
-  } catch(e) { return { success: false, error: e.message }; }
-});
+ipcMain.handle("steam-get-friends-profiles", async (_e, steamId) => auraServer("/api/steam/friends", { steamId: String(steamId || "").trim() }));
 
 // ── Discord OAuth ─────────────────────────────────────────────────────────────
 ipcMain.handle("discord-login", async () => {
@@ -1128,17 +972,7 @@ ipcMain.handle("rpc-get-friends", async () => {
 });
 
 // ── YouTube trailer ───────────────────────────────────────────────────────────
-ipcMain.handle("fetch-trailer", async (_e, title) => {
-  try {
-    const q   = encodeURIComponent(`${title} official game trailer`);
-    const res = await axios.get(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q}&type=video&maxResults=1&key=${YOUTUBE_API_KEY}`
-    );
-    const videoId = res.data?.items?.[0]?.id?.videoId;
-    if (!videoId) return { success: false, error: "No trailer found" };
-    return { success: true, videoId };
-  } catch(e) { return { success: false, error: e.message }; }
-});
+ipcMain.handle("fetch-trailer", async (_e, title) => auraServer("/api/trailer", { title }));
 
 // ── Clip Recording ────────────────────────────────────────────────────────────
 function startRecording(gameName, opts = {}) {
@@ -1705,14 +1539,9 @@ ipcMain.handle("stream-open", async (_e, { channel, bounds }) => {
 });
 
 ipcMain.handle("get-env-debug", () => ({
-  STEAM_API_KEY: process.env.STEAM_API_KEY ? process.env.STEAM_API_KEY.slice(0, 8) + "..." : "MISSING",
-  DISCORD_CLIENT_ID: process.env.DISCORD_CLIENT_ID ? process.env.DISCORD_CLIENT_ID.slice(0, 8) + "..." : "MISSING",
-  DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET ? "SET" : "MISSING",
-  OPENXBL_API_KEY: process.env.OPENXBL_API_KEY ? process.env.OPENXBL_API_KEY.slice(0, 8) + "..." : "MISSING",
-  IGDB_CLIENT_ID: process.env.IGDB_CLIENT_ID ? "SET" : "MISSING",
-  IGDB_CLIENT_SECRET: process.env.IGDB_CLIENT_SECRET ? "SET" : "MISSING",
-  TWITCH_CLIENT_ID: process.env.TWITCH_CLIENT_ID ? "SET" : "MISSING",
-  TWITCH_CLIENT_SECRET: process.env.TWITCH_CLIENT_SECRET ? "SET" : "MISSING",
+  AURA_SERVER: AURA_SERVER_URL,
+  KEYS: "On the AURA server, not in this app",
+  DISCORD_CLIENT_ID: DISCORD_CLIENT_ID ? "SET" : "MISSING",
 }));
 
 ipcMain.handle("focus-main", () => {
@@ -1863,18 +1692,10 @@ function startAuthServer() {
       const code = url.searchParams.get("code");
       if (!code) { res.writeHead(400); res.end("No code"); return; }
       try {
-        const tokenRes = await axios.post(
-          "https://discord.com/api/oauth2/token",
-          new URLSearchParams({
-            client_id:     DISCORD_CLIENT_ID,
-            client_secret: DISCORD_CLIENT_SECRET,
-            grant_type:    "authorization_code",
-            code,
-            redirect_uri:  DISCORD_REDIRECT_URI,
-          }),
-          { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-        );
-        discordToken = tokenRes.data.access_token;
+        // The AURA server swaps the one-time code for a login (that step needs the Discord secret)
+        const tokenRes = await auraServer("/api/discord/token", { code });
+        if (!tokenRes.success) throw new Error(tokenRes.error || "Discord login failed.");
+        discordToken = tokenRes.access_token;
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(`<html><body style="background:#222831;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px">
           <div style="font-size:48px">✅</div>
