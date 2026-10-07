@@ -4,7 +4,8 @@
  * Everything the window needs for AURA friends and direct messages:
  *   - useAuraSocial     started once in AuraApp: loads your friends and conversations, listens
  *                       for live updates, shows in-app notices, and returns the unread count
- *   - MessagesPage      the Messages page (frosted glass, with its own color scheme)
+ *   - MessagesPage      the Messages page (frosted glass, with its own colors and background),
+ *                       including pictures, GIFs and videos
  *   - AuraFriendsTab    the "AURA" tab in the Friends panel: add friends, requests, Message
  *   - MessagesIcon      the icon used in the left menu
  *
@@ -14,6 +15,7 @@
  * Added by aura-messages-setup.cjs.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 
 // ── Talking to the main process ───────────────────────────────────────────────
 async function call(name, ...args) {
@@ -30,6 +32,7 @@ const blank = () => ({
   friends: [], friendsLoaded: false, friendsError: "",
   conversations: [], conversationsLoaded: false, conversationsError: "",
   threads: {},          // conversation id -> { items, hasMore, loading, loadingOlder, error, loaded }
+  media: {},            // file path -> { url, at, life } viewing links, fetched as files come on screen
   activeId: null, pageOpen: false,
 });
 let state = blank();
@@ -126,6 +129,42 @@ const actions = {
   },
   discard(conversationId, tempId) { setThread(conversationId, (t) => ({ items: t.items.filter((m) => m.id !== tempId) })); },
 
+  // Sends a picture, GIF or video. `attachment` comes from readAttachment() below.
+  async sendMedia(conversationId, attachment, caption, retryOf) {
+    if (!attachment?.file || !state.me) return false;
+    const content = tidy(caption);
+    const tempId = retryOf || `sending-${++tempCounter}`;
+    const draft = {
+      id: tempId, conversationId, senderId: state.me.id, content, createdAt: new Date().toISOString(), readAt: null, pending: true, failed: false, attachment,
+      media: { path: "", kind: attachment.kind, mime: attachment.mime, size: attachment.size, width: attachment.width, height: attachment.height, name: attachment.name, local: attachment.url },
+    };
+    setThread(conversationId, (t) => ({ items: [...t.items.filter((m) => m.id !== tempId), draft] }));
+    try {
+      const bytes = new Uint8Array(await attachment.file.arrayBuffer());
+      const saved = await call("sendMedia", conversationId, { name: attachment.name, bytes, width: attachment.width, height: attachment.height }, content);
+      // You already have the file, so show your own copy instead of downloading it back
+      if (saved.media?.path) set((s) => ({ media: { ...s.media, [saved.media.path]: { url: attachment.url, at: Date.now(), life: Infinity } } }));
+      setThread(conversationId, (t) => ({ items: mergeMessage(t.items.filter((m) => m.id !== tempId), saved) }));
+      touchConversation(saved, false);
+      return true;
+    } catch (e) {
+      setThread(conversationId, (t) => ({ items: t.items.map((m) => (m.id === tempId ? { ...m, pending: false, failed: true, error: e.message } : m)) }));
+      return false;
+    }
+  },
+
+  // Asks for a viewing link for a file. Requests made close together go out as one.
+  needMedia(path, again) {
+    if (!path) return;
+    const have = state.media[path];
+    if (have && !again && Date.now() - have.at < have.life) return;
+    if (!again && Date.now() - (mediaAsked[path] || 0) < 15000) return;
+    mediaAsked[path] = Date.now();
+    mediaWanted.add(path);
+    clearTimeout(mediaTimer);
+    mediaTimer = setTimeout(fetchMedia, 40);
+  },
+
   // Marks what the other person sent as read (a moment after you look at it)
   markRead(conversationId) {
     const c = state.conversations.find((x) => x.id === conversationId);
@@ -154,6 +193,67 @@ const actions = {
   },
 };
 
+const mediaWanted = new Set();
+const mediaAsked = {};
+let mediaTimer = null;
+async function fetchMedia() {
+  const paths = [...mediaWanted];
+  mediaWanted.clear();
+  if (!paths.length) return;
+  const now = Date.now();
+  try {
+    const { urls, seconds } = await call("mediaUrls", paths);
+    const life = Math.max(60, seconds || 3600) * 800; // ask again a little before the link runs out
+    set((s) => ({ media: { ...s.media, ...Object.fromEntries(paths.map((p) => [p, urls?.[p] ? { url: urls[p], at: now, life } : { url: "", at: now, life: 60000, missing: true }])) } }));
+  } catch (e) {
+    set((s) => ({ media: { ...s.media, ...Object.fromEntries(paths.filter((p) => !s.media[p]?.url).map((p) => [p, { url: "", at: now, life: 0, error: e.message }])) } }));
+  }
+}
+
+// "Photo", "GIF" or "Video": what a file is called where there are no words to show
+const mediaWord = (media) => (!media ? "" : media.kind === "video" ? "Video" : media.mime === "image/gif" ? "GIF" : "Photo");
+const sizeText = (n) => (n >= 1048576 ? (n / 1048576).toFixed(n >= 10485760 ? 0 : 1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
+
+// What can be attached. The main process checks again from the file's own bytes.
+const MEDIA_LIMITS = { image: 10 * 1024 * 1024, video: 50 * 1024 * 1024 };
+const MEDIA_ACCEPT = "image/png,image/jpeg,image/gif,image/webp,video/mp4,video/webm,video/quicktime,.png,.jpg,.jpeg,.gif,.webp,.mp4,.webm,.mov";
+const MAX_ATTACHMENTS = 6;
+let attachmentCounter = 0;
+function kindOf(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const ext = (String(file?.name || "").toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || "";
+  if (/^image\/(png|jpeg|gif|webp)$/.test(type) || (!type && /^(png|jpe?g|gif|webp)$/.test(ext))) return { kind: "image", mime: type || "image/" + (ext === "jpg" ? "jpeg" : ext) };
+  if (/^video\/(mp4|webm|quicktime)$/.test(type) || (!type && /^(mp4|webm|mov)$/.test(ext))) return { kind: "video", mime: type || (ext === "mov" ? "video/quicktime" : "video/" + ext) };
+  return null;
+}
+// Reads a chosen, pasted or dropped file: what it is, how big, and its width and height
+// (so the chat can keep the right amount of room for it before it has loaded).
+async function readAttachment(file) {
+  const what = kindOf(file);
+  const name = file?.name || "file";
+  if (!what) throw new Error(`"${name}" can't be sent. Pictures (PNG, JPG, WebP), GIFs and videos (MP4, WebM, MOV) only.`);
+  if (!file.size) throw new Error(`"${name}" is empty.`);
+  if (file.size > MEDIA_LIMITS[what.kind]) throw new Error(`"${name}" is ${sizeText(file.size)}. ${what.kind === "video" ? "Videos" : "Pictures and GIFs"} can be up to ${sizeText(MEDIA_LIMITS[what.kind])}.`);
+  const url = URL.createObjectURL(file);
+  const size = await new Promise((resolve) => {
+    const done = (w, h) => resolve(w > 0 && h > 0 ? { width: w, height: h } : { width: null, height: null });
+    const giveUp = setTimeout(() => done(0, 0), 4000);
+    if (what.kind === "image") {
+      const img = new Image();
+      img.onload = () => { clearTimeout(giveUp); done(img.naturalWidth, img.naturalHeight); };
+      img.onerror = () => { clearTimeout(giveUp); done(0, 0); };
+      img.src = url;
+    } else {
+      const v = document.createElement("video");
+      v.preload = "metadata"; v.muted = true;
+      v.onloadedmetadata = () => { clearTimeout(giveUp); done(v.videoWidth, v.videoHeight); };
+      v.onerror = () => { clearTimeout(giveUp); done(0, 0); };
+      v.src = url;
+    }
+  });
+  return { id: `att-${++attachmentCounter}`, file, url, name, size: file.size, ...what, ...size };
+}
+
 function mergeMessage(items, message) {
   if (items.some((m) => m.id === message.id)) return items;
   const out = [...items, message];
@@ -164,7 +264,7 @@ function mergeMessage(items, message) {
 function touchConversation(message, countUnread) {
   set((s) => ({
     conversations: sortByNewest(s.conversations.map((c) => (c.id !== message.conversationId ? c : {
-      ...c, lastMessage: message.content.slice(0, 160), lastSenderId: message.senderId, lastMessageAt: message.createdAt,
+      ...c, lastMessage: message.content.slice(0, 160), lastMedia: mediaWord(message.media), lastSenderId: message.senderId, lastMessageAt: message.createdAt,
       unread: countUnread ? c.unread + 1 : c.unread,
     }))),
   }));
@@ -177,7 +277,10 @@ function onMessage(message) {
   if (t?.loaded) {
     if (t.items.some((m) => m.id === message.id)) return; // already have it (our own send, confirmed)
     // Our own message arriving live before the send call answered: it replaces the "sending" copy
-    const twin = mine ? t.items.find((m) => m.pending && m.content === message.content) : null;
+    const twin = !mine ? null : t.items.find((m) => m.pending && m.content === message.content
+      && (message.media ? !!m.media && m.media.size === message.media.size && (m.media.name || "") === (message.media.name || "") : !m.media));
+    // Keep showing your own copy of a file you just sent
+    if (twin?.media?.local && message.media?.path) set((s) => ({ media: { ...s.media, [message.media.path]: { url: twin.media.local, at: Date.now(), life: Infinity } } }));
     setThread(message.conversationId, (cur) => ({ items: mergeMessage(twin ? cur.items.filter((m) => m.id !== twin.id) : cur.items, message) }));
   }
   const listed = conversation ? null : actions.refreshConversations(); // a brand-new conversation: fetch the list to get it
@@ -190,7 +293,7 @@ function onMessage(message) {
   const now = Date.now();
   if (now - (lastNotice[message.conversationId] || 0) < 4000) return;
   lastNotice[message.conversationId] = now;
-  const text = message.content.replace(/\s+/g, " ").trim();
+  const text = message.content.replace(/\s+/g, " ").trim() || (message.media ? `sent a ${mediaWord(message.media) === "GIF" ? "GIF" : mediaWord(message.media).toLowerCase()}` : "");
   const say = (name) => hooks.toast?.(`${name || "New message"}: ${text.length > 60 ? text.slice(0, 59) + "…" : text}`);
   const known = conversation?.username || state.friends.find((f) => f.userId === message.senderId)?.username;
   if (known || !listed) say(known);
@@ -278,6 +381,9 @@ const IconPalette = () => <Svg d={<><path d="M12 3a9 9 0 1 0 0 18c1.2 0 1.8-.9 1
 const IconPlus = () => <Svg d={<path d="M12 5v14M5 12h14"/>} />;
 const IconX = () => <Svg d={<path d="M6 6l12 12M18 6L6 18"/>} size={14} />;
 const IconDown = () => <Svg d={<path d="M6 9l6 6 6-6"/>} size={14} />;
+const IconClip = () => <Svg d={<path d="M20.5 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8l-8.5 8.5a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/>} />;
+const IconPlay = () => <Svg d={<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/>} size={22} />;
+const IconPhoto = () => <Svg d={<><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l5-4.5 3.5 3 3-2.5L21 17"/></>} size={20} />;
 const IconGame = () => <Svg d={<><rect x="2.5" y="7" width="19" height="10" rx="5"/><path d="M7.5 10.5v3M6 12h3M15.5 11h.01M17.5 13h.01"/></>} />;
 
 function Avatar({ name, url, size = 38, online = null }) {
@@ -312,9 +418,12 @@ function dayLabel(iso) {
   return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: d.getFullYear() === today.getFullYear() ? undefined : "numeric" });
 }
 
-// ── Color scheme for the Messages page ────────────────────────────────────────
-// "Match AURA" follows your theme and accent. The others are fixed looks. Saved on this PC.
+// ── Colors and background for the Messages page ───────────────────────────────
+// "Match AURA" follows your theme and accent. The others are fixed looks. The background is the
+// glow by default, or a picture of your own. All of it is saved on this PC.
 const LOOK_KEY = "aura_messages_look";
+const BG_KEY = "aura_messages_bg";       // your own background picture, shrunk and kept as a data URL
+const AURA_BG_KEY = "aura_bg";           // the background set on AURA's Customize page
 const SCHEMES = {
   aura:    { name: "Match AURA" },
   violet:  { name: "Violet",  a: "#8b5cf6", b: "#c4b5fd", base: "#0b0714" },
@@ -326,7 +435,15 @@ const SCHEMES = {
   custom:  { name: "Custom" },
 };
 const HEX = /^#[0-9a-f]{6}$/i;
-const DEFAULT_LOOK = { scheme: "aura", a: "#8b5cf6", b: "#c4b5fd", glass: 62 };
+const DEFAULT_LOOK = { scheme: "aura", a: "#8b5cf6", b: "#c4b5fd", glass: 62, bg: "glow", bright: 45, blur: 14 };
+const within = (v, lo, hi, fallback) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback);
+const stored = (key) => { try { return localStorage.getItem(key) || ""; } catch { return ""; } };
+// The picture behind the glass, or "" for the glow
+function backgroundOf(look) {
+  if (look.bg === "picture") return stored(BG_KEY);
+  if (look.bg === "aura") return stored(AURA_BG_KEY);
+  return "";
+}
 function loadLook() {
   try {
     const v = JSON.parse(localStorage.getItem(LOOK_KEY) || "{}");
@@ -334,7 +451,10 @@ function loadLook() {
       scheme: SCHEMES[v.scheme] ? v.scheme : "aura",
       a: HEX.test(v.a) ? v.a : DEFAULT_LOOK.a,
       b: HEX.test(v.b) ? v.b : DEFAULT_LOOK.b,
-      glass: Number.isFinite(v.glass) ? Math.min(90, Math.max(40, v.glass)) : DEFAULT_LOOK.glass,
+      glass: within(v.glass, 40, 90, DEFAULT_LOOK.glass),
+      bg: ["glow", "picture", "aura"].includes(v.bg) ? v.bg : "glow",
+      bright: within(v.bright, 15, 80, DEFAULT_LOOK.bright),
+      blur: within(v.blur, 0, 30, DEFAULT_LOOK.blur),
     };
   } catch { return { ...DEFAULT_LOOK }; }
 }
@@ -354,14 +474,40 @@ function resolveLook(look) {
   if (brightness(base) > 0.06) base = mix(base, "#05050a", 0.55);
   // Text on your own bubbles: dark on bright colors, white on deep ones
   const onAccent = brightness(mix(a, b, 0.35)) > 0.42 ? "#0b0b12" : "#ffffff";
-  return { "--mx-a": a, "--mx-b": b, "--mx-base": base, "--mx-on": onAccent, "--mx-fill": look.glass + "%" };
+  const vars = { "--mx-a": a, "--mx-b": b, "--mx-base": base, "--mx-on": onAccent, "--mx-fill": look.glass + "%" };
+  // With a picture: how much of it shows through the dark wash, and how frosted the glass is
+  if (backgroundOf(look)) { vars["--mx-wash"] = String(1 - look.bright / 100); vars["--mx-blur"] = look.blur + "px"; }
+  return vars;
+}
+
+// Shrinks a chosen picture so it is quick to draw and small enough to keep on this PC
+async function shrinkPicture(file, longest, quality) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, longest / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  return canvas.toDataURL("image/jpeg", quality);
+}
+async function saveBackground(file) {
+  if (!/^image\//.test(file?.type || "")) throw new Error("Choose a picture (PNG, JPG or WebP).");
+  for (const [longest, quality] of [[1920, 0.84], [1440, 0.78], [1024, 0.7]]) {
+    let data;
+    try { data = await shrinkPicture(file, longest, quality); } catch { throw new Error("That picture couldn't be opened. Try a PNG or JPG."); }
+    try { localStorage.setItem(BG_KEY, data); return data; } catch {} // no room: try a smaller copy
+  }
+  throw new Error("There isn't room to keep that picture. Try a smaller one.");
 }
 
 function useLook() {
   const [look, setLook] = useState(loadLook);
   const [vars, setVars] = useState(() => resolveLook(look));
+  const [picture, setPicture] = useState(() => backgroundOf(look));
   useEffect(() => {
     setVars(resolveLook(look));
+    setPicture(backgroundOf(look));
     try { localStorage.setItem(LOOK_KEY, JSON.stringify(look)); } catch {}
     if (look.scheme !== "aura") return;
     // Follow AURA's theme as it changes
@@ -369,11 +515,13 @@ function useLook() {
     watcher.observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
     return () => watcher.disconnect();
   }, [look]);
-  return [look, setLook, vars];
+  return [look, setLook, vars, picture];
 }
 
 function LookPicker({ look, setLook, onClose }) {
   const box = useRef(null);
+  const chooser = useRef(null);
+  const [busy, setBusy] = useState(false);
   useEffect(() => {
     const away = (e) => { if (box.current && !box.current.contains(e.target) && !e.target.closest?.("[data-mx-look]")) onClose(); };
     const esc = (e) => { if (e.key === "Escape") onClose(); };
@@ -387,9 +535,20 @@ function LookPicker({ look, setLook, onClose }) {
     if (key === "custom") return `linear-gradient(135deg,${look.a},${look.b})`;
     return `linear-gradient(135deg,${s.a},${s.b})`;
   };
+  const mine = stored(BG_KEY);
+  const auras = stored(AURA_BG_KEY);
+  const showing = backgroundOf(look);
+  const choose = async (file) => {
+    if (!file || busy) return;
+    setBusy(true);
+    try { await saveBackground(file); setLook({ ...look, bg: "picture", stamp: Date.now() }); }
+    catch (e) { hooks.toast?.(e.message, "err"); }
+    setBusy(false);
+  };
+  const remove = () => { try { localStorage.removeItem(BG_KEY); } catch {} setLook({ ...look, bg: "glow", stamp: Date.now() }); };
   return (
-    <div className="mx-pop mx-look" ref={box} role="dialog" aria-label="Messages color scheme">
-      <div className="mx-pop-t">Color scheme</div>
+    <div className="mx-pop mx-look" ref={box} role="dialog" aria-label="Messages colors and background">
+      <div className="mx-pop-t">Colors</div>
       <div className="mx-swatches">
         {Object.keys(SCHEMES).map((key) => (
           <button key={key} type="button" className={`mx-swatch ${look.scheme === key ? "on" : ""}`} onClick={() => setLook({ ...look, scheme: key })} aria-pressed={look.scheme === key}>
@@ -404,6 +563,42 @@ function LookPicker({ look, setLook, onClose }) {
           <label>Highlight<input type="color" value={look.b} onChange={(e) => setLook({ ...look, b: e.target.value })} /></label>
         </div>
       )}
+
+      <div className="mx-pop-t second">Background</div>
+      <div className="mx-bgs">
+        <button type="button" className={`mx-swatch ${!showing ? "on" : ""}`} onClick={() => setLook({ ...look, bg: "glow" })} aria-pressed={!showing}>
+          <span className="mx-swatch-c" style={{ background: "radial-gradient(circle at 50% 120%,var(--mx-a),var(--mx-base) 70%)" }} /><span>Glow</span>
+        </button>
+        <button type="button" className={`mx-swatch ${look.bg === "picture" && showing ? "on" : ""}`} onClick={() => (mine ? setLook({ ...look, bg: "picture" }) : chooser.current?.click())} aria-pressed={look.bg === "picture" && !!showing} disabled={busy}>
+          <span className="mx-swatch-c pic" style={mine ? { backgroundImage: cssUrl(mine) } : undefined}>{!mine && "+"}</span><span>{busy ? "Adding…" : mine ? "Your picture" : "Add a picture"}</span>
+        </button>
+        {auras && (
+          <button type="button" className={`mx-swatch ${look.bg === "aura" ? "on" : ""}`} onClick={() => setLook({ ...look, bg: "aura" })} aria-pressed={look.bg === "aura"}>
+            <span className="mx-swatch-c pic" style={{ backgroundImage: cssUrl(auras) }} /><span>AURA's background</span>
+          </button>
+        )}
+      </div>
+      <input ref={chooser} type="file" accept="image/png,image/jpeg,image/webp" hidden data-mx-bg-file onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; choose(f); }} />
+      {look.bg === "picture" && mine && (
+        <div className="mx-bgrow">
+          <button type="button" className="mx-link" onClick={() => chooser.current?.click()} disabled={busy}>Change picture</button>
+          <button type="button" className="mx-link" onClick={remove}>Remove</button>
+        </div>
+      )}
+      {showing && (
+        <>
+          <label className="mx-range">
+            <span>Picture</span>
+            <input type="range" min="15" max="80" step="1" value={look.bright} onChange={(e) => setLook({ ...look, bright: Number(e.target.value) })} aria-label="How bright the picture is" />
+            <span className="mx-range-ends"><i>Darker</i><i>Brighter</i></span>
+          </label>
+          <label className="mx-range">
+            <span>Frost</span>
+            <input type="range" min="0" max="30" step="1" value={look.blur} onChange={(e) => setLook({ ...look, blur: Number(e.target.value) })} aria-label="How blurred the picture is behind the glass" />
+            <span className="mx-range-ends"><i>Sharp</i><i>Frosted</i></span>
+          </label>
+        </>
+      )}
       <label className="mx-range">
         <span>Glass</span>
         <input type="range" min="40" max="90" step="1" value={look.glass} onChange={(e) => setLook({ ...look, glass: Number(e.target.value) })} aria-label="How solid the glass is" />
@@ -412,6 +607,8 @@ function LookPicker({ look, setLook, onClose }) {
     </div>
   );
 }
+// A picture address, safe to put inside CSS url("...")
+const cssUrl = (address) => `url("${String(address).replace(/["\\\n\r]/g, (ch) => "%" + ch.charCodeAt(0).toString(16).padStart(2, "0"))}")`;
 
 // ── Friends: add by username, requests, and the list ──────────────────────────
 // Used in the Friends panel ("panel") and in the New message drawer on the Messages page ("glass").
@@ -515,9 +712,9 @@ function ConversationList() {
           <button key={c.id} type="button" role="listitem" className={`mx-conv ${s.activeId === c.id ? "on" : ""} ${c.unread ? "unread" : ""}`} onClick={() => actions.open(c.id)}>
             <Avatar name={c.username} url={c.avatarUrl} size={40} online={c.isFriend ? c.online : null} />
             <span className="mx-conv-m">
-              <span className="mx-conv-top"><span className="mx-conv-n">{c.username}</span><span className="mx-conv-t">{c.lastMessage ? shortTime(c.lastMessageAt) : ""}</span></span>
+              <span className="mx-conv-top"><span className="mx-conv-n">{c.username}</span><span className="mx-conv-t">{c.lastMessage || c.lastMedia ? shortTime(c.lastMessageAt) : ""}</span></span>
               <span className="mx-conv-bot">
-                <span className="mx-conv-p">{c.lastMessage ? (mine ? "You: " : "") + c.lastMessage.replace(/\s+/g, " ") : "No messages yet"}</span>
+                <span className="mx-conv-p">{c.lastMessage || c.lastMedia ? (mine ? "You: " : "") + (c.lastMessage ? c.lastMessage.replace(/\s+/g, " ") : c.lastMedia) : "No messages yet"}</span>
                 {c.unread > 0 && <span className="mx-badge" aria-label={`${c.unread} unread`}>{c.unread > 99 ? "99+" : c.unread}</span>}
               </span>
             </span>
@@ -563,15 +760,87 @@ function ProfileCard({ conversation, onClose }) {
 }
 
 const drafts = {}; // what you'd typed in each conversation, kept while you look at another
+const trays = {};  // and the files you'd picked but not sent yet
+
+// How big to draw a picture or video in the chat: its own shape, within a sensible box
+function mediaBox(media) {
+  const w = media.width || 320, h = media.height || 200;
+  const scale = Math.min(340 / w, 360 / h, 1);
+  return { width: Math.max(120, Math.round(w * scale)), height: Math.max(80, Math.round(h * scale)) };
+}
+
+// A picture, GIF or video inside the chat
+function MediaView({ message, onOpen }) {
+  const s = useSocial();
+  const media = message.media;
+  const entry = media.path ? s.media[media.path] : null;
+  const url = media.local || entry?.url || "";
+  const [broken, setBroken] = useState(false);
+  const retried = useRef(false);
+  useEffect(() => { if (media.path && !media.local) actions.needMedia(media.path); }, [media.path, media.local]);
+  useEffect(() => { setBroken(false); }, [url]);
+  // A link that has run out fails to load: ask for a fresh one, once
+  const failed = () => {
+    if (media.local || retried.current || !media.path) { setBroken(true); return; }
+    retried.current = true;
+    actions.needMedia(media.path, true);
+  };
+  const again = () => { retried.current = false; setBroken(false); actions.needMedia(media.path, true); };
+  const box = mediaBox(media);
+  const label = mediaWord(media);
+  const gone = !media.local && entry?.missing;
+  const trouble = !media.local && (broken || (entry && !entry.url && !entry.missing));
+  return (
+    <div className={`mx-media ${media.kind}`} style={{ width: box.width, aspectRatio: `${box.width} / ${box.height}` }}>
+      {gone ? (
+        <div className="mx-media-note">This {label === "GIF" ? "GIF" : label.toLowerCase()} is no longer available.</div>
+      ) : trouble ? (
+        <div className="mx-media-note">Couldn't load this {label === "GIF" ? "GIF" : label.toLowerCase()}. <button type="button" className="mx-link" onClick={again}>Try again</button></div>
+      ) : !url ? (
+        <div className="mx-media-note wait"><IconPhoto /> Loading…</div>
+      ) : media.kind === "video" ? (
+        <video src={url} controls preload="metadata" playsInline onError={failed} aria-label={media.name ? `Video: ${media.name}` : "Video"} />
+      ) : (
+        <button type="button" className="mx-media-open" onClick={() => onOpen?.({ url, name: media.name, label })} title="View full size" aria-label={`${label}${media.name ? ": " + media.name : ""}. View full size`}>
+          <img src={url} alt={media.name || label} draggable={false} onError={failed} />
+        </button>
+      )}
+      {label === "GIF" && url && !gone && !trouble && <span className="mx-media-tag">GIF</span>}
+      {message.pending && <span className="mx-media-busy"><i className="mx-spin" /> Sending…</span>}
+    </div>
+  );
+}
+
+// A picture at full size, over the whole window. Esc or a click outside closes it.
+function Lightbox({ item, onClose }) {
+  useEffect(() => {
+    const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    document.addEventListener("keydown", esc, true);
+    return () => document.removeEventListener("keydown", esc, true);
+  }, [onClose]);
+  return createPortal(
+    <div className="mx-lightbox" role="dialog" aria-modal="true" aria-label={item.name || item.label} onClick={onClose}>
+      <img src={item.url} alt={item.name || item.label} onClick={(e) => e.stopPropagation()} />
+      <button type="button" className="mx-lightbox-x" onClick={onClose} aria-label="Close" autoFocus><IconX /></button>
+      {item.name && <div className="mx-lightbox-n">{item.name}</div>}
+    </div>,
+    document.body,
+  );
+}
 
 function Thread({ conversation, nowPlaying }) {
   const s = useSocial();
   const t = s.threads[conversation.id] || thread(conversation.id);
   const [text, setText] = useState("");
+  const [tray, setTray] = useState([]);       // files picked, pasted or dropped, waiting to be sent
+  const [dropping, setDropping] = useState(false);
+  const [viewing, setViewing] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
   const [newBelow, setNewBelow] = useState(false);
   const scroller = useRef(null);
   const input = useRef(null);
+  const picker = useRef(null);
+  const dragDepth = useRef(0);
   const stick = useRef(true);        // are we at the bottom?
   const before = useRef(null);       // scroll position saved while older messages load
   const lastId = useRef(null);
@@ -579,12 +848,14 @@ function Thread({ conversation, nowPlaying }) {
   // One draft per conversation
   useEffect(() => {
     setText(drafts[conversation.id] || "");
-    setShowProfile(false); setNewBelow(false);
+    setTray(trays[conversation.id] || []);
+    setShowProfile(false); setNewBelow(false); setViewing(null); setDropping(false);
     stick.current = true; lastId.current = null;
     input.current?.focus();
     return () => {};
   }, [conversation.id]);
   useEffect(() => { drafts[conversation.id] = text; }, [text, conversation.id]);
+  useEffect(() => { trays[conversation.id] = tray; }, [tray, conversation.id]);
 
   // Grow the box with the text, up to about six lines
   useLayoutEffect(() => {
@@ -607,6 +878,12 @@ function Thread({ conversation, nowPlaying }) {
     else setNewBelow(true);
   }, [t.items, conversation.id]);
 
+  // The tray makes the typing area taller: keep the newest message in view when it appears
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [tray.length]);
+
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
@@ -616,20 +893,53 @@ function Thread({ conversation, nowPlaying }) {
   };
   const jump = () => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight; setNewBelow(false); };
 
+  // Files: from the attach button, pasted, or dropped onto the conversation
+  const addFiles = async (list) => {
+    const files = Array.from(list || []).filter((f) => f && typeof f.arrayBuffer === "function");
+    if (!files.length || !conversation.isFriend) return;
+    let room = MAX_ATTACHMENTS - (trays[conversation.id] || []).length;
+    if (files.length > room) hooks.toast?.(`You can send up to ${MAX_ATTACHMENTS} files at a time`, "err");
+    for (const file of files) {
+      if (room <= 0) break;
+      try {
+        const attachment = await readAttachment(file);
+        room--;
+        setTray((cur) => (cur.length >= MAX_ATTACHMENTS ? cur : [...cur, attachment]));
+      } catch (e) { hooks.toast?.(e.message, "err"); }
+    }
+    input.current?.focus();
+  };
+  const removeFromTray = (id) => setTray((cur) => { const gone = cur.find((a) => a.id === id); if (gone) URL.revokeObjectURL(gone.url); return cur.filter((a) => a.id !== id); });
+  const onPaste = (e) => {
+    const files = Array.from(e.clipboardData?.files || []);
+    if (!files.length) return; // plain text pastes as usual
+    e.preventDefault();
+    addFiles(files);
+  };
+  const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes("Files");
+  const onDragEnter = (e) => { if (!hasFiles(e) || !conversation.isFriend) return; e.preventDefault(); dragDepth.current++; setDropping(true); };
+  const onDragOver = (e) => { if (hasFiles(e) && conversation.isFriend) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } };
+  const onDragLeave = (e) => { if (!hasFiles(e)) return; dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDropping(false); };
+  const onDrop = (e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth.current = 0; setDropping(false); addFiles(e.dataTransfer.files); };
+
   const ready = tidy(text);
   const tooLong = ready.length > MAX_LENGTH;
-  const canSend = conversation.isFriend && !!ready && !tooLong;
+  const canSend = conversation.isFriend && (!!ready || tray.length > 0) && !tooLong;
   const send = (value = text) => {
     const content = tidy(value);
-    if (!conversation.isFriend || !content || content.length > MAX_LENGTH) return;
-    if (value === text) setText("");
+    const files = value === text ? tray : [];
+    if (!conversation.isFriend || (!content && !files.length) || content.length > MAX_LENGTH) return;
+    if (value === text) { setText(""); setTray([]); }
     stick.current = true;
-    actions.send(conversation.id, content);
+    if (!files.length) actions.send(conversation.id, content);
+    // Files go one after another so they arrive in the order you picked them; the words go with the first
+    else (async () => { for (let i = 0; i < files.length; i++) await actions.sendMedia(conversation.id, files[i], i === 0 ? content : ""); })();
     input.current?.focus();
   };
   const onKey = (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } // Enter sends, Shift+Enter makes a new line
   };
+  const retry = (m) => (m.attachment ? actions.sendMedia(conversation.id, m.attachment, m.content, m.id) : actions.send(conversation.id, m.content, m.id));
 
   // Group messages: a new block when the sender changes or five minutes pass; a divider per day
   const blocks = useMemo(() => {
@@ -646,7 +956,7 @@ function Thread({ conversation, nowPlaying }) {
   }, [t.items]);
 
   return (
-    <section className="mx-thread" aria-label={`Conversation with ${conversation.username}`}>
+    <section className={`mx-thread ${dropping ? "dropping" : ""}`} aria-label={`Conversation with ${conversation.username}`} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
       <header className="mx-head">
         <button type="button" className="mx-who" data-mx-profile onClick={() => setShowProfile((v) => !v)} title="View profile" aria-expanded={showProfile}>
           <Avatar name={conversation.username} url={conversation.avatarUrl} size={40} online={conversation.isFriend ? conversation.online : null} />
@@ -676,10 +986,11 @@ function Thread({ conversation, nowPlaying }) {
         ) : (
           <div key={b.key} className={`mx-group ${s.me && b.senderId === s.me.id ? "me" : "them"}`}>
             {b.items.map((m) => (
-              <div key={m.id} className={`mx-msg ${m.pending ? "pending" : ""} ${m.failed ? "failed" : ""}`}>
-                <div className="mx-bubble">{m.content}</div>
+              <div key={m.id} className={`mx-msg ${m.pending ? "pending" : ""} ${m.failed ? "failed" : ""} ${m.media ? "has-media" : ""}`}>
+                {m.media && <MediaView message={m} onOpen={setViewing} />}
+                {m.content && <div className="mx-bubble">{m.content}</div>}
                 {m.failed && (
-                  <div className="mx-fail">Not sent. {m.error} <button type="button" className="mx-link" onClick={() => actions.send(conversation.id, m.content, m.id)}>Try again</button> <button type="button" className="mx-link" onClick={() => actions.discard(conversation.id, m.id)}>Delete</button></div>
+                  <div className="mx-fail">Not sent. {m.error} <button type="button" className="mx-link" onClick={() => retry(m)}>Try again</button> <button type="button" className="mx-link" onClick={() => actions.discard(conversation.id, m.id)}>Delete</button></div>
                 )}
               </div>
             ))}
@@ -691,20 +1002,38 @@ function Thread({ conversation, nowPlaying }) {
 
       {conversation.isFriend ? (
         <div className={`mx-compose ${tooLong ? "over" : ""}`}>
-          <textarea ref={input} rows={1} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} placeholder={`Message ${conversation.username}`} aria-label={`Message ${conversation.username}`} />
-          {ready.length > MAX_LENGTH - 400 && <span className="mx-count">{ready.length} / {MAX_LENGTH}</span>}
-          <button type="button" className="mx-send" onClick={() => send()} disabled={!canSend} aria-label="Send message" title="Send (Enter)"><IconSend /></button>
+          {tray.length > 0 && (
+            <div className="mx-tray" role="list" aria-label="Files to send">
+              {tray.map((a) => (
+                <div key={a.id} className="mx-tray-i" role="listitem" title={`${a.name} (${sizeText(a.size)})`}>
+                  {a.kind === "video" ? <video src={a.url} muted preload="metadata" /> : <img src={a.url} alt="" />}
+                  {a.kind === "video" && <span className="mx-tray-v"><IconPlay /></span>}
+                  <span className="mx-tray-s">{a.mime === "image/gif" ? "GIF · " : ""}{sizeText(a.size)}</span>
+                  <button type="button" className="mx-tray-x" onClick={() => removeFromTray(a.id)} aria-label={`Remove ${a.name}`}><IconX /></button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mx-compose-row">
+            <button type="button" className="mx-attach" onClick={() => picker.current?.click()} disabled={tray.length >= MAX_ATTACHMENTS} title="Attach a picture, GIF or video" aria-label="Attach a picture, GIF or video"><IconClip /></button>
+            <input ref={picker} type="file" accept={MEDIA_ACCEPT} multiple hidden data-mx-file onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; addFiles(files); }} />
+            <textarea ref={input} rows={1} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onPaste={onPaste} placeholder={tray.length ? "Add a message (optional)" : `Message ${conversation.username}`} aria-label={`Message ${conversation.username}`} />
+            {ready.length > MAX_LENGTH - 400 && <span className="mx-count">{ready.length} / {MAX_LENGTH}</span>}
+            <button type="button" className="mx-send" onClick={() => send()} disabled={!canSend} aria-label="Send message" title="Send (Enter)"><IconSend /></button>
+          </div>
         </div>
       ) : (
         <div className="mx-compose off">You and {conversation.username} aren't friends any more, so you can't send messages. Your history stays here.</div>
       )}
+      {dropping && <div className="mx-drop" aria-hidden="true"><div><IconPhoto /> Drop to attach</div></div>}
+      {viewing && <Lightbox item={viewing} onClose={() => setViewing(null)} />}
     </section>
   );
 }
 
 export default function MessagesPage({ nowPlaying }) {
   const s = useSocial();
-  const [look, setLook, vars] = useLook();
+  const [look, setLook, vars, picture] = useLook();
   const [picking, setPicking] = useState(false);
   const [drawer, setDrawer] = useState(false);
   useEffect(() => {
@@ -717,14 +1046,16 @@ export default function MessagesPage({ nowPlaying }) {
   const requests = s.friends.filter((f) => f.state === "incoming").length;
 
   return (
-    <div className="mx" style={vars}>
-      <div className="mx-bg" aria-hidden="true"><span className="mx-orb one" /><span className="mx-orb two" /></div>
+    <div className={`mx ${picture ? "has-pic" : ""}`} style={vars}>
+      <div className="mx-bg" aria-hidden="true">
+        {picture ? <><span className="mx-pic" style={{ backgroundImage: cssUrl(picture) }} /><span className="mx-wash" /></> : <><span className="mx-orb one" /><span className="mx-orb two" /></>}
+      </div>
       <div className="mx-glass">
         <aside className="mx-side">
           <div className="mx-side-h">
             <h1>Messages</h1>
             <div className="mx-side-a">
-              <button type="button" className={`mx-icon ${picking ? "on" : ""}`} data-mx-look onClick={() => setPicking((v) => !v)} title="Color scheme" aria-label="Color scheme" aria-expanded={picking}><IconPalette /></button>
+              <button type="button" className={`mx-icon ${picking ? "on" : ""}`} data-mx-look onClick={() => setPicking((v) => !v)} title="Colors and background" aria-label="Colors and background" aria-expanded={picking}><IconPalette /></button>
               <button type="button" className={`mx-icon ${drawer ? "on" : ""}`} onClick={() => setDrawer((v) => !v)} title="New message" aria-label="New message" aria-expanded={drawer}>
                 {drawer ? <IconX /> : <IconPlus />}{!drawer && requests > 0 && <i className="mx-pip" />}
               </button>
@@ -754,9 +1085,10 @@ export default function MessagesPage({ nowPlaying }) {
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-// The page is one sheet of frosted glass over two glowing orbs. The orbs take their color from
-// the scheme; text stays white on a backdrop that is always kept dark, so names and messages
-// stay readable however clear the glass is set.
+// The page is one sheet of frosted glass over two glowing orbs, or over a picture of your own.
+// The orbs take their color from the scheme; text stays white on a backdrop that is always kept
+// dark (a picture gets a dark wash over it), so names and messages stay readable however clear
+// the glass is set.
 const CSS = `
 .mx{position:relative;flex:1;min-height:0;min-width:0;display:flex;padding:18px;overflow:hidden;isolation:isolate;font-family:'DM Sans',sans-serif;color:#fff;
   --mx-ink:#fff;--mx-ink2:rgba(255,255,255,.76);--mx-ink3:rgba(255,255,255,.56);--mx-line:rgba(255,255,255,.11);--mx-dot-ring:var(--mx-base)}
@@ -774,17 +1106,26 @@ const CSS = `
   box-shadow:0 0 90px 6px color-mix(in srgb,var(--mx-a) 40%,transparent),0 0 240px 50px color-mix(in srgb,var(--mx-a) 16%,transparent)}
 .mx-orb.one{width:min(1100px,96%);top:0;transform:translate(-50%,-66%);animation:mx-drift-a 26s ease-in-out infinite alternate}
 .mx-orb.two{width:min(1700px,150%);bottom:0;transform:translate(-50%,70%);animation:mx-drift-b 32s ease-in-out infinite alternate}
+.mx-pic{position:absolute;inset:-30px;background-size:cover;background-position:center}
+.mx-wash{position:absolute;inset:0;background:var(--mx-base);opacity:var(--mx-wash,.55)}
 @keyframes mx-drift-a{to{transform:translate(-47%,-63%)}}
 @keyframes mx-drift-b{to{transform:translate(-53%,67%)}}
 
 /* The sheet of glass */
 .mx-glass{position:relative;flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:clamp(232px,32%,312px) minmax(0,1fr);border-radius:22px;overflow:hidden;
-  background:color-mix(in srgb,var(--mx-base) var(--mx-fill),transparent);backdrop-filter:blur(28px) saturate(150%);
+  background:color-mix(in srgb,var(--mx-base) var(--mx-fill),transparent);backdrop-filter:blur(var(--mx-blur,28px)) saturate(150%);
   border:1px solid rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.16),0 30px 80px rgba(0,0,0,.5)}
 .no-blur .mx-glass{background:color-mix(in srgb,var(--mx-base) 93%,transparent)}
+/* Over a picture, the pieces that carry words get a firmer backing */
+.mx.has-pic .mx-glass{text-shadow:0 1px 3px rgba(0,0,0,.7)}
+.mx.has-pic .mx-group.them .mx-bubble{background:linear-gradient(rgba(255,255,255,.09),rgba(255,255,255,.09)),color-mix(in srgb,var(--mx-base) 86%,transparent)}
+.mx.has-pic .mx-day span,.mx.has-pic .mx-meta{background:color-mix(in srgb,var(--mx-base) 62%,transparent);border-radius:999px}
+.mx.has-pic .mx-meta{padding:2px 9px;margin-top:2px}
+.mx.has-pic .mx-compose{background:color-mix(in srgb,var(--mx-base) 68%,transparent)}
+.mx.has-pic .mx-side,.mx.has-pic .mx-head{background:color-mix(in srgb,var(--mx-base) 34%,transparent)}
 /* A soft shadow keeps white text sharp where a bright glow sits behind clear glass */
 .mx-glass{text-shadow:0 1px 2px rgba(0,0,0,.4)}
-.mx-group.me .mx-bubble,.mx-btn,.mx-badge,.mx-send,.mx-new,.mx-av-l,.mx-pop{text-shadow:none}
+.mx-group.me .mx-bubble,.mx-btn,.mx-badge,.mx-send,.mx-new,.mx-av-l,.mx-pop,.mx-media,.mx-tray{text-shadow:none!important}
 
 /* Left: conversations */
 .mx-side{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--mx-line)}
@@ -838,6 +1179,7 @@ const CSS = `
 .mx-group.them{align-self:flex-start;align-items:flex-start}
 .mx-msg{display:flex;flex-direction:column;max-width:100%}
 .mx-group.me .mx-msg{align-items:flex-end}
+.mx-group.them .mx-msg{align-items:flex-start}
 .mx-bubble{padding:9px 14px;border-radius:18px;font-size:14px;line-height:1.46;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
 .mx-group.them .mx-bubble{background:linear-gradient(rgba(255,255,255,.1),rgba(255,255,255,.1)),color-mix(in srgb,var(--mx-base) 60%,transparent);border:1px solid rgba(255,255,255,.12);color:#fff}
 .mx-group.me .mx-bubble{background:linear-gradient(135deg,var(--mx-a),color-mix(in srgb,var(--mx-a) 52%,var(--mx-b)));color:var(--mx-on);border:1px solid rgba(255,255,255,.16)}
@@ -846,6 +1188,30 @@ const CSS = `
 .mx-group.them .mx-msg:not(:last-of-type) .mx-bubble{border-bottom-left-radius:7px}
 .mx-group.them .mx-msg:not(:first-of-type) .mx-bubble{border-top-left-radius:7px}
 .mx-msg.pending .mx-bubble{opacity:.6}
+.mx-msg.has-media{gap:3px}
+
+/* Pictures, GIFs and videos */
+.mx-media{position:relative;max-width:100%;border-radius:16px;overflow:hidden;background:color-mix(in srgb,var(--mx-base) 78%,#fff 6%);border:1px solid rgba(255,255,255,.14);flex-shrink:0}
+.mx-media img,.mx-media video{display:block;width:100%;height:100%;object-fit:cover;background:#000}
+.mx-media video{object-fit:contain}
+.mx-media-open{display:block;width:100%;height:100%;padding:0;border:none;background:none;cursor:zoom-in}
+.mx-media-open:focus-visible{outline-offset:-3px}
+.mx-media-note{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:12px;text-align:center;font-size:12.5px;line-height:1.45;color:var(--mx-ink2)}
+.mx-media-note.wait{animation:mx-pulse 1.4s ease-in-out infinite alternate}
+@keyframes mx-pulse{from{opacity:.45}to{opacity:.9}}
+.mx-media-tag{position:absolute;left:8px;top:8px;padding:2px 7px;border-radius:6px;font-size:10.5px;font-weight:700;letter-spacing:.4px;background:rgba(0,0,0,.62);color:#fff;pointer-events:none}
+.mx-media-busy{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:8px;font-size:12.5px;font-weight:600;color:#fff;background:rgba(0,0,0,.5);pointer-events:none}
+.mx-spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;animation:mx-spin .8s linear infinite}
+@keyframes mx-spin{to{transform:rotate(360deg)}}
+.mx-msg.failed .mx-media{border-color:rgba(255,77,109,.6);opacity:.75}
+.mx-drop{position:absolute;inset:8px;z-index:5;display:flex;align-items:center;justify-content:center;border-radius:16px;border:2px dashed var(--mx-b);background:color-mix(in srgb,var(--mx-base) 82%,transparent);pointer-events:none}
+.mx-drop div{display:flex;align-items:center;gap:10px;font-family:'Rajdhani',sans-serif;font-size:22px;font-weight:700;letter-spacing:.4px}
+.mx-lightbox{position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;padding:48px 32px;background:rgba(4,4,8,.9);cursor:zoom-out;font-family:'DM Sans',sans-serif}
+.mx-lightbox img{max-width:100%;max-height:100%;border-radius:10px;box-shadow:0 30px 90px rgba(0,0,0,.7);cursor:default}
+.mx-lightbox-x{position:absolute;top:16px;right:18px;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff}
+.mx-lightbox-x:hover{background:rgba(255,255,255,.22)}
+.mx-lightbox-x:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.mx-lightbox-n{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:12.5px;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 60px}
 .mx-msg.failed .mx-bubble{background:rgba(255,77,109,.2);border-color:rgba(255,77,109,.5);color:#fff}
 .mx-fail{margin-top:3px;font-size:12px;color:#ffb3c0}
 .mx-meta{display:flex;gap:7px;font-size:11px;color:var(--mx-ink3);padding:1px 6px 0}
@@ -857,9 +1223,21 @@ const CSS = `
 .mx-none-t{margin-top:0}
 
 /* Typing box */
-.mx-compose{display:flex;align-items:flex-end;gap:8px;margin:6px 18px 18px;padding:6px 6px 6px 16px;border-radius:20px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);flex-shrink:0;transition:border-color .15s}
+.mx-compose{display:flex;flex-direction:column;gap:6px;margin:6px 18px 18px;padding:6px;border-radius:20px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);flex-shrink:0;transition:border-color .15s}
 .mx-compose:focus-within{border-color:color-mix(in srgb,var(--mx-b) 70%,transparent)}
 .mx-compose.over{border-color:rgba(255,77,109,.7)}
+.mx-compose-row{display:flex;align-items:flex-end;gap:6px}
+.mx-attach{width:38px;height:38px;flex-shrink:0;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;background:transparent;color:var(--mx-ink2)!important;transition:background .15s,color .15s}
+.mx-attach:hover:not(:disabled){background:rgba(255,255,255,.12);color:#fff!important}
+.mx-attach:disabled{opacity:.4;cursor:default}
+.mx-tray{display:flex;gap:8px;padding:6px 6px 2px;overflow-x:auto}
+.mx-tray-i{position:relative;width:76px;height:76px;flex-shrink:0;border-radius:12px;overflow:hidden;background:#000;border:1px solid rgba(255,255,255,.18)}
+.mx-tray-i img,.mx-tray-i video{width:100%;height:100%;object-fit:cover;display:block}
+.mx-tray-v{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;background:rgba(0,0,0,.25);pointer-events:none}
+.mx-tray-s{position:absolute;left:0;right:0;bottom:0;padding:9px 5px 3px;font-size:10px;font-weight:600;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.8));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mx-tray-x{position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:rgba(0,0,0,.7);border:1px solid rgba(255,255,255,.3);color:#fff!important;padding:0}
+.mx-tray-x:hover{background:rgba(255,77,109,.9)}
+.mx-tray-x svg{width:10px;height:10px}
 .mx-compose textarea{flex:1;min-width:0;resize:none;border:none;outline:none!important;background:transparent;color:#fff;font:14px/1.46 'DM Sans',sans-serif;padding:8px 0;max-height:132px}
 .mx-compose textarea::placeholder{color:var(--mx-ink3)}
 .mx-count{align-self:center;font-size:11px;color:var(--mx-ink3);font-variant-numeric:tabular-nums}
@@ -880,7 +1258,12 @@ const CSS = `
 .mx-note.err{color:#ffb3c0}
 .mx-pop{position:absolute;z-index:6;border-radius:16px;padding:16px;background:color-mix(in srgb,var(--mx-base) 90%,#fff);backdrop-filter:blur(30px);border:1px solid rgba(255,255,255,.18);box-shadow:0 24px 60px rgba(0,0,0,.55)}
 .mx-pop-t{font-size:13px;font-weight:600;margin-bottom:10px}
-.mx-look{top:58px;left:16px;width:268px}
+.mx-look{top:58px;left:16px;width:268px;max-height:min(600px,calc(100vh - 150px));overflow-y:auto}
+.mx-pop-t.second{margin-top:16px}
+.mx-bgs{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.mx-swatch-c.pic{border-radius:5px;background-size:cover;background-position:center;background-color:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:13px;line-height:1;color:#fff}
+.mx-swatch:disabled{opacity:.6;cursor:default}
+.mx-bgrow{display:flex;gap:16px;margin-top:9px;padding:0 2px;font-size:12px;color:var(--mx-ink2)}
 .mx-swatches{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .mx-swatch{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:10px;cursor:pointer;font-size:12.5px;text-align:left;background:rgba(255,255,255,.05);border:1px solid transparent;color:var(--mx-ink2)}
 .mx-swatch:hover{background:rgba(255,255,255,.1);color:#fff}
