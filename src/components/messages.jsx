@@ -153,6 +153,24 @@ const actions = {
     }
   },
 
+  // The picture both people see behind one chat. `file` is a picture from this PC, or null to remove it.
+  async setBackground(conversationId, file) {
+    let payload = null, local = "";
+    if (file) {
+      if (!/^image\/(png|jpeg|webp)$/.test(file.type || "")) throw new Error("Choose a picture (PNG, JPG or WebP).");
+      try { local = await shrinkPicture(file, 1920, 0.84); } catch { throw new Error("That picture couldn't be opened. Try a PNG or JPG."); }
+      const raw = atob(local.slice(local.indexOf(",") + 1));
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      payload = { name: "background.jpg", bytes };
+    }
+    const saved = await call("setBackground", conversationId, payload);
+    // You already have the picture, so show your own copy instead of downloading it back
+    if (saved?.path && local) set((s) => ({ media: { ...s.media, [saved.path]: { url: local, at: Date.now(), life: Infinity } } }));
+    applyBackground(conversationId, saved || null);
+    return saved || null;
+  },
+
   // Asks for a viewing link for a file. Requests made close together go out as one.
   needMedia(path, again) {
     if (!path) return;
@@ -180,6 +198,15 @@ const actions = {
     if (event.type === "message") return onMessage(event.message);
     if (event.type === "friends") { actions.refreshFriends(); actions.refreshConversations(); return; }
     if (event.type === "open") { hooks.goToMessages?.(); actions.open(event.conversationId); return; }
+    if (event.type === "background") {
+      const c = state.conversations.find((x) => x.id === event.conversationId);
+      if (!c) { actions.refreshConversations(); return; }
+      const now = event.background?.path || "";
+      if ((c.background?.path || "") === now) return; // already showing it (your own change)
+      applyBackground(event.conversationId, event.background || null);
+      if (event.by && event.by !== state.me.id) hooks.toast?.(`${c.username} ${now ? "changed" : "removed"} the background of your chat`);
+      return;
+    }
     if (event.type === "live") {
       const cameBack = event.connected && state.everLive && !state.live;
       set({ live: !!event.connected, everLive: state.everLive || !!event.connected });
@@ -192,6 +219,10 @@ const actions = {
     if (state.activeId) { await actions.loadThread(state.activeId); actions.markRead(state.activeId); }
   },
 };
+
+function applyBackground(conversationId, background) {
+  set((s) => ({ conversations: s.conversations.map((c) => (c.id === conversationId ? { ...c, background: background?.path ? background : null } : c)) }));
+}
 
 const mediaWanted = new Set();
 const mediaAsked = {};
@@ -420,7 +451,9 @@ function dayLabel(iso) {
 
 // ── Colors and background for the Messages page ───────────────────────────────
 // "Match AURA" follows your theme and accent. The others are fixed looks. The background is the
-// glow by default, or a picture of your own. All of it is saved on this PC.
+// glow by default, or a picture of your own. All of that is saved on this PC and only you see it.
+// A single chat can also have a shared background: that one is kept in Supabase, both people
+// see it, and either of them can change or remove it.
 const LOOK_KEY = "aura_messages_look";
 const BG_KEY = "aura_messages_bg";       // your own background picture, shrunk and kept as a data URL
 const AURA_BG_KEY = "aura_bg";           // the background set on AURA's Customize page
@@ -474,10 +507,33 @@ function resolveLook(look) {
   if (brightness(base) > 0.06) base = mix(base, "#05050a", 0.55);
   // Text on your own bubbles: dark on bright colors, white on deep ones
   const onAccent = brightness(mix(a, b, 0.35)) > 0.42 ? "#0b0b12" : "#ffffff";
-  const vars = { "--mx-a": a, "--mx-b": b, "--mx-base": base, "--mx-on": onAccent, "--mx-fill": look.glass + "%" };
-  // With a picture: how much of it shows through the dark wash, and how frosted the glass is
-  if (backgroundOf(look)) { vars["--mx-wash"] = String(1 - look.bright / 100); vars["--mx-blur"] = look.blur + "px"; }
-  return vars;
+  return { "--mx-a": a, "--mx-b": b, "--mx-base": base, "--mx-on": onAccent, "--mx-fill": look.glass + "%" };
+}
+// With a picture behind the glass: how much of it shows through the dark wash, and how frosted the glass is
+const pictureVars = (look) => ({ "--mx-wash": String(1 - look.bright / 100), "--mx-blur": look.blur + "px" });
+
+// A file from storage, ready to draw: "" until its viewing link has arrived and the picture has loaded.
+// If the link has run out, a fresh one is asked for once.
+function useLoadedMedia(path) {
+  const s = useSocial();
+  const url = path ? s.media[path]?.url || "" : "";
+  const [loaded, setLoaded] = useState("");
+  const retried = useRef("");
+  useEffect(() => { if (path) actions.needMedia(path); }, [path]);
+  useEffect(() => {
+    if (!url) return;
+    let alive = true;
+    const img = new Image();
+    img.onload = () => { if (alive) setLoaded(url); };
+    img.onerror = () => {
+      if (!alive || retried.current === path) return;
+      retried.current = path;
+      actions.needMedia(path, true);
+    };
+    img.src = url;
+    return () => { alive = false; };
+  }, [url, path]);
+  return url && loaded === url ? url : "";
 }
 
 // Shrinks a chosen picture so it is quick to draw and small enough to keep on this PC
@@ -518,10 +574,22 @@ function useLook() {
   return [look, setLook, vars, picture];
 }
 
-function LookPicker({ look, setLook, onClose }) {
+function LookPicker({ look, setLook, onClose, conversation, sharedUrl, hasPicture }) {
+  const s = useSocial();
   const box = useRef(null);
   const chooser = useRef(null);
+  const sharedChooser = useRef(null);
   const [busy, setBusy] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const shared = conversation?.background || null;
+  // The same picture for both people in this chat
+  const share = async (file) => {
+    if (!conversation || sharing || (file === undefined)) return;
+    setSharing(true);
+    try { await actions.setBackground(conversation.id, file); }
+    catch (e) { hooks.toast?.(e.message, "err"); }
+    setSharing(false);
+  };
   useEffect(() => {
     const away = (e) => { if (box.current && !box.current.contains(e.target) && !e.target.closest?.("[data-mx-look]")) onClose(); };
     const esc = (e) => { if (e.key === "Escape") onClose(); };
@@ -565,6 +633,29 @@ function LookPicker({ look, setLook, onClose }) {
       )}
 
       <div className="mx-pop-t second">Background</div>
+      {conversation && (
+        <>
+          <div className="mx-bg-h">This chat<span>You and {conversation.username} both see it</span></div>
+          {shared ? (
+            <div className="mx-shared">
+              <span className="mx-shared-pic" style={sharedUrl ? { backgroundImage: cssUrl(sharedUrl) } : undefined} />
+              <div className="mx-shared-i">
+                <div className="mx-shared-by">{sharing ? "Updating…" : shared.by && s.me && shared.by === s.me.id ? "Set by you" : shared.by ? `Set by ${conversation.username}` : "Shared picture"}</div>
+                <div className="mx-bgrow">
+                  {conversation.isFriend && <button type="button" className="mx-link" onClick={() => sharedChooser.current?.click()} disabled={sharing}>Change</button>}
+                  <button type="button" className="mx-link" onClick={() => share(null)} disabled={sharing}>Remove</button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <button type="button" className="mx-swatch wide" onClick={() => sharedChooser.current?.click()} disabled={sharing || !conversation.isFriend} title={conversation.isFriend ? undefined : "You can only set this for a chat with a friend"}>
+              <span className="mx-swatch-c pic">+</span><span>{sharing ? "Setting…" : "Set a picture for this chat"}</span>
+            </button>
+          )}
+          <input ref={sharedChooser} type="file" accept="image/png,image/jpeg,image/webp" hidden data-mx-shared-file onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) share(f); }} />
+          <div className="mx-bg-h">Your other chats<span>Only you see it</span></div>
+        </>
+      )}
       <div className="mx-bgs">
         <button type="button" className={`mx-swatch ${!showing ? "on" : ""}`} onClick={() => setLook({ ...look, bg: "glow" })} aria-pressed={!showing}>
           <span className="mx-swatch-c" style={{ background: "radial-gradient(circle at 50% 120%,var(--mx-a),var(--mx-base) 70%)" }} /><span>Glow</span>
@@ -585,7 +676,7 @@ function LookPicker({ look, setLook, onClose }) {
           <button type="button" className="mx-link" onClick={remove}>Remove</button>
         </div>
       )}
-      {showing && (
+      {hasPicture && (
         <>
           <label className="mx-range">
             <span>Picture</span>
@@ -1033,7 +1124,7 @@ function Thread({ conversation, nowPlaying }) {
 
 export default function MessagesPage({ nowPlaying }) {
   const s = useSocial();
-  const [look, setLook, vars, picture] = useLook();
+  const [look, setLook, vars, ownPicture] = useLook();
   const [picking, setPicking] = useState(false);
   const [drawer, setDrawer] = useState(false);
   useEffect(() => {
@@ -1044,11 +1135,15 @@ export default function MessagesPage({ nowPlaying }) {
   }, []);
   const active = s.conversations.find((c) => c.id === s.activeId) || null;
   const requests = s.friends.filter((f) => f.state === "incoming").length;
+  // A chat's shared background wins while that chat is open; otherwise your own choice shows
+  const sharedUrl = useLoadedMedia(active?.background?.path || "");
+  const picture = sharedUrl || ownPicture;
+  const style = picture ? { ...vars, ...pictureVars(look) } : vars;
 
   return (
-    <div className={`mx ${picture ? "has-pic" : ""}`} style={vars}>
+    <div className={`mx ${picture ? "has-pic" : ""} ${sharedUrl ? "has-shared" : ""}`} style={style}>
       <div className="mx-bg" aria-hidden="true">
-        {picture ? <><span className="mx-pic" style={{ backgroundImage: cssUrl(picture) }} /><span className="mx-wash" /></> : <><span className="mx-orb one" /><span className="mx-orb two" /></>}
+        {picture ? <><span key={picture.length + picture.slice(-48)} className="mx-pic" style={{ backgroundImage: cssUrl(picture) }} /><span className="mx-wash" /></> : <><span className="mx-orb one" /><span className="mx-orb two" /></>}
       </div>
       <div className="mx-glass">
         <aside className="mx-side">
@@ -1060,7 +1155,7 @@ export default function MessagesPage({ nowPlaying }) {
                 {drawer ? <IconX /> : <IconPlus />}{!drawer && requests > 0 && <i className="mx-pip" />}
               </button>
             </div>
-            {picking && <LookPicker look={look} setLook={setLook} onClose={() => setPicking(false)} />}
+            {picking && <LookPicker look={look} setLook={setLook} onClose={() => setPicking(false)} conversation={active} sharedUrl={sharedUrl} hasPicture={!!picture} />}
           </div>
           {drawer ? (
             <div className="mx-drawer"><FriendsManager variant="glass" onMessaged={() => setDrawer(false)} /></div>
@@ -1106,7 +1201,10 @@ const CSS = `
   box-shadow:0 0 90px 6px color-mix(in srgb,var(--mx-a) 40%,transparent),0 0 240px 50px color-mix(in srgb,var(--mx-a) 16%,transparent)}
 .mx-orb.one{width:min(1100px,96%);top:0;transform:translate(-50%,-66%);animation:mx-drift-a 26s ease-in-out infinite alternate}
 .mx-orb.two{width:min(1700px,150%);bottom:0;transform:translate(-50%,70%);animation:mx-drift-b 32s ease-in-out infinite alternate}
-.mx-pic{position:absolute;inset:-30px;background-size:cover;background-position:center}
+.mx-pic{position:absolute;inset:-30px;background-size:cover;background-position:center;animation:mx-arrive .45s ease}
+@keyframes mx-arrive{from{opacity:0}to{opacity:1}}
+.reduce-motion .mx-pic{animation:none}
+@media (prefers-reduced-motion:reduce){.mx-pic{animation:none}}
 .mx-wash{position:absolute;inset:0;background:var(--mx-base);opacity:var(--mx-wash,.55)}
 @keyframes mx-drift-a{to{transform:translate(-47%,-63%)}}
 @keyframes mx-drift-b{to{transform:translate(-53%,67%)}}
@@ -1264,6 +1362,16 @@ const CSS = `
 .mx-swatch-c.pic{border-radius:5px;background-size:cover;background-position:center;background-color:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:13px;line-height:1;color:#fff}
 .mx-swatch:disabled{opacity:.6;cursor:default}
 .mx-bgrow{display:flex;gap:16px;margin-top:9px;padding:0 2px;font-size:12px;color:var(--mx-ink2)}
+.mx-bg-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:12px 1px 6px;font-size:12px;font-weight:600;color:#fff}
+.mx-pop-t.second+.mx-bg-h{margin-top:2px}
+.mx-bg-h span{font-size:11px;font-weight:400;color:var(--mx-ink3);text-align:right}
+.mx-swatch.wide{width:100%}
+.mx-shared{display:flex;align-items:center;gap:10px;padding:7px;border-radius:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.5)}
+.mx-shared-pic{width:58px;height:38px;flex-shrink:0;border-radius:6px;background:rgba(255,255,255,.1) center/cover;border:1px solid rgba(255,255,255,.25)}
+.mx-shared-i{min-width:0}
+.mx-shared-by{font-size:12.5px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mx-shared .mx-bgrow{margin-top:3px;padding:0;gap:14px}
+.mx-link:disabled{opacity:.5;cursor:default}
 .mx-swatches{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .mx-swatch{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:10px;cursor:pointer;font-size:12.5px;text-align:left;background:rgba(255,255,255,.05);border:1px solid transparent;color:var(--mx-ink2)}
 .mx-swatch:hover{background:rgba(255,255,255,.1);color:#fff}

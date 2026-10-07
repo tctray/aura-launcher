@@ -176,6 +176,8 @@ contextBridge.exposeInMainWorld("auraSocial", {
   // Pictures, GIFs and videos: the file's bytes go to the main process, which uploads them
   sendMedia: (conversationId, file, caption) => ipcRenderer.invoke("social:sendMedia", conversationId, file, caption),
   mediaUrls: (paths) => ipcRenderer.invoke("social:mediaUrls", paths),
+  // The background picture a chat shares between its two people (null removes it)
+  setBackground: (conversationId, file) => ipcRenderer.invoke("social:setBackground", conversationId, file),
   markRead: (conversationId) => ipcRenderer.invoke("social:markRead", conversationId),
   // New messages and friend changes pushed from the main process
   onEvent: (cb) => {

@@ -34,6 +34,10 @@ const MEDIA_LINK_SECONDS = 12 * 60 * 60; // how long a viewing link works before
 const BASIC_COLS = "id,conversation_id,sender_id,content,created_at,read_at";
 const MEDIA_COLS = BASIC_COLS + ",media_path,media_kind,media_mime,media_size,media_width,media_height,media_name";
 const MEDIA_SETUP = "Pictures and videos aren't set up in Supabase yet. Run aura-messages-media.sql first.";
+// A chat's shared background: a picture both people see behind that conversation
+const BACKGROUND_TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
+const BACKGROUND_MAX = 4 * 1024 * 1024; // the window shrinks the picture first, so it is normally far smaller
+const BACKGROUND_SETUP = "Shared chat backgrounds aren't set up in Supabase yet. Run aura-messages-background.sql first.";
 
 // What a file really is, from its first bytes (the name and the type the window reports can be wrong)
 function sniff(b) {
@@ -60,6 +64,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow }) {
   const currentUser = () => cloud.internals.currentUser();
 
   let channel = null;        // the live connection to Supabase
+  let bgChannel = null;      // a second one just for chat backgrounds, so it can't disturb the first
   let channelUser = null;    // whose it is
   let live = false;
   let heartbeat = null;
@@ -70,6 +75,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow }) {
   const quiet = new Map();           // conversation id -> { until, count, timer }
   let mediaReady = true;             // false once we learn the media SQL hasn't been run yet
   let listReady = true;              // same, for the newer conversation list
+  let backgroundsReady = true;       // same, for shared chat backgrounds
 
   // ── Small helpers ───────────────────────────────────────────────────────────
   const id = (value, what) => {
@@ -83,6 +89,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow }) {
     const msg = String(error?.message || error || "Something went wrong");
     const code = String(error?.code || "");
     if (/fetch failed|network|timeout|ENOTFOUND|ECONN|EAI_AGAIN/i.test(msg)) return new Error("You're offline. Check your connection and try again.");
+    if (/set_conversation_background|conversation_backgrounds/.test(msg) && (code === "PGRST202" || code === "PGRST205" || code === "42883" || code === "42P01" || /schema cache|does not exist/i.test(msg))) return new Error(BACKGROUND_SETUP);
     if (/bucket not found/i.test(msg)) return new Error(MEDIA_SETUP);
     if (/exceeded the maximum allowed size|payload too large|entity too large/i.test(msg)) return new Error("That file is too big to send.");
     if (/mime type .* is not supported|invalid mime type/i.test(msg)) return new Error("That kind of file can't be sent. Pictures, GIFs and videos only.");
@@ -172,6 +179,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow }) {
       else throw friendly(res.error);
     }
     if (!rows) rows = (await rpc("list_conversations")) || []; // from before the media update
+    const backgrounds = await sharedBackgrounds();
     return rows.map((r) => {
       if (r.username) names.set(r.other_id, r.username);
       return {
@@ -179,6 +187,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow }) {
         online: isOnline(r.last_seen_at), isFriend: !!r.is_friend,
         lastMessage: r.last_message || "", lastSenderId: r.last_sender_id || null, lastMessageAt: r.last_message_at, unread: r.unread || 0,
         lastMedia: r.last_media_kind ? mediaWord({ kind: r.last_media_kind, mime: r.last_media_mime }) : "",
+        background: backgrounds.get(r.id) || null,
       };
     });
   }
@@ -246,6 +255,48 @@ function register({ ipcMain, cloudHandler, cloud, getWindow }) {
     return shapeMessage(data);
   }
 
+  // ── A chat's shared background ──────────────────────────────────────────────
+  const missingTable = (error) => /^(42P01|PGRST205)$/.test(String(error?.code || "")) || /does not exist|schema cache/i.test(String(error?.message || ""));
+  // The background each of your chats has, if any. Supabase only returns your own conversations'.
+  async function sharedBackgrounds() {
+    const found = new Map();
+    if (!backgroundsReady) return found;
+    const { data, error } = await sb().from("conversation_backgrounds").select("conversation_id,path,set_by");
+    if (error) {
+      // Not set up yet: remember that, so setting one can say so. Any other trouble: chats simply show none for now.
+      if (missingTable(error)) backgroundsReady = false;
+      return found;
+    }
+    for (const row of data || []) if (row.path && MEDIA_PATH.test(row.path)) found.set(row.conversation_id, { path: row.path, by: row.set_by || null });
+    return found;
+  }
+
+  // Sets the picture both people see behind this chat. file: { name, bytes }, or null to remove it.
+  async function setBackground(conversationId, file) {
+    const user = await currentUser();
+    const cid = id(conversationId, "conversation");
+    let path = null;
+    if (file) {
+      const raw = file.bytes || file.data;
+      if (!raw || typeof raw === "string") throw new Error("That picture couldn't be read.");
+      const bytes = Buffer.isBuffer(raw) ? raw : ArrayBuffer.isView(raw) ? Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength) : Buffer.from(raw);
+      const mime = sniff(bytes);
+      const ext = mime && BACKGROUND_TYPES[mime];
+      if (!ext) throw new Error("A background has to be a picture (PNG, JPG or WebP).");
+      if (bytes.length > BACKGROUND_MAX) throw new Error("That picture is too big for a background (" + megabytes(bytes.length) + "). Try a smaller one.");
+      // Check the table is there before uploading, so a picture is never left behind unused
+      const ready = await sb().from("conversation_backgrounds").select("conversation_id").limit(1);
+      if (ready.error) throw missingTable(ready.error) ? new Error(BACKGROUND_SETUP) : friendly(ready.error);
+      path = cid + "/" + require("crypto").randomUUID() + "." + ext;
+      const up = await sb().storage.from(MEDIA_BUCKET).upload(path, bytes, { contentType: mime, cacheControl: "31536000", upsert: false });
+      if (up.error) throw /row-level security/i.test(String(up.error.message || "")) ? new Error("You can only set a background for a chat with a friend.") : friendly(up.error);
+    }
+    const { error } = await sb().rpc("set_conversation_background", { conversation: cid, picture: path });
+    if (error) throw friendly(error);
+    backgroundsReady = true;
+    return path ? { path, by: user.id } : null;
+  }
+
   // Short-lived links for viewing files. Supabase only makes one for someone in that conversation.
   async function mediaUrls(paths) {
     const wanted = [...new Set((Array.isArray(paths) ? paths : []).filter((p) => typeof p === "string" && MEDIA_PATH.test(p)))].slice(0, 100);
@@ -265,9 +316,9 @@ function register({ ipcMain, cloudHandler, cloud, getWindow }) {
     clearTimeout(friendsTimer); friendsTimer = null;
     for (const q of quiet.values()) clearTimeout(q.timer);
     quiet.clear(); names.clear(); friendshipIds.clear();
-    const old = channel;
-    channel = null; channelUser = null; live = false;
-    if (old) { try { sb().removeChannel(old); } catch {} }
+    const old = [channel, bgChannel];
+    channel = null; bgChannel = null; channelUser = null; live = false;
+    for (const ch of old) if (ch) { try { sb().removeChannel(ch); } catch {} }
   }
 
   function subscribe(userId) {
@@ -294,6 +345,16 @@ function register({ ipcMain, cloudHandler, cloud, getWindow }) {
         const now = status === "SUBSCRIBED";
         if (now !== live) { live = now; emit({ type: "live", connected: live }); }
       });
+    // Chat backgrounds changing. On its own channel: if that table isn't set up yet, only this
+    // channel fails and messages stay live. Supabase delivers a row only to the two people in the chat.
+    bgChannel = sb().channel("aura-social-bg:" + userId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "conversation_backgrounds" }, (payload) => {
+        const row = payload?.new;
+        if (channelUser !== userId || payload?.eventType === "DELETE" || !row?.conversation_id) return;
+        const path = row.path && MEDIA_PATH.test(row.path) ? row.path : "";
+        emit({ type: "background", conversationId: row.conversation_id, background: path ? { path, by: row.set_by || null } : null, by: row.set_by || null });
+      })
+      .subscribe();
     const beat = () => rpc("aura_heartbeat").catch(() => {});
     beat();
     heartbeat = setInterval(beat, HEARTBEAT_MS);
@@ -302,7 +363,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow }) {
   // Called by the window when it opens. Safe to call again.
   async function start() {
     const user = await currentUser();
-    mediaReady = true; listReady = true; // check again each time AURA starts, in case the SQL has been run since
+    mediaReady = true; listReady = true; backgroundsReady = true; // check again each time AURA starts, in case the SQL has been run since
     if (!authWatched) {
       authWatched = true;
       try { sb().auth.onAuthStateChange((event) => { if (event === "SIGNED_OUT") unsubscribe(); }); } catch {}
@@ -360,7 +421,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow }) {
   } catch {}
 
   // ── What the window may ask for ─────────────────────────────────────────────
-  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, markRead };
+  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, markRead };
   for (const [name, fn] of Object.entries(api)) ipcMain.handle("social:" + name, cloudHandler(fn));
   return api;
 }
