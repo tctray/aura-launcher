@@ -9,6 +9,9 @@
  *   - AuraFriendsTab    the "AURA" tab in the Friends panel: add friends, requests, Message
  *   - MessagesIcon      the icon used in the left menu
  *
+ * It also covers deleting your own messages, blocking people and reporting them, and it is where
+ * voice calls are started from (the calls themselves live in components/calls).
+ *
  * The window never talks to Supabase directly. It asks through window.auraSocial (preload.js),
  * which is answered by electron/social.js.
  *
@@ -16,6 +19,8 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { PrivacyButton } from "./privacy";
+import { CallButton, IconPhone, MISSED_CALL, callActions, callHooks, callsAvailable, mountCallLayer, useCall } from "./calls";
 
 // ── Talking to the main process ───────────────────────────────────────────────
 async function call(name, ...args) {
@@ -33,6 +38,7 @@ const blank = () => ({
   conversations: [], conversationsLoaded: false, conversationsError: "",
   threads: {},          // conversation id -> { items, hasMore, loading, loadingOlder, error, loaded }
   media: {},            // file path -> { url, at, life } viewing links, fetched as files come on screen
+  blocked: [],          // people you have blocked
   activeId: null, pageOpen: false,
 });
 let state = blank();
@@ -60,6 +66,10 @@ const actions = {
       // Tell the user about requests that weren't there a moment ago
       if (wasLoaded) for (const f of friends) if (f.state === "incoming" && !before.has(f.friendshipId)) hooks.toast?.(`${f.username} sent you a friend request`);
     } catch (e) { set({ friendsLoaded: true, friendsError: e.message }); }
+  },
+
+  async refreshBlocked() {
+    try { set({ blocked: await call("listBlocked") }); } catch {}
   },
 
   async refreshConversations() {
@@ -171,6 +181,36 @@ const actions = {
     return saved || null;
   },
 
+  // Deletes one of your own messages for both people
+  async deleteMessage(conversationId, messageId) {
+    await call("deleteMessage", messageId);
+    applyDeleted({ id: messageId, conversationId });
+  },
+
+  // Blocks someone: no more messages or friend requests either way. They aren't told.
+  async block(person) {
+    callActions.endWith(person.userId); // a call with them ends too
+    await call("blockUser", person.userId);
+    callActions.endWith(person.userId); // (and one they started in that instant)
+    const open = state.conversations.find((c) => c.id === state.activeId);
+    if (open && open.userId === person.userId) set({ activeId: null });
+    await Promise.all([actions.refreshBlocked(), actions.refreshFriends(), actions.refreshConversations()]);
+  },
+  async unblock(person) {
+    await call("unblockUser", person.userId);
+    await Promise.all([actions.refreshBlocked(), actions.refreshConversations()]);
+  },
+  // report: { reason, details, messageId, block }
+  async report(person, report) {
+    await call("reportUser", person.userId, report);
+    if (report.block) {
+      callActions.endWith(person.userId);
+      const open = state.conversations.find((c) => c.id === state.activeId);
+      if (open && open.userId === person.userId) set({ activeId: null });
+      await Promise.all([actions.refreshBlocked(), actions.refreshFriends(), actions.refreshConversations()]);
+    }
+  },
+
   // Asks for a viewing link for a file. Requests made close together go out as one.
   needMedia(path, again) {
     if (!path) return;
@@ -196,7 +236,9 @@ const actions = {
   onEvent(event) {
     if (!event || !state.me) return;
     if (event.type === "message") return onMessage(event.message);
-    if (event.type === "friends") { actions.refreshFriends(); actions.refreshConversations(); return; }
+    if (event.type === "call" || event.type === "signal") return callActions.onEvent(event); // voice calls
+    if (event.type === "friends") { actions.refreshFriends(); actions.refreshConversations(); actions.refreshBlocked(); return; }
+    if (event.type === "deleted") { if (event.message?.id) applyDeleted(event.message); return; }
     if (event.type === "open") { hooks.goToMessages?.(); actions.open(event.conversationId); return; }
     if (event.type === "background") {
       const c = state.conversations.find((x) => x.id === event.conversationId);
@@ -215,10 +257,21 @@ const actions = {
   },
 
   async catchUp() {
-    await Promise.all([actions.refreshConversations(), actions.refreshFriends()]);
+    callActions.resume(); // a call may have started ringing while live updates were down
+    await Promise.all([actions.refreshConversations(), actions.refreshFriends(), actions.refreshBlocked()]);
     if (state.activeId) { await actions.loadThread(state.activeId); actions.markRead(state.activeId); }
   },
 };
+
+// A message was deleted (by you, or by the other person): its words and file go, its place stays
+function applyDeleted(message) {
+  const t = state.threads[message.conversationId];
+  const was = t?.items.find((m) => m.id === message.id);
+  if (was && !was.deleted) setThread(message.conversationId, (cur) => ({ items: cur.items.map((m) => (m.id === message.id ? { ...m, content: "", media: null, deleted: true } : m)) }));
+  if (!was || !was.deleted) actions.refreshConversations(); // the list's preview and unread count may have been about it
+}
+// Conversations with people you've blocked are kept out of sight until you unblock them
+const visibleConversations = (s) => (s.blocked.length ? s.conversations.filter((c) => !s.blocked.some((b) => b.userId === c.userId)) : s.conversations);
 
 function applyBackground(conversationId, background) {
   set((s) => ({ conversations: s.conversations.map((c) => (c.id === conversationId ? { ...c, background: background?.path ? background : null } : c)) }));
@@ -235,7 +288,8 @@ async function fetchMedia() {
   try {
     const { urls, seconds } = await call("mediaUrls", paths);
     const life = Math.max(60, seconds || 3600) * 800; // ask again a little before the link runs out
-    set((s) => ({ media: { ...s.media, ...Object.fromEntries(paths.map((p) => [p, urls?.[p] ? { url: urls[p], at: now, life } : { url: "", at: now, life: 60000, missing: true }])) } }));
+    // A file you sent or set yourself keeps showing from your own copy, even if a link was asked for meanwhile
+    set((s) => ({ media: { ...s.media, ...Object.fromEntries(paths.filter((p) => s.media[p]?.life !== Infinity).map((p) => [p, urls?.[p] ? { url: urls[p], at: now, life } : { url: "", at: now, life: 60000, missing: true }])) } }));
   } catch (e) {
     set((s) => ({ media: { ...s.media, ...Object.fromEntries(paths.filter((p) => !s.media[p]?.url).map((p) => [p, { url: "", at: now, life: 0, error: e.message }])) } }));
   }
@@ -321,6 +375,7 @@ function onMessage(message) {
   // In-app notice, at most one per conversation every few seconds. If AURA isn't the window in
   // front, the main process shows a Windows notification instead.
   if (!document.hasFocus()) return;
+  if (message.content === MISSED_CALL) return; // the call bar has just said so
   const now = Date.now();
   if (now - (lastNotice[message.conversationId] || 0) < 4000) return;
   lastNotice[message.conversationId] = now;
@@ -334,6 +389,16 @@ actions.markReadNow = (conversationId) => {
   clearTimeout(readTimers[conversationId]);
   readTimers[conversationId] = setTimeout(() => call("markRead", conversationId).catch(() => {}), 250);
 };
+
+// Someone you know, in the shape the call bar wants: from your friends, or someone you've messaged
+const toPerson = (p) => ({ userId: p.userId, username: p.username, avatarUrl: p.avatarUrl || "" });
+function personById(userId) {
+  const known = state.friends.find((f) => f.userId === userId) || state.conversations.find((c) => c.userId === userId);
+  return known ? toPerson(known) : null;
+}
+
+// A missed call leaves a line in the conversation. It reads differently depending on who called.
+const callNote = (content, mine) => (content !== MISSED_CALL ? "" : mine ? "Call not answered" : "Missed voice call");
 
 // Keep line breaks inside a message, drop blank lines and spaces around it
 function tidy(raw) {
@@ -353,13 +418,18 @@ export function useAuraSocial({ view, goTo, toast }) {
     state = blank(); // a different account may have just signed in
     listeners.forEach((l) => l());
     ensureStyles();
+    // Voice calls: the call bar sits above every page, and looks people up in your friends list
+    callHooks.toast = (text, kind) => hooks.toast?.(text, kind);
+    callHooks.person = personById;
+    const removeCallBar = mountCallLayer();
     const off = window.auraSocial.onEvent?.((event) => { if (alive) actions.onEvent(event); });
     (async () => {
       try {
         const me = await call("start");
         if (!alive) return;
         set({ me, ready: true, live: !!me.live, everLive: !!me.live });
-        await Promise.all([actions.refreshFriends(), actions.refreshConversations()]);
+        await Promise.all([actions.refreshFriends(), actions.refreshConversations(), actions.refreshBlocked()]);
+        if (alive) callActions.resume(); // a call may already be ringing for you
       } catch (e) {
         if (alive) set({ ready: true, friendsLoaded: true, conversationsLoaded: true, friendsError: e.message, conversationsError: e.message });
       }
@@ -379,6 +449,7 @@ export function useAuraSocial({ view, goTo, toast }) {
     return () => {
       alive = false;
       off?.();
+      removeCallBar(); // hangs up, if a call is going on
       clearInterval(fallback);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("online", onOnline);
@@ -392,7 +463,7 @@ export function useAuraSocial({ view, goTo, toast }) {
     if (view === "messages" && state.activeId) actions.markRead(state.activeId);
   }, [view]);
 
-  const unread = s.conversations.reduce((n, c) => n + (c.unread || 0), 0);
+  const unread = visibleConversations(s).reduce((n, c) => n + (c.unread || 0), 0);
   const requests = s.friends.filter((f) => f.state === "incoming").length;
   return { unread, requests };
 }
@@ -415,6 +486,8 @@ const IconDown = () => <Svg d={<path d="M6 9l6 6 6-6"/>} size={14} />;
 const IconClip = () => <Svg d={<path d="M20.5 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8l-8.5 8.5a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/>} />;
 const IconPlay = () => <Svg d={<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/>} size={22} />;
 const IconPhoto = () => <Svg d={<><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l5-4.5 3.5 3 3-2.5L21 17"/></>} size={20} />;
+const IconTrash = () => <Svg d={<path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.9 12.2h9.2L17.5 7M10 10.5v5.5M14 10.5v5.5"/>} size={15} />;
+const IconFlag = () => <Svg d={<path d="M5.5 21V4M5.5 4.5h11l-2.2 3.7 2.2 3.8h-11"/>} size={15} />;
 const IconGame = () => <Svg d={<><rect x="2.5" y="7" width="19" height="10" rx="5"/><path d="M7.5 10.5v3M6 12h3M15.5 11h.01M17.5 13h.01"/></>} />;
 
 function Avatar({ name, url, size = 38, online = null }) {
@@ -726,6 +799,12 @@ function FriendsManager({ variant = "panel", onMessaged }) {
   const accept = (f) => run(f.friendshipId, async () => { await call("acceptFriend", f.friendshipId); toast(`You and ${f.username} are now friends`); await actions.refreshFriends(); });
   const remove = (f, said) => run(f.friendshipId, async () => { await call("removeFriend", f.friendshipId); if (said) toast(said); await Promise.all([actions.refreshFriends(), actions.refreshConversations()]); });
   const message = (f) => run(f.friendshipId, async () => { await actions.openWith(f.userId); onMessaged?.(); });
+  const block = (f) => {
+    if (!window.confirm(`Block ${f.username}? They won't be able to message you or send you friend requests. They aren't told.`)) return;
+    run(f.friendshipId, async () => { await actions.block(f); toast(`${f.username} is blocked`); });
+  };
+  const unblock = (b) => run("unblock-" + b.userId, async () => { await actions.unblock(b); toast(`${b.username} is unblocked`); });
+  const [showBlocked, setShowBlocked] = useState(false);
 
   const incoming = s.friends.filter((f) => f.state === "incoming");
   const outgoing = s.friends.filter((f) => f.state === "outgoing");
@@ -753,13 +832,18 @@ function FriendsManager({ variant = "panel", onMessaged }) {
         <Row key={f.friendshipId} f={f} sub="Wants to be friends">
           <button type="button" className="mx-mini solid" onClick={() => accept(f)} disabled={!!busy}>Accept</button>
           <button type="button" className="mx-mini" onClick={() => remove(f)} disabled={!!busy}>Decline</button>
+          <button type="button" className="mx-mini" onClick={() => block(f)} disabled={!!busy}>Block</button>
         </Row>
       ))}
 
       {friends.length > 0 && <div className="mx-sec">Friends</div>}
       {friends.map((f) => (
         <Row key={f.friendshipId} f={f} sub={f.online ? "Online" : "Offline"}>
-          <button type="button" className="mx-mini solid" onClick={() => message(f)} disabled={!!busy}>Message</button>
+          <CallButton person={toPerson(f)} className="mx-mini mx-call" />
+          {/* The Friends panel is narrow: there, Message is an icon so both buttons fit beside the name */}
+          {variant === "panel"
+            ? <button type="button" className="mx-mini solid mx-call" onClick={() => message(f)} disabled={!!busy} title={`Message ${f.username}`} aria-label={`Message ${f.username}`}><MessagesIcon /></button>
+            : <button type="button" className="mx-mini solid" onClick={() => message(f)} disabled={!!busy}>Message</button>}
         </Row>
       ))}
 
@@ -773,6 +857,19 @@ function FriendsManager({ variant = "panel", onMessaged }) {
       {s.friendsLoaded && !s.friendsError && s.friends.length === 0 && (
         <div className="mx-note">No AURA friends yet. Type a friend's AURA username above to send them a request.</div>
       )}
+
+      {s.blocked.length > 0 && (
+        <button type="button" className="mx-sec mx-sec-btn" onClick={() => setShowBlocked((v) => !v)} aria-expanded={showBlocked}>Blocked ({s.blocked.length}) <IconDown /></button>
+      )}
+      {showBlocked && s.blocked.map((b) => (
+        <div className="mx-fr" key={b.userId}>
+          <Avatar name={b.username} url={b.avatarUrl} size={34} />
+          <div className="mx-fr-i"><div className="mx-fr-n">{b.username}</div><div className="mx-fr-s">Can't message or add you</div></div>
+          <div className="mx-fr-a"><button type="button" className="mx-mini" onClick={() => unblock(b)} disabled={!!busy}>Unblock</button></div>
+        </div>
+      ))}
+
+      <div className="mx-foot"><PrivacyButton quiet>Privacy policy</PrivacyButton></div>
     </div>
   );
 }
@@ -783,29 +880,73 @@ export function AuraFriendsTab() {
   return <FriendsManager variant="panel" />;
 }
 
+// ── Call a friend: pick one from your friends list ────────────────────────────
+function CallPicker({ onClose }) {
+  const s = useSocial();
+  const current = useCall();
+  const box = useRef(null);
+  const [find, setFind] = useState("");
+  useEffect(() => {
+    const away = (e) => { if (box.current && !box.current.contains(e.target) && !e.target.closest?.("[data-mx-callpick]")) onClose(); };
+    const esc = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [onClose]);
+  const friends = s.friends.filter((f) => f.state === "friend").sort((a, b) => Number(b.online) - Number(a.online) || a.username.localeCompare(b.username));
+  const wanted = find.trim().toLowerCase();
+  const shown = wanted ? friends.filter((f) => f.username.toLowerCase().includes(wanted)) : friends;
+  const busy = !!current && current.phase !== "over";
+  return (
+    <div className="mx-pop mx-callpick" ref={box} role="dialog" aria-label="Call a friend">
+      <div className="mx-pop-t">Call a friend</div>
+      {friends.length > 6 && <input className="mx-callpick-find" value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find a friend" aria-label="Find a friend" spellCheck={false} autoFocus />}
+      {!s.friendsLoaded && <div className="mx-note">Loading friends…</div>}
+      {s.friendsError && <div className="mx-note err">{s.friendsError}</div>}
+      {s.friendsLoaded && !s.friendsError && friends.length === 0 && <div className="mx-note">No AURA friends yet. Add one with the + button, then call them from here.</div>}
+      {busy && <div className="mx-note">You're in a call with {current.peer.username}. Hang up to call someone else.</div>}
+      <div className="mx-callpick-list" role="list">
+        {shown.map((f) => (
+          <button key={f.friendshipId} type="button" role="listitem" className={`mx-callpick-row ${f.online ? "" : "off"}`} disabled={busy} onClick={() => { callActions.start(toPerson(f)); onClose(); }} title={`Call ${f.username}`}>
+            <Avatar name={f.username} url={f.avatarUrl} size={36} online={f.online} />
+            <span className="mx-callpick-i"><span className="mx-callpick-n">{f.username}</span><span className="mx-callpick-s">{f.online ? "Online" : "Offline"}</span></span>
+            <span className="mx-callpick-go"><IconPhone size={14} /> Call</span>
+          </button>
+        ))}
+        {wanted && shown.length === 0 && <div className="mx-note">No friend named "{find.trim()}".</div>}
+      </div>
+      {friends.some((f) => !f.online) && <div className="mx-callpick-foot">A friend who is offline won't hear the call. They'll see that they missed it.</div>}
+    </div>
+  );
+}
+
 // ── Messages page ─────────────────────────────────────────────────────────────
 function ConversationList() {
   const s = useSocial();
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 30000); return () => clearInterval(t); }, []); // keeps "2m" fresh
   if (!s.conversationsLoaded) return <div className="mx-list"><div className="mx-note">Loading conversations…</div></div>;
+  const conversations = visibleConversations(s);
   return (
     <div className="mx-list" role="list">
       {s.conversationsError && <div className="mx-note err">{s.conversationsError} <button type="button" className="mx-link" onClick={() => actions.refreshConversations()}>Try again</button></div>}
-      {!s.conversationsError && s.conversations.length === 0 && (
+      {!s.conversationsError && conversations.length === 0 && (
         <div className="mx-empty-list">
           <div className="mx-empty-t">No conversations yet</div>
         </div>
       )}
-      {s.conversations.map((c) => {
+      {conversations.map((c) => {
         const mine = c.lastSenderId && s.me && c.lastSenderId === s.me.id;
+        // The newest message, in words: its text, what kind of file it was, or that it was deleted
+        const missed = callNote(c.lastMessage, mine);
+        const last = missed || (c.lastMessage ? c.lastMessage.replace(/\s+/g, " ") : c.lastMedia || (c.lastSenderId ? "Message deleted" : ""));
         return (
           <button key={c.id} type="button" role="listitem" className={`mx-conv ${s.activeId === c.id ? "on" : ""} ${c.unread ? "unread" : ""}`} onClick={() => actions.open(c.id)}>
             <Avatar name={c.username} url={c.avatarUrl} size={40} online={c.isFriend ? c.online : null} />
             <span className="mx-conv-m">
-              <span className="mx-conv-top"><span className="mx-conv-n">{c.username}</span><span className="mx-conv-t">{c.lastMessage || c.lastMedia ? shortTime(c.lastMessageAt) : ""}</span></span>
+              <span className="mx-conv-top"><span className="mx-conv-n">{c.username}</span><span className="mx-conv-t">{last ? shortTime(c.lastMessageAt) : ""}</span></span>
               <span className="mx-conv-bot">
-                <span className="mx-conv-p">{c.lastMessage || c.lastMedia ? (mine ? "You: " : "") + (c.lastMessage ? c.lastMessage.replace(/\s+/g, " ") : c.lastMedia) : "No messages yet"}</span>
+                <span className="mx-conv-p">{last ? (mine && !missed && (c.lastMessage || c.lastMedia) ? "You: " : "") + last : "No messages yet"}</span>
                 {c.unread > 0 && <span className="mx-badge" aria-label={`${c.unread} unread`}>{c.unread > 99 ? "99+" : c.unread}</span>}
               </span>
             </span>
@@ -816,7 +957,7 @@ function ConversationList() {
   );
 }
 
-function ProfileCard({ conversation, onClose }) {
+function ProfileCard({ conversation, onClose, onReport }) {
   const s = useSocial();
   const [profile, setProfile] = useState(null);
   const [error, setError] = useState("");
@@ -831,6 +972,12 @@ function ProfileCard({ conversation, onClose }) {
     return () => { alive = false; document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
   }, [conversation.userId, onClose]);
   const friendship = s.friends.find((f) => f.userId === conversation.userId && f.state === "friend");
+  const person = { userId: conversation.userId, username: conversation.username };
+  const block = async () => {
+    if (!window.confirm(`Block ${conversation.username}? They won't be able to message you or send you friend requests, and this conversation will be hidden. They aren't told.`)) return;
+    try { await actions.block(person); hooks.toast?.(`${conversation.username} is blocked`); onClose(); }
+    catch (e) { hooks.toast?.(e.message, "err"); }
+  };
   const unfriend = async () => {
     if (!friendship || !window.confirm(`Remove ${conversation.username} as a friend? You won't be able to message each other until you're friends again.`)) return;
     try { await call("removeFriend", friendship.friendshipId); hooks.toast?.(`${conversation.username} removed from your friends`); await Promise.all([actions.refreshFriends(), actions.refreshConversations()]); onClose(); }
@@ -846,6 +993,10 @@ function ProfileCard({ conversation, onClose }) {
       {profile?.bio && <p className="mx-profile-b">{profile.bio}</p>}
       {profile?.joinedAt && <div className="mx-profile-j">On AURA since {new Date(profile.joinedAt).toLocaleDateString([], { month: "long", year: "numeric" })}</div>}
       {friendship && <button type="button" className="mx-btn ghost danger" onClick={unfriend}>Remove friend</button>}
+      <div className="mx-profile-safe">
+        <button type="button" className="mx-link" onClick={() => { onClose(); onReport?.(null); }}>Report</button>
+        <button type="button" className="mx-link" onClick={block}>Block</button>
+      </div>
     </div>
   );
 }
@@ -919,6 +1070,63 @@ function Lightbox({ item, onClose }) {
   );
 }
 
+// Report a person, or one message of theirs. Covers the conversation while it's open.
+const REASONS = [["spam", "Spam"], ["harassment", "Harassment or bullying"], ["inappropriate", "Inappropriate content"], ["other", "Something else"]];
+function ReportSheet({ conversation, message, onClose }) {
+  const [reason, setReason] = useState("");
+  const [details, setDetails] = useState("");
+  const [alsoBlock, setAlsoBlock] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const first = useRef(null);
+  useEffect(() => {
+    first.current?.focus();
+    const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    document.addEventListener("keydown", esc, true);
+    return () => document.removeEventListener("keydown", esc, true);
+  }, [onClose]);
+  const name = conversation.username;
+  const quoted = message ? (message.content ? message.content.replace(/\s+/g, " ").slice(0, 140) : mediaWord(message.media) || "Message") : "";
+  const send = async (e) => {
+    e.preventDefault();
+    if (!reason) { setError("Pick a reason."); return; }
+    setBusy(true); setError("");
+    try {
+      await actions.report({ userId: conversation.userId, username: name }, { reason, details, messageId: message?.id || null, block: alsoBlock });
+      hooks.toast?.(alsoBlock ? `Report sent. ${name} is blocked.` : "Report sent. Thank you.");
+      onClose();
+    } catch (err) { setError(err.message); setBusy(false); }
+  };
+  return (
+    <div className="mx-sheet" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="mx-sheet-in" role="dialog" aria-modal="true" aria-label={`Report ${name}`} onSubmit={send}>
+        <div className="mx-sheet-t">Report {name}</div>
+        {message && <div className="mx-quote">{quoted}</div>}
+        <fieldset className="mx-reasons">
+          <legend>What's wrong?</legend>
+          {REASONS.map(([key, label], i) => (
+            <label key={key} className={reason === key ? "on" : ""}>
+              <input ref={i === 0 ? first : undefined} type="radio" name="mx-reason" value={key} checked={reason === key} onChange={() => { setReason(key); setError(""); }} />
+              <span>{label}</span>
+            </label>
+          ))}
+        </fieldset>
+        <label className="mx-field">
+          <span>Anything to add? (optional)</span>
+          <textarea value={details} onChange={(e) => setDetails(e.target.value)} maxLength={1000} rows={3} />
+        </label>
+        <label className="mx-check"><input type="checkbox" checked={alsoBlock} onChange={(e) => setAlsoBlock(e.target.checked)} /><span>Also block {name}</span></label>
+        <p className="mx-sheet-n">{message ? "The developer of AURA receives your reason and a copy of this message." : "The developer of AURA receives your reason."} {name} isn't told who reported them.</p>
+        {error && <div className="mx-note err" role="alert">{error}</div>}
+        <div className="mx-sheet-a">
+          <button type="button" className="mx-btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="mx-btn" disabled={busy}>{busy ? "Sending…" : "Send report"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function Thread({ conversation, nowPlaying }) {
   const s = useSocial();
   const t = s.threads[conversation.id] || thread(conversation.id);
@@ -926,6 +1134,7 @@ function Thread({ conversation, nowPlaying }) {
   const [tray, setTray] = useState([]);       // files picked, pasted or dropped, waiting to be sent
   const [dropping, setDropping] = useState(false);
   const [viewing, setViewing] = useState(null);
+  const [reporting, setReporting] = useState(null); // { message } while the report form is open
   const [showProfile, setShowProfile] = useState(false);
   const [newBelow, setNewBelow] = useState(false);
   const scroller = useRef(null);
@@ -940,7 +1149,7 @@ function Thread({ conversation, nowPlaying }) {
   useEffect(() => {
     setText(drafts[conversation.id] || "");
     setTray(trays[conversation.id] || []);
-    setShowProfile(false); setNewBelow(false); setViewing(null); setDropping(false);
+    setShowProfile(false); setNewBelow(false); setViewing(null); setDropping(false); setReporting(null);
     stick.current = true; lastId.current = null;
     input.current?.focus();
     return () => {};
@@ -1030,6 +1239,11 @@ function Thread({ conversation, nowPlaying }) {
   const onKey = (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } // Enter sends, Shift+Enter makes a new line
   };
+  const remove = async (m) => {
+    if (!window.confirm("Delete this message for both of you? This can't be undone.")) return;
+    try { await actions.deleteMessage(conversation.id, m.id); }
+    catch (e) { hooks.toast?.(e.message, "err"); }
+  };
   const retry = (m) => (m.attachment ? actions.sendMedia(conversation.id, m.attachment, m.content, m.id) : actions.send(conversation.id, m.content, m.id));
 
   // Group messages: a new block when the sender changes or five minutes pass; a divider per day
@@ -1053,10 +1267,15 @@ function Thread({ conversation, nowPlaying }) {
           <Avatar name={conversation.username} url={conversation.avatarUrl} size={40} online={conversation.isFriend ? conversation.online : null} />
           <span><span className="mx-who-n">{conversation.username}</span><span className="mx-who-s">{conversation.isFriend ? (conversation.online ? "Online" : "Offline") : "Not in your friends"}</span></span>
         </button>
-        {nowPlaying?.title && conversation.isFriend && (
-          <button type="button" className="mx-btn ghost" onClick={() => send(`🎮 Join me in ${nowPlaying.title}!`)} title={`Invite ${conversation.username} to ${nowPlaying.title}`}><IconGame /> Invite to {nowPlaying.title}</button>
-        )}
-        {showProfile && <ProfileCard conversation={conversation} onClose={() => setShowProfile(false)} />}
+        <div className="mx-head-a">
+          {nowPlaying?.title && conversation.isFriend && (
+            <button type="button" className="mx-btn ghost" onClick={() => send(`🎮 Join me in ${nowPlaying.title}!`)} title={`Invite ${conversation.username} to ${nowPlaying.title}`}><IconGame /> Invite to {nowPlaying.title}</button>
+          )}
+          {conversation.isFriend && (
+            <CallButton person={toPerson(conversation)} className="mx-btn ghost">{({ withThem }) => <><IconPhone size={15} /> {withThem ? "In call" : "Call"}</>}</CallButton>
+          )}
+        </div>
+        {showProfile && <ProfileCard conversation={conversation} onClose={() => setShowProfile(false)} onReport={(message) => setReporting({ message })} />}
       </header>
 
       {s.everLive && !s.live && <div className="mx-banner" role="status">Reconnecting. New messages may take a moment to show up.</div>}
@@ -1077,9 +1296,22 @@ function Thread({ conversation, nowPlaying }) {
         ) : (
           <div key={b.key} className={`mx-group ${s.me && b.senderId === s.me.id ? "me" : "them"}`}>
             {b.items.map((m) => (
-              <div key={m.id} className={`mx-msg ${m.pending ? "pending" : ""} ${m.failed ? "failed" : ""} ${m.media ? "has-media" : ""}`}>
+              <div key={m.id} className={`mx-msg ${m.pending ? "pending" : ""} ${m.failed ? "failed" : ""} ${m.media ? "has-media" : ""} ${m.deleted ? "gone" : ""}`}>
+                {m.deleted && <div className="mx-bubble">{s.me && m.senderId === s.me.id ? "You deleted this message" : "This message was deleted"}</div>}
                 {m.media && <MediaView message={m} onOpen={setViewing} />}
-                {m.content && <div className="mx-bubble">{m.content}</div>}
+                {m.content && (m.content === MISSED_CALL
+                  ? <div className="mx-bubble mx-missed"><IconPhone size={15} /> {callNote(m.content, !!s.me && m.senderId === s.me.id)}</div>
+                  : <div className="mx-bubble">{m.content}</div>)}
+                {m.content === MISSED_CALL && conversation.isFriend && s.me && m.senderId !== s.me.id && (
+                  <CallButton person={toPerson(conversation)} className="mx-link mx-callback">Call back</CallButton>
+                )}
+                {!m.pending && !m.failed && !m.deleted && (
+                  <div className="mx-acts">
+                    {s.me && m.senderId === s.me.id
+                      ? <button type="button" onClick={() => remove(m)} title="Delete message" aria-label="Delete message"><IconTrash /></button>
+                      : <button type="button" onClick={() => setReporting({ message: m })} title="Report message" aria-label="Report message"><IconFlag /></button>}
+                  </div>
+                )}
                 {m.failed && (
                   <div className="mx-fail">Not sent. {m.error} <button type="button" className="mx-link" onClick={() => retry(m)}>Try again</button> <button type="button" className="mx-link" onClick={() => actions.discard(conversation.id, m.id)}>Delete</button></div>
                 )}
@@ -1118,6 +1350,7 @@ function Thread({ conversation, nowPlaying }) {
       )}
       {dropping && <div className="mx-drop" aria-hidden="true"><div><IconPhoto /> Drop to attach</div></div>}
       {viewing && <Lightbox item={viewing} onClose={() => setViewing(null)} />}
+      {reporting && <ReportSheet conversation={conversation} message={reporting.message} onClose={() => setReporting(null)} />}
     </section>
   );
 }
@@ -1127,13 +1360,15 @@ export default function MessagesPage({ nowPlaying }) {
   const [look, setLook, vars, ownPicture] = useLook();
   const [picking, setPicking] = useState(false);
   const [drawer, setDrawer] = useState(false);
+  const [calling, setCalling] = useState(false); // the "Call a friend" list
   useEffect(() => {
     ensureStyles();
     // While this page is open and in front, freshen the online dots now and then
     const t = setInterval(() => { if (document.hasFocus() && state.me && state.live) { actions.refreshConversations(); actions.refreshFriends(); } }, 90000);
     return () => clearInterval(t);
   }, []);
-  const active = s.conversations.find((c) => c.id === s.activeId) || null;
+  const conversations = visibleConversations(s);
+  const active = conversations.find((c) => c.id === s.activeId) || null;
   const requests = s.friends.filter((f) => f.state === "incoming").length;
   // A chat's shared background wins while that chat is open; otherwise your own choice shows
   const sharedUrl = useLoadedMedia(active?.background?.path || "");
@@ -1151,11 +1386,13 @@ export default function MessagesPage({ nowPlaying }) {
             <h1>Messages</h1>
             <div className="mx-side-a">
               <button type="button" className={`mx-icon ${picking ? "on" : ""}`} data-mx-look onClick={() => setPicking((v) => !v)} title="Colors and background" aria-label="Colors and background" aria-expanded={picking}><IconPalette /></button>
+              {callsAvailable() && <button type="button" className={`mx-icon ${calling ? "on" : ""}`} data-mx-callpick onClick={() => setCalling((v) => !v)} title="Call a friend" aria-label="Call a friend" aria-expanded={calling}><IconPhone /></button>}
               <button type="button" className={`mx-icon ${drawer ? "on" : ""}`} onClick={() => setDrawer((v) => !v)} title="New message" aria-label="New message" aria-expanded={drawer}>
                 {drawer ? <IconX /> : <IconPlus />}{!drawer && requests > 0 && <i className="mx-pip" />}
               </button>
             </div>
             {picking && <LookPicker look={look} setLook={setLook} onClose={() => setPicking(false)} conversation={active} sharedUrl={sharedUrl} hasPicture={!!picture} />}
+            {calling && <CallPicker onClose={() => setCalling(false)} />}
           </div>
           {drawer ? (
             <div className="mx-drawer"><FriendsManager variant="glass" onMessaged={() => setDrawer(false)} /></div>
@@ -1168,9 +1405,9 @@ export default function MessagesPage({ nowPlaying }) {
         ) : (
           <section className="mx-thread mx-none">
             <div className="mx-none-in">
-              <div className="mx-none-t">{s.conversations.length ? "Pick a conversation" : "Your messages live here"}</div>
-              <p>{s.conversations.length ? "Choose someone on the left to see your messages." : "Add an AURA friend, then send the first message."}</p>
-              {!s.conversations.length && <button type="button" className="mx-btn" onClick={() => setDrawer(true)}>Find a friend</button>}
+              <div className="mx-none-t">{conversations.length ? "Pick a conversation" : "Your messages live here"}</div>
+              <p>{conversations.length ? "Choose someone on the left to see your messages." : "Add an AURA friend, then send the first message."}</p>
+              {!conversations.length && <button type="button" className="mx-btn" onClick={() => setDrawer(true)}>Find a friend</button>}
             </div>
           </section>
         )}
@@ -1275,7 +1512,17 @@ const CSS = `
 .mx-group{display:flex;flex-direction:column;gap:3px;margin-top:8px;max-width:min(580px,76%)}
 .mx-group.me{align-self:flex-end;align-items:flex-end}
 .mx-group.them{align-self:flex-start;align-items:flex-start}
-.mx-msg{display:flex;flex-direction:column;max-width:100%}
+.mx-msg{position:relative;display:flex;flex-direction:column;max-width:100%}
+/* Delete (your messages) or Report (theirs): appears beside a message when you point at it or tab to it */
+.mx-acts{position:absolute;top:50%;transform:translateY(-50%);opacity:0;transition:opacity .12s}
+.mx-group.me .mx-acts{right:100%;padding-right:6px}
+.mx-group.them .mx-acts{left:100%;padding-left:6px}
+.mx-msg:hover .mx-acts,.mx-acts:focus-within{opacity:1}
+.mx-acts button{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:color-mix(in srgb,var(--mx-base) 70%,transparent);border:1px solid rgba(255,255,255,.16);color:var(--mx-ink2)!important}
+.mx-acts button:hover{color:#fff!important;border-color:rgba(255,255,255,.4)}
+.mx-group.me .mx-acts button:hover{background:rgba(255,77,109,.3);border-color:rgba(255,77,109,.6)}
+.mx-msg.gone .mx-bubble{background:transparent!important;border:1px dashed rgba(255,255,255,.28)!important;color:var(--mx-ink3)!important;font-style:italic;font-size:13px;text-shadow:none}
+.mx.has-pic .mx-msg.gone .mx-bubble{background:color-mix(in srgb,var(--mx-base) 62%,transparent)!important;color:var(--mx-ink2)!important}
 .mx-group.me .mx-msg{align-items:flex-end}
 .mx-group.them .mx-msg{align-items:flex-start}
 .mx-bubble{padding:9px 14px;border-radius:18px;font-size:14px;line-height:1.46;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
@@ -1304,6 +1551,22 @@ const CSS = `
 .mx-msg.failed .mx-media{border-color:rgba(255,77,109,.6);opacity:.75}
 .mx-drop{position:absolute;inset:8px;z-index:5;display:flex;align-items:center;justify-content:center;border-radius:16px;border:2px dashed var(--mx-b);background:color-mix(in srgb,var(--mx-base) 82%,transparent);pointer-events:none}
 .mx-drop div{display:flex;align-items:center;gap:10px;font-family:'Rajdhani',sans-serif;font-size:22px;font-weight:700;letter-spacing:.4px}
+.mx-sheet{position:absolute;inset:0;z-index:7;display:flex;align-items:center;justify-content:center;padding:18px;background:color-mix(in srgb,var(--mx-base) 72%,transparent);backdrop-filter:blur(6px)}
+.mx-sheet-in{width:min(420px,100%);max-height:100%;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:18px;background:color-mix(in srgb,var(--mx-base) 90%,#fff);border:1px solid rgba(255,255,255,.18);box-shadow:0 24px 60px rgba(0,0,0,.55);text-shadow:none}
+.mx-sheet-t{font-family:'Rajdhani',sans-serif;font-size:21px;font-weight:700;letter-spacing:.4px}
+.mx-quote{padding:8px 12px;border-left:3px solid var(--mx-b);border-radius:0 8px 8px 0;background:rgba(255,255,255,.06);font-size:12.5px;line-height:1.45;color:var(--mx-ink2);overflow-wrap:anywhere}
+.mx-reasons{margin:0;padding:0;border:none;display:flex;flex-direction:column;gap:5px}
+.mx-reasons legend,.mx-field span{padding:0;margin-bottom:6px;font-size:12.5px;font-weight:600;color:#fff}
+.mx-reasons label{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:10px;cursor:pointer;font-size:13px;background:rgba(255,255,255,.05);border:1px solid transparent;color:var(--mx-ink2)}
+.mx-reasons label:hover{background:rgba(255,255,255,.1);color:#fff}
+.mx-reasons label.on{border-color:rgba(255,255,255,.5);color:#fff;background:rgba(255,255,255,.1)}
+.mx-reasons input,.mx-check input{accent-color:var(--mx-b);margin:0}
+.mx-field{display:flex;flex-direction:column}
+.mx-field textarea{resize:vertical;min-height:62px;max-height:160px;padding:9px 11px;border-radius:10px;font:13px/1.45 'DM Sans',sans-serif;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);color:#fff}
+.mx-check{display:flex;align-items:center;gap:9px;font-size:13px;color:#fff;cursor:pointer}
+.mx-sheet-n{margin:0;font-size:12px;line-height:1.5;color:var(--mx-ink3)}
+.mx-sheet-a{display:flex;justify-content:flex-end;gap:8px}
+.mx-sheet .mx-note{padding:0}
 .mx-lightbox{position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;padding:48px 32px;background:rgba(4,4,8,.9);cursor:zoom-out;font-family:'DM Sans',sans-serif}
 .mx-lightbox img{max-width:100%;max-height:100%;border-radius:10px;box-shadow:0 30px 90px rgba(0,0,0,.7);cursor:default}
 .mx-lightbox-x{position:absolute;top:16px;right:18px;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff}
@@ -1389,6 +1652,7 @@ const CSS = `
 .mx-profile-s,.mx-profile-j{font-size:12px;color:var(--mx-ink2)}
 .mx-profile-b{margin:8px 0 4px;font-size:13px;line-height:1.5;color:#fff;overflow-wrap:anywhere}
 .mx-profile .mx-btn{margin-top:12px}
+.mx-profile-safe{display:flex;gap:18px;margin-top:12px;font-size:12px;color:var(--mx-ink2)}
 
 /* Friends: in the Friends panel it wears AURA's own colors, on the Messages page the glass ones */
 .mx-fm{--f-ink:var(--t1);--f-ink2:var(--t2);--f-fill:var(--card);--f-line:var(--border);--f-a:var(--ac);--f-b:var(--ac);--f-on:#fff;font-family:'DM Sans',sans-serif}
@@ -1403,11 +1667,46 @@ const CSS = `
 .mx-mini.solid{background:linear-gradient(135deg,var(--f-a),var(--f-b));color:var(--f-on);border-color:transparent}
 .mx-add button:disabled,.mx-mini:disabled{opacity:.5;cursor:default}
 .mx-sec{margin:14px 2px 6px;font-size:11.5px;font-weight:600;color:var(--f-ink2)}
+.mx-sec-btn{display:flex;align-items:center;gap:5px;padding:0;background:none;border:none;cursor:pointer;font-family:inherit}
+.mx-sec-btn[aria-expanded=true] svg{transform:rotate(180deg)}
+.mx-sec-btn:hover{color:var(--f-ink)}
+.mx-foot{margin-top:16px;padding:10px 2px 0;border-top:1px solid var(--f-line)}
 .mx-fr{display:flex;align-items:center;flex-wrap:wrap;gap:6px 9px;padding:7px 4px;border-radius:10px}
 .mx-fr-i{flex:1;min-width:84px}
 .mx-fr-n{font-size:12.5px;font-weight:600;color:var(--f-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mx-fr-s{font-size:11px;color:var(--f-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mx-fr-a{display:flex;gap:5px;flex-shrink:0;margin-left:auto}
+
+/* Voice calls: where they start from (the call bar itself is styled in components/calls) */
+.mx-head-a{display:flex;align-items:center;gap:8px;min-width:0}
+.mx-mini.mx-call{display:inline-flex;align-items:center;justify-content:center;width:32px;height:28px;padding:0}
+.mx-mini.mx-call svg{width:15px;height:15px}
+.mx-mini.mx-call:hover:not(:disabled){border-color:var(--f-a)}
+.mx-missed{display:inline-flex;align-items:center;gap:8px}
+.mx-group.them .mx-missed svg{color:#ff8fa3}
+.mx-callback{align-self:flex-start;margin:2px 6px 0;font-size:12px;color:var(--mx-ink2)}
+/* While a call is on, the call bar sits along the top of the window: the page moves down to make room */
+.mx{transition:padding-top .2s ease}
+:root:has(.cx-bar) .mx{padding-top:62px}
+:root:has(.stream-full-bar) .mx{padding-top:18px}
+.reduce-motion .mx{transition:none}
+@media (prefers-reduced-motion:reduce){.mx{transition:none}}
+.mx-callback:hover:not(:disabled){color:#fff}
+.mx-callpick{top:58px;left:16px;width:286px;max-height:min(520px,calc(100vh - 150px));display:flex;flex-direction:column;padding:16px 10px 10px}
+.mx-callpick .mx-pop-t{padding:0 6px}
+.mx-callpick .mx-note{padding:6px 6px 10px}
+.mx-callpick-find{margin:0 4px 8px;padding:8px 11px;border-radius:10px;font:12.5px 'DM Sans',sans-serif;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);color:#fff}
+.mx-callpick-find::placeholder{color:var(--mx-ink3)}
+.mx-callpick-list{min-height:0;overflow-y:auto}
+.mx-callpick-row{width:100%;display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:12px;border:1px solid transparent;background:transparent;cursor:pointer;text-align:left}
+.mx-callpick-row:hover:not(:disabled){background:rgba(255,255,255,.09)}
+.mx-callpick-row:disabled{opacity:.5;cursor:default}
+.mx-callpick-i{flex:1;min-width:0;display:flex;flex-direction:column}
+.mx-callpick-n{font-size:13.5px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mx-callpick-s{font-size:11.5px;color:var(--mx-ink2)}
+.mx-callpick-go{flex-shrink:0;display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:999px;font-size:12px;font-weight:600;background:linear-gradient(135deg,var(--mx-a),var(--mx-b));color:var(--mx-on)}
+.mx-callpick-row.off .mx-callpick-go{background:rgba(255,255,255,.1);color:#fff}
+.mx-callpick-foot{padding:9px 8px 2px;font-size:11.5px;line-height:1.45;color:var(--mx-ink3)}
 `;
 
 function ensureStyles() {

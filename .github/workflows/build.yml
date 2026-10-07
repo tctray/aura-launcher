@@ -4,8 +4,24 @@ on:
     tags:
       - 'v*'
 jobs:
+  # AURA's checks (the tests folder). If any fail, the builds below don't run and no release is made.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Install the browser the window check uses
+        run: npx playwright install --with-deps chromium
+      - name: Run AURA's checks
+        run: npm test
   build-windows:
     runs-on: windows-latest
+    needs: test
     permissions:
       contents: write
     steps:
@@ -22,6 +38,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
   build-linux:
     runs-on: ubuntu-latest
+    needs: test
     permissions:
       contents: write
     steps:

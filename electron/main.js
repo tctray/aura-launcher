@@ -5,6 +5,8 @@ process.on('uncaughtException', (e) => {
 const path = require("path");
 const fs   = require("fs");
 const { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut } = require("electron");
+// Notes errors in a log file on this PC (see errorlog.js). Nothing is sent anywhere.
+require("./errorlog").register(require("electron"));
 // Only allow one copy of AURA at a time (a second launch just focuses the first)
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -399,7 +401,7 @@ ipcMain.handle("sessions:save", cloudHandler(auraCloud.saveMySessions));
 ipcMain.handle("sessions:delete", cloudHandler(auraCloud.deleteMySessions));
 
 // AURA friends and messages. The work happens in social.js
-require("./social").register({ ipcMain, cloudHandler, cloud: auraCloud, getWindow: () => mainWin });
+require("./social").register({ ipcMain, cloudHandler, cloud: auraCloud, getWindow: () => mainWin, server: (route, body) => auraServer(route, body) });
 
 
 

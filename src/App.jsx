@@ -10,6 +10,8 @@ import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
 import MessagesPage, { AuraFriendsTab, MessagesIcon, useAuraSocial } from "./components/messages";
+import { PrivacyButton } from "./components/privacy";
+import { PageBoundary, AppBoundary, ErrorLogButton } from "./components/safety";
 
 const CATEGORIES = ["All","FPS","RPG","Strategy","Action","Adventure","Sports","Simulation","Indie","Other"];
 
@@ -2984,6 +2986,8 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
         <div className="ss-t">ABOUT</div>
         <div className="ss-card">
           <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · <AppVersion/></div></div><UpdateButton/></div>
+          <div className="sr"><div><div className="sr-l">Privacy</div><div className="sr-s">What AURA stores about you and who can see it</div></div><PrivacyButton/></div>
+          <div className="sr"><div><div className="sr-l">Error log</div><div className="sr-s">If something goes wrong, AURA notes it in a file on this PC. Nothing is sent anywhere.</div></div><ErrorLogButton/></div>
           <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>
@@ -3749,7 +3753,7 @@ function AuraApp(){
             </div>
           </header>}
 
-          {view==="library"&&(
+          {view==="library"&&(<PageBoundary name="library">
             <>
               {!heroGame&&(<div className="fbar">{CATEGORIES.map(c=><button key={c} className={`chip ${cat===c?"on":""}`} onClick={()=>setCat(c)}>{c}</button>)}</div>)}
               {heroGame?(
@@ -3763,38 +3767,38 @@ function AuraApp(){
                 </div>
               )}
             </>
-          )}
+          </PageBoundary>)}
 
-          {view==="recent"&&(
+          {view==="recent"&&(<PageBoundary name="recent">
             <div className="gc">
               <div className="sh"><div><span className="sh-t">RECENTLY PLAYED</span><span className="sh-c">{recent.length} games</span></div></div>
               <Grid games={recent} onPlay={doPlay} onFav={doFav} onEdit={openEdit} onDel={openDel} onSelect={setHeroGame}/>
             </div>
-          )}
+          </PageBoundary>)}
 
-          {view==="favorites"&&(
+          {view==="favorites"&&(<PageBoundary name="favorites">
             <div className="gc">
               <div className="sh"><div><span className="sh-t">FAVORITES</span><span className="sh-c">{favs.length} games</span></div></div>
               {favs.length===0?<div className="empty"><div className="empty-icon">❤️</div><div className="empty-t">No favorites yet</div><div className="empty-s">Click a game to open it, then favorite it.</div></div>:<Grid games={favs} onPlay={doPlay} onFav={doFav} onEdit={openEdit} onDel={openDel} onSelect={setHeroGame}/>}
             </div>
-          )}
+          </PageBoundary>)}
 
-          {view==="achievements"&&<AchievementsScreen unlockedMap={unlockedAch}/>}
-          {view==="sessions"&&<div style={{flex:1,overflowY:"auto"}}><SessionsPage games={games} accent={accent||(theme==="custom"?customColors?.ac:THEMES[theme]?.ac)||"#FF5722"}/></div>}
-          {view==="performance"&&<div style={{flex:1,overflowY:"auto"}}><PerformancePage games={games} accent={accent||(theme==="custom"?customColors?.ac:THEMES[theme]?.ac)||"#FF5722"}/></div>}
+          {view==="achievements"&&<PageBoundary name="achievements"><AchievementsScreen unlockedMap={unlockedAch}/></PageBoundary>}
+          {view==="sessions"&&<PageBoundary name="sessions"><div style={{flex:1,overflowY:"auto"}}><SessionsPage games={games} accent={accent||(theme==="custom"?customColors?.ac:THEMES[theme]?.ac)||"#FF5722"}/></div></PageBoundary>}
+          {view==="performance"&&<PageBoundary name="performance"><div style={{flex:1,overflowY:"auto"}}><PerformancePage games={games} accent={accent||(theme==="custom"?customColors?.ac:THEMES[theme]?.ac)||"#FF5722"}/></div></PageBoundary>}
 
           <div style={{display:view==="clips"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
-            <ClipsPage nowPlayingGame={nowPlaying?.title}/>
+            <PageBoundary name="clips"><ClipsPage nowPlayingGame={nowPlaying?.title}/></PageBoundary>
           </div>
 
           <div style={{display:view==="streams"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
-            <StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)} onStreamChange={s=>setActiveStream(s)}/>
+            <PageBoundary name="streams"><StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)} onStreamChange={s=>setActiveStream(s)}/></PageBoundary>
           </div>
                     <div style={{display:view==="social"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden",minHeight:0}}>
-            <SocialPage visible={view==="social"}/>
+            <PageBoundary name="social"><SocialPage visible={view==="social"}/></PageBoundary>
           </div>
 
-          {view==="customize"&&<Customize
+          {view==="customize"&&<PageBoundary name="customize"><Customize
             theme={theme} onThemeChange={handleThemeChange}
             accent={accent} onAccentChange={handleAccentChange}
             customColors={customColors} onCustomColorsChange={handleCustomColorsChange}
@@ -3809,11 +3813,11 @@ function AuraApp(){
               setCustomColors(colors); saveCustomTheme(colors);
               applyTheme(themeKey, ac, colors);
             }}
-          />}
+          /></PageBoundary>}
 
-          {view==="messages"&&<MessagesPage nowPlaying={nowPlaying}/>}
+          {view==="messages"&&<PageBoundary name="messages"><MessagesPage nowPlaying={nowPlaying}/></PageBoundary>}
 
-          {view==="settings"&&<Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames(DEMO_GAMES);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers}/>}
+          {view==="settings"&&<PageBoundary name="settings"><Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames(DEMO_GAMES);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers}/></PageBoundary>}
         </div>
 
         <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onClose={()=>setFriendsOpen(false)}/>
@@ -3854,7 +3858,7 @@ export default function App(){
   const covers=useMemo(()=>load().map(g=>g.cover).filter(Boolean),[]);
   return (
     <AuthGate loadProfile={loadProfile} saveProfile={saveProfile} covers={covers} calm={!!SETTINGS.reduceMotion}>
-      {(accountKey)=><AuraApp key={accountKey}/>}
+      {(accountKey)=><AppBoundary key={accountKey}><AuraApp key={accountKey}/></AppBoundary>}
     </AuthGate>
   );
 }

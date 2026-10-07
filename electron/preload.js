@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // ── External links ──────────────────────────────────────────────────────────
   openExternal: (url) => ipcRenderer.invoke("open-external", url),
+  // The error log: a file on this PC, never sent anywhere
+  logError:     (entry) => ipcRenderer.invoke("log-error", entry),
+  openErrorLog: ()      => ipcRenderer.invoke("open-error-log"),
 
   // ── Steam ───────────────────────────────────────────────────────────────────
   importSteam:             ()         => ipcRenderer.invoke("import-steam"),
@@ -178,6 +181,21 @@ contextBridge.exposeInMainWorld("auraSocial", {
   mediaUrls: (paths) => ipcRenderer.invoke("social:mediaUrls", paths),
   // The background picture a chat shares between its two people (null removes it)
   setBackground: (conversationId, file) => ipcRenderer.invoke("social:setBackground", conversationId, file),
+  // Deleting your own messages, blocking and reporting
+  deleteMessage: (messageId) => ipcRenderer.invoke("social:deleteMessage", messageId),
+  blockUser: (userId) => ipcRenderer.invoke("social:blockUser", userId),
+  unblockUser: (userId) => ipcRenderer.invoke("social:unblockUser", userId),
+  listBlocked: () => ipcRenderer.invoke("social:listBlocked"),
+  reportUser: (userId, report) => ipcRenderer.invoke("social:reportUser", userId, report),
+  // Voice calls: ringing, accepting and hanging up, and the details two PCs swap to connect
+  startCall: (userId) => ipcRenderer.invoke("social:startCall", userId),
+  answerCall: (callId) => ipcRenderer.invoke("social:answerCall", callId),
+  endCall: (callId, reason) => ipcRenderer.invoke("social:endCall", callId, reason),
+  callSignal: (callId, kind, payload) => ipcRenderer.invoke("social:callSignal", callId, kind, payload),
+  callState: (callId, after) => ipcRenderer.invoke("social:callState", callId, after),
+  callBeat: (callId) => ipcRenderer.invoke("social:callBeat", callId),
+  currentCall: () => ipcRenderer.invoke("social:currentCall"),
+  callConfig: () => ipcRenderer.invoke("social:callConfig"),
   markRead: (conversationId) => ipcRenderer.invoke("social:markRead", conversationId),
   // New messages and friend changes pushed from the main process
   onEvent: (cb) => {

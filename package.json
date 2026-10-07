@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development npx @dotenvx/dotenvx run -- electron .\"",
-    "electron:build": "cross-env NODE_ENV=production npm run build && electron-builder --publish always"
+    "electron:build": "cross-env NODE_ENV=production npm run build && electron-builder --publish always",
+    "test": "node tests/run.cjs"
   },
   "publish": [
     {
@@ -71,6 +72,7 @@
     "winreg": "^1.2.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@eslint/js": "^9.39.4",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -83,6 +85,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
+    "playwright": "^1.56.0",
     "vite": "^8.0.1",
     "wait-on": "^9.0.4"
   }

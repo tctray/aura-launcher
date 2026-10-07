@@ -1,0 +1,171 @@
+import { PGlite } from "@electric-sql/pglite";
+import fs from "fs";
+import { fileURLToPath } from "url";
+import nodePath from "path";
+// The SQL being checked is the project's own copy, in the supabase folder
+const HERE = nodePath.dirname(fileURLToPath(import.meta.url));
+const SQL = { messages: nodePath.join(HERE, "..", "..", "supabase", "aura-messages.sql"), media: nodePath.join(HERE, "..", "..", "supabase", "aura-messages-media.sql"), background: nodePath.join(HERE, "..", "..", "supabase", "aura-messages-background.sql"), safety: nodePath.join(HERE, "..", "..", "supabase", "aura-messages-safety.sql"), voice: nodePath.join(HERE, "..", "..", "supabase", "aura-messages-voice.sql"), storage: nodePath.join(HERE, "storage-fake.sql") };
+const A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", C = "cccccccc-cccc-cccc-cccc-cccccccccccc", D = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+const db = new PGlite();
+await db.exec(`
+  create schema auth; create table auth.users (id uuid primary key);
+  create role anon nologin; create role authenticated nologin;
+  create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('test.uid', true), '')::uuid $$;
+  grant usage on schema auth, public to anon, authenticated;
+  alter default privileges in schema public grant all on tables to anon, authenticated;
+  alter default privileges in schema public grant all on functions to anon, authenticated;
+  create publication supabase_realtime;
+  insert into auth.users values ('${A}'), ('${B}'), ('${C}'), ('${D}');
+  create table public.profiles (id uuid primary key references auth.users on delete cascade, username text unique not null, bio text, avatar_url text, created_at timestamptz default now());
+  alter table public.profiles enable row level security;
+  create policy "Logged-in users can view profiles" on public.profiles for select to authenticated using (true);
+  insert into public.profiles (id, username) values ('${A}', 'tctray'), ('${B}', 'Alex'), ('${C}', 'Marcus'), ('${D}', 'Stranger');
+`);
+await db.exec(fs.readFileSync(SQL.storage, "utf8"));
+await db.exec(fs.readFileSync(SQL.messages, "utf8"));
+
+await db.exec(fs.readFileSync(SQL.media, "utf8"));
+await db.exec(fs.readFileSync(SQL.background, "utf8"));
+let failed = 0;
+const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok    " : "  FAIL  ") + name + (ok ? "" : "  " + JSON.stringify(extra))); };
+const as = async (uid, role = "authenticated") => { await db.exec(`reset role; set test.uid = '${uid || ""}'; set role ${role};`); };
+const owner = async () => { await db.exec(`reset role; set test.uid = '';`); };
+const q = async (text, params) => (await db.query(text, params)).rows;
+const one = async (text, params) => Object.values((await q(text, params))[0])[0];
+const fails = async (p) => { try { await p; return false; } catch (e) { return e.message; } };
+const uuid = () => crypto.randomUUID();
+const tick = () => q("select pg_sleep(0.004)");
+const upload = (path, who) => db.query("insert into storage.objects (bucket_id, name, owner, owner_id) values ('message-media', $1, $2::uuid, $3)", [path, who, who]);
+const say = async (conv, who, text) => { await tick(); return (await q("insert into public.messages (conversation_id, sender_id, content) values ($1, $2, $3) returning *", [conv, who, text]))[0]; };
+const sayPic = async (conv, who, path, caption = "") => { await tick(); return (await q("insert into public.messages (conversation_id, sender_id, content, media_path, media_kind, media_mime, media_size, media_name) values ($1, $2, $3, $4, 'image', 'image/png', 500, 'a.png') returning *", [conv, who, caption, path]))[0]; };
+const friends = async (x, y) => { await as(x); await q("select public.request_friend($1)", [y]); await as(y); return one("select public.request_friend($1)", [x]); };
+
+// A conversation with history from before this update
+await friends(A, B); await friends(A, C);
+await as(A);
+const AB = await one("select public.open_conversation($1)", [B]);
+const AC = await one("select public.open_conversation($1)", [C]);
+const m1 = await say(AB, A, "hello from before");
+const p1 = `${AB}/${uuid()}.png`; await upload(p1, A); const m2 = await sayPic(AB, A, p1, "a picture");
+await as(B); const m3 = await say(AB, B, "you are annoying"); const pb = `${AB}/${uuid()}.png`; await upload(pb, B); const m4 = await sayPic(AB, B, pb);
+
+await owner();
+const sql = fs.readFileSync(SQL.safety, "utf8");
+await db.exec(sql);
+await db.exec(sql); // must be safe to run twice
+await db.exec(fs.readFileSync(SQL.messages, "utf8")); await db.exec(fs.readFileSync(SQL.media, "utf8")); await db.exec(fs.readFileSync(SQL.background, "utf8")); await db.exec(sql);
+
+const del = (id) => db.query("select public.delete_message($1)", [id]);
+const row = async (id) => { await owner(); const r = (await q("select * from public.messages where id = $1", [id]))[0]; return r; };
+
+console.log("1. Deleting a message");
+await as(B);
+check("you can't delete someone else's message", /only delete your own/.test(await fails(del(m1.id))));
+await as(C); check("someone outside the chat can't either", /only delete your own/.test(await fails(del(m1.id))));
+await as(null, "anon"); check("not logged in: can't", !!(await fails(del(m1.id))));
+await as(A);
+check("can't edit a message directly, or mark it deleted by hand", /permission denied/.test(await fails(db.query("update public.messages set content = 'edited' where id = $1", [m1.id]))) && /permission denied/.test(await fails(db.query("update public.messages set deleted_at = now() where id = $1", [m1.id]))));
+check("still can't remove the row", /permission denied/.test(await fails(db.query("delete from public.messages where id = $1", [m1.id]))));
+check("the sender can delete their own", !(await fails(del(m1.id))));
+let r = await row(m1.id);
+check("its words are gone, the row stays in place, marked deleted", r.content === "" && r.deleted_at !== null && String(r.created_at) === String(m1.created_at), r);
+await as(B);
+let seen = await q("select id, content, deleted_at from public.messages where conversation_id = $1 order by created_at", [AB]);
+check("the other person sees it as deleted, still first in the conversation", seen.length === 4 && seen[0].id === m1.id && seen[0].content === "" && seen[0].deleted_at !== null, seen);
+await as(A);
+check("deleting it twice is harmless", !(await fails(del(m1.id))));
+check("a made-up message id is refused", /only delete your own/.test(await fails(del(uuid()))));
+
+console.log("2. Deleting a message with a file");
+check("only the sender may remove the file from storage", (await db.query("delete from storage.objects where name = $1", [pb])).affectedRows === 0);
+await as(B); check("the other person can't remove your file", (await db.query("delete from storage.objects where name = $1", [p1])).affectedRows === 0);
+await as(C); check("nor can someone outside", (await db.query("delete from storage.objects where name = $1", [p1])).affectedRows === 0);
+await as(A);
+check("the sender can", (await db.query("delete from storage.objects where name = $1", [p1])).affectedRows === 1);
+await del(m2.id); r = await row(m2.id);
+check("then the message forgets the file completely", r.media_path === null && r.media_kind === null && r.media_mime === null && r.media_size === null && r.media_name === null && r.content === "" && r.deleted_at !== null, r);
+const bg = `${AB}/${uuid()}.jpg`; await as(A); await upload(bg, A);
+check("a file that isn't a message of yours (a chat background) can't be removed this way", (await db.query("delete from storage.objects where name = $1", [bg])).affectedRows === 0);
+
+console.log("3. Unread counts and new messages");
+await as(B); const u1 = await say(AB, B, "unread one"); const u2 = await say(AB, B, "unread two");
+await as(A);
+check("two unread from the friend (plus two earlier)", (await q("select * from public.list_conversations_v2()")).find((c) => c.id === AB).unread === 4);
+await as(B); await del(u2.id);
+await as(A);
+let lc = (await q("select * from public.list_conversations_v2()")).find((c) => c.id === AB);
+check("a deleted message stops counting as unread", lc.unread === 3, lc.unread);
+check("when the last message was deleted the list has no words for it, but still says who", lc.last_message === "" && lc.last_media_kind === null && lc.last_sender_id === B, lc);
+check("ordinary messages still need words or a file", !!(await fails(db.query("insert into public.messages (conversation_id, sender_id, content) values ($1, $2, '')", [AB, A]))));
+check("you can't send an empty message already marked deleted to get around that", !!(await fails(db.query("insert into public.messages (conversation_id, sender_id, content, deleted_at) values ($1, $2, '', now())", [AB, A]))));
+await tick(); const sneaky = (await q("insert into public.messages (conversation_id, sender_id, content, deleted_at) values ($1, $2, 'real words', now()) returning deleted_at", [AB, A]))[0];
+check("and a real message can't arrive pre-deleted", sneaky.deleted_at === null, sneaky);
+
+console.log("4. Reporting");
+const report = (target, why, more = null, message = null) => db.query("select public.report_user($1, $2, $3, $4)", [target, why, more, message]);
+await as(A);
+check("you can report a person with a reason", !(await fails(report(B, "harassment", "  keeps insulting me  "))));
+check("and a particular message they sent you", !(await fails(report(B, "inappropriate", null, m4.id))));
+check("reporting the same message again doesn't pile up", !(await fails(report(B, "inappropriate", null, m4.id))));
+check("you can't read reports back, not even your own", /permission denied/.test(await fails(db.query("select * from public.reports"))));
+check("or write to the table directly", /permission denied/.test(await fails(db.query("insert into public.reports (reason) values ('spam')"))));
+check("a reason is required, from the list", /Pick a reason/.test(await fails(report(B, "because"))) && /Pick a reason/.test(await fails(report(B, null))));
+check("can't report yourself or nobody", /can't report yourself/.test(await fails(report(A, "spam"))) && /No AURA user/.test(await fails(report(uuid(), "spam"))));
+check("details over 1,000 characters are refused", /under 1,000/.test(await fails(report(B, "other", "x".repeat(1001)))));
+check("you can't report your own message, or one from a chat you're not in", /can't be reported/.test(await fails(report(B, "spam", null, m1.id))));
+await as(C);
+check("someone outside can't use a report to copy a message from another chat", /can't be reported/.test(await fails(report(B, "spam", null, m3.id))));
+await as(null, "anon"); check("not logged in: can't report", !!(await fails(report(B, "spam"))));
+await owner();
+let reps = await q("select * from public.reports order by created_at");
+check("you (the owner) see two reports, with names", reps.length === 2 && reps[0].reporter_name === "tctray" && reps[0].reported_name === "Alex" && reps[0].reason === "harassment" && reps[0].details === "keeps insulting me" && reps[0].status === "open", reps);
+check("the message report holds a copy of the message and its file's path", reps[1].message_id === m4.id && reps[1].message_media_path === pb && reps[1].conversation_id === AB && reps[1].message_sent_at !== null, reps[1]);
+await as(B);
+check("the reported person can't remove the reported file from storage", (await db.query("delete from storage.objects where name = $1", [pb])).affectedRows === 0);
+check("they can still delete the message from the chat", !(await fails(del(m4.id))) && (await row(m4.id)).media_path === null);
+await owner();
+check("the file is kept for review", (await q("select 1 from storage.objects where name = $1", [pb])).length === 1 && (await q("select message_media_path from public.reports where message_id = $1", [m4.id]))[0].message_media_path === pb);
+await as(A);
+let many = 0; for (let i = 0; i < 25; i++) if (!(await fails(report(C, "spam")))) many++;
+check("no more than 20 reports a day from one person", many === 18, many);
+
+console.log("5. Blocking");
+const block = (t) => db.query("select public.block_user($1)", [t]);
+await as(A);
+check("can't block yourself or nobody", /can't block yourself/.test(await fails(block(A))) && /No AURA user/.test(await fails(block(uuid()))));
+check("can't write to the blocked list directly", /permission denied/.test(await fails(db.query("insert into public.blocks (blocker_id, blocked_id) values ($1, $2)", [A, B]))));
+check("blocking works", !(await fails(block(B))) && !(await fails(block(B))));
+check("you see them in your blocked list, by name", JSON.stringify((await q("select user_id, username from public.list_blocked()"))) === JSON.stringify([{ user_id: B, username: "Alex" }]));
+check("they are no longer your friend", (await q("select * from public.list_friends()")).every((f) => f.user_id !== B));
+check("you can't message them", /row-level security/.test(await fails(say(AB, A, "hi"))));
+check("you can't add them while they're blocked, and are told why", /You've blocked this person/.test(await fails(db.query("select public.request_friend($1)", [B]))));
+await as(B);
+check("they can't message you", /row-level security/.test(await fails(say(AB, B, "why"))));
+check("they can't send you a file", /row-level security/.test(await fails(upload(`${AB}/${uuid()}.png`, B))));
+check("they can't send you a friend request, and aren't told why", (await fails(db.query("select public.request_friend($1)", [A]))) === "You can't add this person.", await fails(db.query("select public.request_friend($1)", [A])));
+check("they can't see that they're blocked", (await q("select * from public.blocks")).length === 0 && (await q("select * from public.list_blocked()")).length === 0);
+check("to them it looks like being unfriended: the chat is still there, read-only", (await q("select * from public.list_conversations_v2()")).find((c) => c.id === AB).is_friend === false);
+check("they can still read the history", (await q("select 1 from public.messages where conversation_id = $1", [AB])).length >= 5);
+check("they can't unblock themselves", !(await fails(db.query("select public.unblock_user($1)", [B]))) && Number((await (async () => { await owner(); return q("select count(*)::int n from public.blocks"); })())[0].n) === 1);
+await as(C);
+check("other people aren't affected and can't see the block", (await q("select * from public.blocks")).length === 0 && !(await fails(say(AC, C, "still fine"))));
+await as(A); await db.query("select public.request_friend($1)", [D]);
+await as(D); await block(A);
+check("blocking someone who sent you a request drops the request", (await q("select * from public.list_friends()")).length === 0);
+await as(A);
+check("and they can't send another", (await fails(db.query("select public.request_friend($1)", [D]))) === "You can't add this person.");
+
+console.log("6. Unblocking");
+await as(A);
+check("unblocking works, and twice is harmless", !(await fails(db.query("select public.unblock_user($1)", [B]))) && !(await fails(db.query("select public.unblock_user($1)", [B]))) && (await q("select * from public.list_blocked()")).length === 0);
+check("you aren't friends again automatically", /row-level security/.test(await fails(say(AB, A, "hi"))));
+check("but you can become friends again the normal way", (await friends(A, B)) === "accepted");
+await as(A); check("and message again", !(await fails(say(AB, A, "we're good"))));
+
+console.log("7. Setup");
+await owner();
+check("one content rule on messages, one delete rule on storage", Number(await one("select count(*) from pg_constraint where conrelid = 'public.messages'::regclass and contype = 'c' and pg_get_constraintdef(oid) ilike '%btrim(content%'")) === 1 && Number(await one("select count(*) from pg_policies where schemaname = 'storage' and cmd = 'DELETE'")) === 1);
+check("the messages from before the update are all still there", Number(await one("select count(*) from public.messages where conversation_id = $1", [AB])) >= 6);
+
+console.log(failed ? `\n${failed} FAILED` : "\nall passed");
+process.exit(failed ? 1 : 0);
