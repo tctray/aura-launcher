@@ -101,6 +101,7 @@ const SETTINGS_DEFAULTS = {
   zoom: 1,                // UI scale 0.8 – 1.3
   reduceMotion: false,
   noBlur: false,
+  homeBanner: true,       // the game slideshow at the top of Home
   windowMode: "maximized",// "maximized" | "fullscreen" | "windowed"
   // Sound
   uiSounds: true,
@@ -2939,6 +2940,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
             <Seg value={s.windowMode} options={[["maximized","Maximized"],["fullscreen","Fullscreen"],["windowed","Windowed"]]} onChange={v=>set({windowMode:v})}/></div>
           <div className="sr"><div><div className="sr-l">Reduce Animations</div><div className="sr-s">Turn off motion, hover lifts and transitions</div></div><Tog k="reduceMotion"/></div>
           <div className="sr"><div><div className="sr-l">Disable Blur Effects</div><div className="sr-s">Faster on older PCs and integrated graphics</div></div><Tog k="noBlur"/></div>
+          <div className="sr"><div><div className="sr-l">Home Banner</div><div className="sr-s">The game slideshow at the top of Home. Turn it off to see your whole background</div></div><Tog k="homeBanner"/></div>
           <div className="sr"><div><div className="sr-l">Launch Animation</div><div className="sr-s">Show launch overlay when starting a game</div></div><Tog k="anim"/></div>
           <div className="sr"><div><div className="sr-l">Show Play Counts</div><div className="sr-s">Display playtime or session counts on each card</div></div><Tog k="counts"/></div>
         </div>
@@ -3537,9 +3539,9 @@ function AuraApp(){
     if(!window.electronAPI?.isElectron){toast("Xbox import only works in the desktop app","err");return;}
     const result=await window.electronAPI.importXbox();
     if(result.success){
-      const newGames=result.games.map(g=>({id:uid(),title:g.title,exePath:g.exePath,cover:"",category:"Other",favorite:false,playCount:0,lastPlayed:null,addedAt:Date.now()}));
+      const newGames=result.games.map(g=>({id:uid(),title:g.title,exePath:g.exePath,cover:g.cover||"",category:"Other",favorite:false,playCount:0,lastPlayed:null,addedAt:Date.now()}));
       setGames(gs=>{const existing=gs.map(g=>g.title.toLowerCase());const toAdd=newGames.filter(g=>!existing.includes(g.title.toLowerCase()));if(toAdd.length===0){toast("All Xbox games already in library");return gs;}toast(`${toAdd.length} Xbox games imported!`);return [...toAdd,...gs];});
-    } else toast("Could not find Xbox Game Pass","err");
+    } else toast(result.error||"Could not find Xbox Game Pass","err");
   },[toast]);
 
   const sorted=useMemo(()=>{
@@ -3654,7 +3656,8 @@ function AuraApp(){
               <div className="gm-srch"><Ic.Search/><input value={srch} onChange={e=>setSrch(e.target.value)} placeholder="Search games…"/></div>
               <button className="btn-p" onClick={()=>setModal("add")} style={{borderRadius:10}}><Ic.Plus/> Add</button>
             </div>
-            {!srch&&<GMBanner games={[...games].filter(g=>g.cover).sort((a,b)=>(b.lastPlayed||0)-(a.lastPlayed||0))} onPlay={doPlay} onFav={doFav} onSelect={setHeroGame}/>}
+            {!srch&&settings.homeBanner&&<GMBanner games={[...games].filter(g=>g.cover).sort((a,b)=>(b.lastPlayed||0)-(a.lastPlayed||0))} onPlay={doPlay} onFav={doFav} onSelect={setHeroGame}/>}
+            {!srch&&!settings.homeBanner&&<div style={{height:58,flexShrink:0}}/>}
             <div className="gm-content">
               {srch?(
                 <GMShelf title="SEARCH RESULTS" games={sorted} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}} count={`${sorted.length} games`}/>

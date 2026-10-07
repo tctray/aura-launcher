@@ -23,6 +23,8 @@ const steps = [];
 const add = (group, title, file, args = []) => steps.push({ group, title, file: path.join(__dirname, file), args });
 add("files", "Project files", "static.cjs");
 if (fs.existsSync(errorlog)) add("files", "The error log", "errorlog.cjs", [errorlog]);
+const xboxFile = path.join(ROOT, "electron", "xbox.js");
+if (fs.existsSync(xboxFile) && fs.existsSync(path.join(__dirname, "xbox.cjs"))) add("files", "Xbox and Game Pass games", "xbox.cjs", [xboxFile]);
 if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safety.sql"))) {
   add("messages", "Database rules: friends and messages", "messages/sql-friends-and-messages.mjs");
   add("messages", "Database rules: pictures and videos", "messages/sql-media.mjs");

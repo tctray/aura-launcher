@@ -671,8 +671,10 @@ const gameSessions = new Map();
 ipcMain.handle("launch-game", async (_e, exePath) => {
   try {
     const startTime = Date.now();
-    const child = spawn(exePath, [], {
-      cwd: path.dirname(exePath),
+    // Game Pass games are started the way Xbox expects (see xbox.js). AURA still watches the game itself.
+    const xboxStart = require("./xbox").launcherFor(exePath);
+    const child = spawn(xboxStart ? xboxStart.command : exePath, xboxStart ? xboxStart.args : [], {
+      cwd: xboxStart ? xboxStart.cwd : path.dirname(exePath),
       detached: true,
       stdio: "ignore",
     });
@@ -865,23 +867,9 @@ ipcMain.handle("import-epic", async () => {
 });
 
 // ── Xbox ──────────────────────────────────────────────────────────────────────
-ipcMain.handle("import-xbox", async () => {
-  try {
-    const xboxPath = "C:\\XboxGames";
-    const games    = [];
-    if (fs.existsSync(xboxPath)) {
-      for (const folder of fs.readdirSync(xboxPath)) {
-        const fp = path.join(xboxPath, folder);
-        try {
-          const exes = fs.readdirSync(fp).filter(f => f.endsWith(".exe"));
-          if (exes.length) games.push({ title: folder, exePath: path.join(fp, exes[0]), category: "Other", cover: "" });
-        } catch { continue; }
-      }
-    }
-    if (games.length) return { success: true, games };
-    return { success: false, error: "No Xbox games found." };
-  } catch(e) { return { success: false, error: e.message }; }
-});
+// Finds the games the Xbox app has installed (see xbox.js), and asks the AURA server for their cover art
+ipcMain.handle("import-xbox", async () =>
+  require("./xbox").importGames({ covers: typeof auraServer === "function" ? (games) => auraServer("/api/covers/bulk", { games }) : null }));
 
 // ── IGDB cover art ────────────────────────────────────────────────────────────
 ipcMain.handle("fetch-cover-art", async (_e, title) => auraServer("/api/covers/one", { title }));
