@@ -7,6 +7,22 @@ const fs   = require("fs");
 const { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut } = require("electron");
 // Notes errors in a log file on this PC (see errorlog.js). Nothing is sent anywhere.
 require("./errorlog").register(require("electron"));
+// Safety rules for windows, links, permissions, games and clip files (see security.js)
+const security = require("./security");
+const isAppPage = (url) => security.isAppUrl(url, { appPath: app.getAppPath(), dev: !app.isPackaged });
+const safeOpenExternal = security.makeOpenExternal({ shell, getClipFolder: () => getClipFolder() });
+// AURA's own pages, in AURA's own windows (not embedded sites or frames inside them)
+function isTrustedPage(wc, details = {}) {
+  try {
+    if (!wc || (wc.isDestroyed && wc.isDestroyed()) || wc.getType() !== "window") return false;
+    if (details.isMainFrame === false) return false;
+    return isAppPage(details.requestingUrl || wc.getURL());
+  } catch { return false; }
+}
+const permissions = security.makePermissions({ dialog, BrowserWindow, isTrusted: isTrustedPage, getMainWindow: () => mainWin });
+app.on("session-created", (ses) => permissions.lock(ses));
+// Games you picked or imported on this PC (the window can't add to this list)
+const approvedGames = security.makeGames({ file: path.join(app.getPath("userData"), "approved-games.json"), dialog, getMainWindow: () => mainWin });
 // Only allow one copy of AURA at a time (a second launch just focuses the first)
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -31,29 +47,45 @@ const isSocialHost = (url) => {
     return SOCIAL_HOSTS.some((d) => h === d || h.endsWith("." + d));
   } catch { return false; }
 };
+// Every window and embedded page: where it may go, and what opens outside AURA
 app.on("web-contents-created", (_e, contents) => {
-  if (contents.getType() !== "webview") return;
-  // The Browser tab can go anywhere; the social tabs stay on their own sites
-  const isBrowserTab = contents.session === require("electron").session.fromPartition("persist:social-browser");
-  contents.setWindowOpenHandler(({ url }) => {
-    if (isBrowserTab || isSocialHost(url)) contents.loadURL(url);
-    else shell.openExternal(url);
-    return { action: "deny" };
-  });
-  contents.on("will-navigate", (e, url) => {
-    if (!isBrowserTab && !isSocialHost(url)) { e.preventDefault(); shell.openExternal(url); }
-  });
+  const type = contents.getType();
+  const outside = (url) => { if (/^(https?|mailto):/i.test(String(url))) safeOpenExternal(url); };
+  if (type === "webview") {
+    // The Browser tab can go anywhere on the web; the social tabs stay on their own sites
+    const isBrowserTab = contents.session === require("electron").session.fromPartition("persist:social-browser");
+    contents.setWindowOpenHandler(({ url }) => {
+      if ((isBrowserTab && /^https?:\/\//i.test(url)) || isSocialHost(url)) contents.loadURL(url);
+      else outside(url);
+      return { action: "deny" };
+    });
+    contents.on("will-navigate", (e, url) => {
+      if (isBrowserTab ? !/^(https?:|about:blank)/i.test(url) : !isSocialHost(url)) { e.preventDefault(); outside(url); }
+    });
+    return;
+  }
+  if (type === "window") {
+    // AURA's own windows only ever show AURA's own pages
+    const stay = (e, url) => { if (!isAppPage(url)) { e.preventDefault(); outside(url); } };
+    contents.on("will-navigate", stay);
+    contents.on("will-redirect", stay);
+    contents.setWindowOpenHandler(({ url }) => { outside(url); return { action: "deny" }; });
+    // Embedded pages never get Node, a preload or AURA's bridges
+    contents.on("will-attach-webview", (e, webPreferences, params) => {
+      if (!security.hardenWebview(webPreferences, params)) e.preventDefault();
+    });
+    return;
+  }
+  // Twitch player and chat: stay on Twitch; anything else opens in your browser
+  const onTwitch = (url) => { try { const h = new URL(url).hostname; return h === "twitch.tv" || h.endsWith(".twitch.tv"); } catch { return false; } };
+  contents.on("will-navigate", (e, url) => { if (!onTwitch(url)) { e.preventDefault(); outside(url); } });
+  contents.setWindowOpenHandler(({ url }) => { outside(url); return { action: "deny" }; });
 });
-// Load .env — written by CI from GitHub Secrets, or local file in dev
-// Load .env — dev reads from project root, packaged reads from resources/
-// Note: process.resourcesPath is available immediately in main process
-const devEnv = path.join(__dirname, "../.env");
-const pkgEnv = path.join(app.getAppPath(), "../.env");
-const resEnv = process.resourcesPath ? path.join(process.resourcesPath, ".env") : null;
-
-if      (fs.existsSync(devEnv)) require("dotenv").config({ path: devEnv });
-else if (resEnv && fs.existsSync(resEnv)) require("dotenv").config({ path: resEnv });
-else if (fs.existsSync(pkgEnv)) require("dotenv").config({ path: pkgEnv });
+// .env is only read while developing. Real keys live on the AURA server, never in the app.
+if (!app.isPackaged) {
+  const devEnv = path.join(__dirname, "../.env");
+  if (fs.existsSync(devEnv)) require("dotenv").config({ path: devEnv });
+}
 
 
 const { autoUpdater } = require("electron-updater");
@@ -231,12 +263,11 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
-      webSecurity: false,
+      webSecurity: true,
       enableBlinkFeatures: "GetDisplayMedia",
       autoplayPolicy: "no-user-gesture-required", // lets recording audio start without a fresh click
       backgroundThrottling: false, // keep recording smoothly while AURA is minimized behind a game
-      allowRunningInsecureContent: true,
-      sandbox: false,
+      sandbox: true,
     },
   });
   applyWindowMode(appSettings.windowMode);
@@ -256,16 +287,9 @@ function createWindow() {
     auraBar = null;
     app.quit();
   });
-  // Allow getUserMedia with desktop capture source
-  mainWin.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
-    // Allow all media permissions including microphone
-    // "display-capture" is what getDisplayMedia asks for. Without it, screen recording
-    // with computer sound is refused and AURA falls back to Stereo Mix.
-    const allowed = ["media", "audioCapture", "desktopCapture", "display-capture", "mediaKeySystem"];
-    callback(allowed.includes(permission) || permission.includes("media") || permission.includes("audio"));
-  });
-
-  mainWin.webContents.session.setPermissionCheckHandler(() => true);
+  // AURA's own pages may use the microphone and capture the screen; websites inside AURA
+  // ask you first and never get the rest (see security.js)
+  permissions.lock(mainWin.webContents.session);
 
   mainWin.webContents.on("enter-html-full-screen", () => {
     mainWin.setFullScreen(true);
@@ -274,6 +298,8 @@ function createWindow() {
     mainWin.setFullScreen(false);
   });
   mainWin.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
+    // Only AURA's own pages may capture the screen
+    if (!request.frame || request.frame.parent || !isAppPage(request.frame.url)) return callback({});
     const { desktopCapturer } = require("electron");
     desktopCapturer.getSources({ types: ["screen", "window"] }).then(sources => {
       const sourceId = global.pendingCaptureSource;
@@ -460,7 +486,7 @@ function createAuraBar() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
 
@@ -520,42 +546,49 @@ app.whenReady().then(() => {
         return;
       }
 
-      const rawPath = decodeURIComponent(url.pathname.slice(1));
-      // Fix Windows path - restore backslashes and drive letter colon
-      const filePath = rawPath.replace(/\//g, "\\");
-      if (!fs.existsSync(filePath)) {
+      // Only clips and screenshots from the clip folder (see security.js)
+      let asked = "";
+      try { asked = decodeURIComponent(url.pathname.slice(1)); } catch {}
+      if (process.platform === "win32") asked = asked.replace(/\//g, "\\");
+      const filePath = security.clipPath(asked, getClipFolder());
+      if (!filePath || !security.isClipFile(filePath) || !fs.existsSync(filePath)) {
         res.writeHead(404);
         res.end("Not found");
         return;
       }
-      const stat = fs.statSync(filePath);
-      const fileSize = stat.size;
+      const fileSize = fs.statSync(filePath).size;
+      const type = /\.webm$/i.test(filePath) ? "video/webm" : /\.png$/i.test(filePath) ? "image/png" : /\.jpe?g$/i.test(filePath) ? "image/jpeg" : /\.mkv$/i.test(filePath) ? "video/x-matroska" : "video/mp4";
       const range = req.headers.range;
 
       if (range) {
-        const parts = range.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-        const chunkSize = end - start + 1;
-        const fileStream = fs.createReadStream(filePath, { start, end });
+        const m = /^bytes=(\d*)-(\d*)$/.exec(String(range).trim());
+        let start = m && m[1] !== "" ? Number(m[1]) : NaN;
+        let end = m && m[2] !== "" ? Number(m[2]) : fileSize - 1;
+        if (m && m[1] === "" && m[2] !== "") { start = Math.max(0, fileSize - Number(m[2])); end = fileSize - 1; }
+        end = Math.min(end, fileSize - 1);
+        if (!m || !(start >= 0) || start > end) {
+          res.writeHead(416, { "Content-Range": `bytes */${fileSize}` });
+          res.end();
+          return;
+        }
         res.writeHead(206, {
           "Content-Range": `bytes ${start}-${end}/${fileSize}`,
           "Accept-Ranges": "bytes",
-          "Content-Length": chunkSize,
-          "Content-Type": filePath.endsWith(".webm") ? "video/webm" : filePath.endsWith(".png") ? "image/png" : filePath.endsWith(".jpg") ? "image/jpeg" : "video/mp4",
+          "Content-Length": end - start + 1,
+          "Content-Type": type,
         });
-        fileStream.pipe(res);
+        fs.createReadStream(filePath, { start, end }).pipe(res);
       } else {
         res.writeHead(200, {
           "Content-Length": fileSize,
-          "Content-Type": filePath.endsWith(".webm") ? "video/webm" : filePath.endsWith(".png") ? "image/png" : filePath.endsWith(".jpg") ? "image/jpeg" : "video/mp4",
+          "Content-Type": type,
           "Accept-Ranges": "bytes",
         });
         fs.createReadStream(filePath).pipe(res);
       }
     } catch(e) {
       res.writeHead(500);
-      res.end("Error: " + e.message);
+      res.end("Error");
     }
   });
 
@@ -619,9 +652,9 @@ rpc.on("ready", () => {
 });
 
 // ── Process watching (for games that go through a launcher like EA, Steam, Epic) ─
-function runQuiet(cmd, args) {
+function runQuiet(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const p = spawn(cmd, args, { windowsHide: true });
+    const p = spawn(cmd, args, { windowsHide: true, ...opts });
     let out = "";
     p.stdout.on("data", (d) => { out += d.toString(); });
     p.on("close", () => resolve(out));
@@ -638,11 +671,12 @@ async function isNameRunning(exeName) {
 // Is anything running from the game's install folder? Catches games whose real
 // process has a different name than the one in the library.
 async function isFolderRunning(dir) {
-  const safe = dir.replace(/'/g, "''").replace(/\\+$/, "") + "\\";
+  // The folder goes in through an environment variable, never into the command itself
+  const folder = String(dir).replace(/\\+$/, "") + "\\";
   const script =
-    `(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and ` +
-    `$_.ExecutablePath.StartsWith('${safe}', [StringComparison]::OrdinalIgnoreCase) }).Count`;
-  const out = await runQuiet("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]);
+    "(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and " +
+    "$_.ExecutablePath.StartsWith($env:AURA_DIR, [StringComparison]::OrdinalIgnoreCase) }).Count";
+  const out = await runQuiet("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { env: { ...process.env, AURA_DIR: folder } });
   return parseInt(out.trim(), 10) > 0;
 }
 
@@ -670,6 +704,9 @@ const gameSessions = new Map();
 
 ipcMain.handle("launch-game", async (_e, exePath) => {
   try {
+    // Only .exe games you picked or imported start without asking (see security.js)
+    const problem = await approvedGames.check(exePath);
+    if (problem) return { success: false, error: problem };
     const startTime = Date.now();
     // Game Pass games are started the way Xbox expects (see xbox.js). AURA still watches the game itself.
     const xboxStart = require("./xbox").launcherFor(exePath);
@@ -759,7 +796,9 @@ ipcMain.handle("pick-exe", async () => {
     filters: [{ name: "Executables", extensions: ["exe"] }],
     properties: ["openFile"],
   });
-  return r.canceled ? null : r.filePaths[0];
+  if (r.canceled) return null;
+  approvedGames.approve(r.filePaths[0]);
+  return r.filePaths[0];
 });
 
 ipcMain.handle("pick-image", async () => {
@@ -775,10 +814,7 @@ ipcMain.handle("pick-image", async () => {
   return `data:image/${mime};base64,${data.toString("base64")}`;
 });
 
-ipcMain.handle("open-external", async (_e, url) => {
-  await shell.openExternal(url);
-  return { success: true };
-});
+ipcMain.handle("open-external", async (_e, url) => safeOpenExternal(url));
 
 // ── Clip editor window ────────────────────────────────────────────────────────
 ipcMain.on("open-clip-editor", () => openClipEditor(mainWin));
@@ -830,6 +866,7 @@ ipcMain.handle("import-steam", async () => {
         } catch { continue; }
       }
     }
+    approvedGames.approveAll(games);
     return { success: true, games };
   } catch(e) { return { success: false, error: e.message }; }
 });
@@ -862,14 +899,18 @@ ipcMain.handle("import-epic", async () => {
         games.push({ title: data.DisplayName, exePath, category: "Other", cover: "" });
       } catch { continue; }
     }
+    approvedGames.approveAll(games);
     return { success: true, games };
   } catch(e) { return { success: false, error: e.message }; }
 });
 
 // ── Xbox ──────────────────────────────────────────────────────────────────────
 // Finds the games the Xbox app has installed (see xbox.js), and asks the AURA server for their cover art
-ipcMain.handle("import-xbox", async () =>
-  require("./xbox").importGames({ covers: typeof auraServer === "function" ? (games) => auraServer("/api/covers/bulk", { games }) : null }));
+ipcMain.handle("import-xbox", async () => {
+  const res = await require("./xbox").importGames({ covers: typeof auraServer === "function" ? (games) => auraServer("/api/covers/bulk", { games }) : null });
+  if (res && res.success) approvedGames.approveAll(res.games);
+  return res;
+});
 
 // ── IGDB cover art ────────────────────────────────────────────────────────────
 ipcMain.handle("fetch-cover-art", async (_e, title) => auraServer("/api/covers/one", { title }));
@@ -903,8 +944,9 @@ ipcMain.handle("steam-get-friends-profiles", async (_e, steamId) => auraServer("
 // ── Discord OAuth ─────────────────────────────────────────────────────────────
 ipcMain.handle("discord-login", async () => {
   try {
+    discordState = require("crypto").randomBytes(24).toString("hex");
     await startAuthServer();
-    const authUrl = `https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(DISCORD_REDIRECT_URI)}&scope=identify`;
+    const authUrl = `https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(DISCORD_REDIRECT_URI)}&scope=identify&state=${discordState}`;
     await shell.openExternal(authUrl);
     return { success: true };
   } catch(e) { return { success: false, error: e.message }; }
@@ -983,7 +1025,7 @@ function startRecording(gameName, opts = {}) {
   if (!ffmpegPath) return { success: false, error: "ffmpeg not available" };
   if (isRecording) return { success: false, error: "Already recording" };
 
-  const gameDir = path.join(getClipFolder(), gameName || "General");
+  const gameDir = path.join(getClipFolder(), security.safeName(gameName));
   ensureDir(gameDir);
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -1251,7 +1293,7 @@ ipcMain.handle("start-ffmpeg-pipe", async (_e, gameName, mime) => {
   recordingStartTime = Date.now();
   pushBarState();
   try {
-    const gameDir = path.join(getClipFolder(), gameName || "General");
+    const gameDir = path.join(getClipFolder(), security.safeName(gameName));
     ensureDir(gameDir);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const outFile = path.join(gameDir, `clip-${timestamp}.mp4`);
@@ -1288,7 +1330,12 @@ ipcMain.handle("stop-ffmpeg-pipe", async () => {
   }
 });
 
-ipcMain.handle("trim-clip", async (_e, { path: filePath, start, end }) => {
+ipcMain.handle("trim-clip", async (_e, input = {}) => {
+  // Only clips in the clip folder, and only real times (see security.js)
+  const filePath = security.clipPath(input && input.path, getClipFolder());
+  const start = Number(input && input.start), end = Number(input && input.end);
+  if (!filePath || !security.isClipFile(filePath)) return { success: false, error: "AURA can only trim clips in your clip folder." };
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > 24 * 3600) return { success: false, error: "Pick a start and end inside the clip." };
   try {
     const dir = path.dirname(filePath);
     const ext = path.extname(filePath);
@@ -1326,7 +1373,7 @@ ipcMain.handle("share-clip", async (_e, filePath) => require("./share").shareCli
 
 ipcMain.handle("save-clip", async (_e, gameName, buffer) => {
   try {
-    const gameDir = path.join(getClipFolder(), gameName || "General");
+    const gameDir = path.join(getClipFolder(), security.safeName(gameName));
     ensureDir(gameDir);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const outFile = path.join(gameDir, `clip-${timestamp}.webm`);
@@ -1385,8 +1432,11 @@ ipcMain.handle("get-clips", async () => {
 });
 
 ipcMain.handle("delete-clip", async (_e, filePath) => {
+  // Only clips and screenshots in the clip folder (see security.js)
+  const full = security.clipPath(filePath, getClipFolder());
+  if (!full || !security.isClipFile(full)) return { success: false, error: "AURA can only delete clips in your clip folder." };
   try {
-    fs.unlinkSync(filePath);
+    try { await shell.trashItem(full); } catch { fs.unlinkSync(full); } // Recycle Bin when there is one
     return { success: true };
   } catch(e) {
     return { success: false, error: e.message };
@@ -1394,15 +1444,23 @@ ipcMain.handle("delete-clip", async (_e, filePath) => {
 });
 
 ipcMain.handle("open-clip-folder", async (_e, filePath) => {
-  shell.showItemInFolder(filePath);
+  const full = security.clipPath(filePath, getClipFolder());
+  if (full) shell.showItemInFolder(full);
+  else { ensureDir(getClipFolder()); shell.openPath(getClipFolder()); }
   return { success: true };
 });
 
-ipcMain.handle("rename-clip", async (_e, { oldPath, newName }) => {
+ipcMain.handle("rename-clip", async (_e, input = {}) => {
+  // Only clips in the clip folder, renamed in place (see security.js)
+  const oldPath = security.clipPath(input && input.oldPath, getClipFolder());
+  if (!oldPath || !security.isClipFile(oldPath)) return { success: false, error: "AURA can only rename clips in your clip folder." };
+  const name = security.safeName(input && input.newName, "");
+  if (!name) return { success: false, error: "Type a name for the clip." };
   try {
-    const dir = path.dirname(oldPath);
     const ext = path.extname(oldPath);
-    const newPath = path.join(dir, newName + ext);
+    const newPath = path.join(path.dirname(oldPath), name + ext);
+    if (newPath.toLowerCase() === oldPath.toLowerCase()) { fs.renameSync(oldPath, newPath); return { success: true, newPath }; }
+    if (fs.existsSync(newPath)) return { success: false, error: "A clip with that name already exists." };
     fs.renameSync(oldPath, newPath);
     return { success: true, newPath };
   } catch(e) {
@@ -1497,13 +1555,14 @@ ipcMain.handle("stream-exit-full", async () => ({ success: true, wasFull: leaveS
 ipcMain.handle("stream-set-volume", async (_e, { volume, muted }) => {
   if (!streamView) return { success: false };
   try {
+    const vol = muted ? 0 : Math.min(1, Math.max(0, Number(volume) / 100 || 0));
     // Execute JS in the Twitch player to set volume
     await streamView.webContents.executeJavaScript(`
       try {
         const videos = document.querySelectorAll('video');
         videos.forEach(v => {
-          v.volume = ${muted ? 0 : volume / 100};
-          v.muted = ${muted};
+          v.volume = ${vol};
+          v.muted = ${!!muted};
         });
       } catch(e) {}
     `);
@@ -1534,6 +1593,8 @@ ipcMain.handle("stream-restore", async (_e, { bounds, chatBounds }) => {
 });
 
 ipcMain.handle("stream-open", async (_e, { channel, bounds }) => {
+  channel = String(channel || "").toLowerCase();
+  if (!/^[a-z0-9_]{1,25}$/.test(channel)) return { success: false, error: "That isn't a Twitch channel name." };
   if (streamView) {
     mainWin.removeBrowserView(streamView);
     streamView.webContents.destroy();
@@ -1651,6 +1712,8 @@ ipcMain.handle("stream-close", async () => {
 });
 
 ipcMain.handle("chat-open", async (_e, { channel, bounds }) => {
+  channel = String(channel || "").toLowerCase();
+  if (!/^[a-z0-9_]{1,25}$/.test(channel)) return { success: false, error: "That isn't a Twitch channel name." };
   // Chat uses a separate BrowserView
   if (mainWin.chatView) {
     mainWin.removeBrowserView(mainWin.chatView);
@@ -1696,32 +1759,46 @@ ipcMain.handle("check-update", async () => {
 });
 
 // ── Discord OAuth callback server ─────────────────────────────────────────────
+// Listens on this PC only, for one login, for up to 5 minutes. The login must carry the
+// random "state" AURA put in the link, so another website can't log you in as someone else.
+let discordState = null;
+let authTimer = null;
+function stopAuthServer() {
+  clearTimeout(authTimer); authTimer = null;
+  if (authServer) { try { authServer.close(); } catch {} authServer = null; }
+}
 function startAuthServer() {
   return new Promise((resolve, reject) => {
-    if (authServer) { authServer.close(); authServer = null; }
+    stopAuthServer();
+    const page = (title, text) => `<html><body style="background:#222831;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px"><div style="font-size:20px;font-weight:700">${title}</div><div style="font-size:13px;color:#a0a8b4">${text}</div></body></html>`;
     authServer = http.createServer(async (req, res) => {
       const url = new URL(req.url, "http://localhost:3000");
       if (url.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
-      const code = url.searchParams.get("code");
-      if (!code) { res.writeHead(400); res.end("No code"); return; }
+      const code = url.searchParams.get("code") || "";
+      const state = url.searchParams.get("state") || "";
+      const expected = discordState;
+      if (!expected || state !== expected || !/^[A-Za-z0-9_-]{6,200}$/.test(code)) {
+        res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(page("This Discord login didn't come from AURA", "Start again from AURA's Discord button."));
+        return;
+      }
+      discordState = null; // each login link works once
       try {
         // The AURA server swaps the one-time code for a login (that step needs the Discord secret)
         const tokenRes = await auraServer("/api/discord/token", { code });
         if (!tokenRes.success) throw new Error(tokenRes.error || "Discord login failed.");
         discordToken = tokenRes.access_token;
-        res.writeHead(200, { "Content-Type": "text/html" });
-        res.end(`<html><body style="background:#222831;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px">
-          <div style="font-size:48px">✅</div>
-          <div style="font-size:20px;font-weight:700">Connected to Discord!</div>
-          <div style="font-size:13px;color:#a0a8b4">You can close this tab and return to AURA.</div>
-        </body></html>`);
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(page("Connected to Discord!", "You can close this tab and return to AURA."));
         mainWin?.webContents.send("discord-auth-success");
-      } catch(e) {
-        res.writeHead(500); res.end("Auth failed: " + e.message);
+      } catch {
+        res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(page("Discord login failed", "Close this tab and try again from AURA."));
       }
-      authServer.close(); authServer = null;
+      stopAuthServer();
     });
-    authServer.listen(3000, resolve);
     authServer.on("error", reject);
+    authServer.listen(3000, "127.0.0.1", resolve);
+    authTimer = setTimeout(() => { discordState = null; stopAuthServer(); }, 5 * 60 * 1000);
   });
 }

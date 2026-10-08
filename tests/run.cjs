@@ -65,6 +65,8 @@ if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safe
 // Profile pictures saved to the account
 const avatarFile = path.join(ROOT, "electron", "avatar.js");
 if (fs.existsSync(avatarFile) && fs.existsSync(path.join(__dirname, "avatars.cjs")) && fs.existsSync(path.join(sqlDir, "aura-avatars.sql"))) add("messages", "Profile pictures", "avatars.cjs", [avatarFile]);
+const securityFile = path.join(ROOT, "electron", "security.js");
+if (fs.existsSync(securityFile) && fs.existsSync(path.join(__dirname, "security.cjs"))) add("files", "Security: windows, links, games and clip files", "security.cjs", [securityFile]);
 add("window", "The window opens and every page loads", "window.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
