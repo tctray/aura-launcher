@@ -14,7 +14,7 @@
  *
  * Added by aura-messages-setup.cjs.
  */
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 
 const RING_OUT_MS = 30000;    // a call you make rings this long before "didn't answer"
@@ -62,8 +62,9 @@ const newRtc = () => ({ pc: null, dc: null, mic: null, audio: null, config: null
 function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
-    return { mic: typeof p.mic === "string" ? p.mic : "", speaker: typeof p.speaker === "string" ? p.speaker : "", volume: Number.isFinite(p.volume) ? Math.min(MAX_VOLUME, Math.max(0, p.volume)) : 1 };
-  } catch { return { mic: "", speaker: "", volume: 1 }; }
+    const spot = p.pos && Number.isFinite(p.pos.x) && Number.isFinite(p.pos.y) ? { x: Math.min(1, Math.max(0, p.pos.x)), y: Math.min(1, Math.max(0, p.pos.y)) } : null;
+    return { mic: typeof p.mic === "string" ? p.mic : "", speaker: typeof p.speaker === "string" ? p.speaker : "", volume: Number.isFinite(p.volume) ? Math.min(MAX_VOLUME, Math.max(0, p.volume)) : 1, pos: spot };
+  } catch { return { mic: "", speaker: "", volume: 1, pos: null }; }
 }
 let prefs = loadPrefs();
 function savePrefs(next) {
@@ -658,6 +659,7 @@ export const IconPhone = ({ size }) => <Svg size={size}><path d={PHONE} /></Svg>
 const IconHangUp = () => <Svg><path d={PHONE} transform="rotate(135 12 12)" /></Svg>;
 const IconMic = () => <Svg><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" /></Svg>;
 const IconMicOff = () => <Svg><path d="M15 9.5V6a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 4.6 2.5M5.5 11.5a6.5 6.5 0 0 0 10.2 5.3M18.5 11.5c0 .9-.2 1.8-.5 2.6M12 18v3M4 4l16 16" /></Svg>;
+const IconGrip = () => <Svg size={14}><circle cx="9" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="9" cy="18" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="18" r="1.3" fill="currentColor" stroke="none" /></Svg>;
 const IconSliders = () => <Svg><path d="M5 6h8M17 6h2M5 12h2M11 12h8M5 18h9M18 18h1" /><circle cx="15" cy="6" r="2" /><circle cx="9" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></Svg>;
 
 function Face({ person, size }) {
@@ -724,9 +726,28 @@ function Devices({ onClose }) {
 }
 
 // The call bar: sits at the top of the window for as long as a call is ringing or going on
+// Where the call bar sits. Left alone it is at the top in the middle; dragged, it stays where you
+// put it (remembered as a share of the window, so it lands in the same place if the window changes
+// size), and it is always kept fully on screen.
+const EDGE = 8;
+function placeBar(el, pos) {
+  if (!el) return;
+  // (the page is told too, so Messages only leaves room at the top while the bar is there)
+  if (!pos) { el.classList.remove("moved", "low"); el.style.left = ""; el.style.top = ""; document.documentElement.classList.remove("cx-moved"); return; }
+  const W = window.innerWidth, H = window.innerHeight, w = el.offsetWidth, h = el.offsetHeight;
+  const left = Math.round(Math.min(Math.max(pos.x * W - w / 2, EDGE), Math.max(EDGE, W - w - EDGE)));
+  const top = Math.round(Math.min(Math.max(pos.y * H, EDGE), Math.max(EDGE, H - h - EDGE)));
+  el.classList.add("moved");
+  document.documentElement.classList.add("cx-moved");
+  el.classList.toggle("low", top + h / 2 > H / 2); // in the lower half, call settings open upwards
+  el.style.left = left + "px";
+  el.style.top = top + "px";
+}
+
 function CallBar() {
   const call = useCall();
   const bar = useRef(null);
+  const drag = useRef(null);
   const [devices, setDevices] = useState(false);
   const active = !!call && (call.phase === "live" || call.phase === "reconnecting");
   useEffect(() => { if (!active) setDevices(false); }, [active]);
@@ -737,6 +758,65 @@ function CallBar() {
     el.style.setProperty("--cx-me", me.toFixed(2));
     el.style.setProperty("--cx-peer", peer.toFixed(2));
   }), []);
+  // Keep it where you put it as the window, or the bar itself, changes size
+  const showing = !!call;
+  useLayoutEffect(() => {
+    const el = bar.current;
+    if (!el) return;
+    const again = () => { if (!drag.current) placeBar(el, prefs.pos); };
+    again();
+    const watch = typeof ResizeObserver === "function" ? new ResizeObserver(again) : null;
+    watch?.observe(el);
+    window.addEventListener("resize", again);
+    return () => { watch?.disconnect(); window.removeEventListener("resize", again); document.documentElement.classList.remove("cx-moved"); };
+  }, [showing]);
+
+  // Dragging: from the grip, or from any part of the bar that isn't a button
+  const remember = (el) => {
+    const r = el.getBoundingClientRect();
+    savePrefs({ pos: { x: (r.left + r.width / 2) / window.innerWidth, y: r.top / window.innerHeight } });
+  };
+  // While dragging, the whole window is watched, so a quick flick that leaves the bar still moves it
+  const onPointerDown = (e) => {
+    if (e.button !== 0 || e.target.closest("button:not(.cx-grip),select,input,.cx-devices")) return;
+    const el = bar.current;
+    const r = el.getBoundingClientRect();
+    const d = { id: e.pointerId, dx: e.clientX - r.left, dy: e.clientY - r.top, x0: e.clientX, y0: e.clientY, moved: false };
+    const move = (ev) => {
+      if (ev.pointerId !== d.id || drag.current !== d) return;
+      if (!d.moved && Math.hypot(ev.clientX - d.x0, ev.clientY - d.y0) < 4) return; // a click, not a drag
+      d.moved = true;
+      el.classList.add("dragging");
+      placeBar(el, { x: (ev.clientX - d.dx + el.offsetWidth / 2) / window.innerWidth, y: (ev.clientY - d.dy) / window.innerHeight });
+    };
+    const up = (ev) => {
+      if (ev.pointerId !== d.id) return;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (drag.current === d) drag.current = null;
+      el.classList.remove("dragging");
+      if (d.moved) remember(el);
+    };
+    drag.current = d;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+  const putBack = () => { savePrefs({ pos: null }); placeBar(bar.current, null); };
+  // The grip also works from the keyboard: arrow keys move it, Home puts it back
+  const onGripKey = (e) => {
+    const el = bar.current;
+    const step = e.shiftKey ? 60 : 20;
+    const move = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+    if (e.key === "Home") { e.preventDefault(); putBack(); return; }
+    if (!move) return;
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    placeBar(el, { x: (r.left + r.width / 2 + move[0]) / window.innerWidth, y: (r.top + move[1]) / window.innerHeight });
+    remember(el);
+  };
+
   if (!call) return null;
   const name = call.peer.username;
   const ringingIn = !call.outgoing && call.phase === "ringing";
@@ -747,7 +827,9 @@ function CallBar() {
     : call.phase === "reconnecting" ? "Reconnecting…"
     : null;
   return (
-    <div ref={bar} className={`cx-bar ${call.phase} ${call.outgoing ? "out" : "in"} ${call.muted ? "muted" : ""}`} role="region" aria-label={`Voice call with ${name}`}>
+    <div ref={bar} className={`cx-bar ${call.phase} ${call.outgoing ? "out" : "in"} ${call.muted ? "muted" : ""}`} role="region" aria-label={`Voice call with ${name}`}
+      onPointerDown={onPointerDown}>
+      <button type="button" className="cx-grip" onDoubleClick={putBack} onKeyDown={onGripKey} title="Drag to move. Double-click to put it back at the top." aria-label="Move the call bar. Arrow keys move it, Home puts it back at the top."><IconGrip /></button>
       {/* Until you accept, only the caller's initial shows: their picture isn't fetched for a call you haven't taken */}
       <Face person={ringingIn ? { ...call.peer, avatarUrl: "" } : call.peer} size={34} />
       <div className="cx-who">
@@ -795,6 +877,17 @@ const CSS = `
   font-family:'DM Sans',sans-serif;color:var(--t1,#fff);background:color-mix(in srgb,var(--panel,#1a1f26) 88%,transparent);backdrop-filter:blur(18px) saturate(140%);
   border:1px solid var(--borderb,rgba(255,255,255,.18));box-shadow:0 10px 34px rgba(0,0,0,.5);animation:cx-drop .2s ease-out;--cx-me:0;--cx-peer:0}
 .cx-bar *{box-sizing:border-box}
+/* Moving it */
+.cx-bar.moved{transform:none;animation:cx-pop .18s ease-out}
+.cx-bar.moved.ringing.in{animation:cx-pop .18s ease-out,cx-glow 1.3s ease-in-out .2s infinite alternate}
+@keyframes cx-pop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+.cx-bar.dragging{cursor:grabbing;user-select:none;box-shadow:0 18px 50px rgba(0,0,0,.6)}
+.cx-bar .cx-who{cursor:grab}
+.cx-bar.dragging .cx-who{cursor:grabbing}
+.cx-grip{width:16px;height:30px;margin-right:-6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:0;border:none;border-radius:6px;background:transparent;cursor:grab;color:var(--t3,rgba(255,255,255,.4));touch-action:none}
+.cx-grip:hover{color:var(--t1,#fff);background:rgba(255,255,255,.08)}
+.cx-bar.dragging .cx-grip{cursor:grabbing}
+.cx-bar.low .cx-devices{top:auto;bottom:56px}
 @keyframes cx-drop{from{opacity:0;transform:translate(-50%,-14px)}to{opacity:1;transform:translate(-50%,0)}}
 .cx-bar.ringing.in{border-color:color-mix(in srgb,var(--ac,#FF5722) 75%,transparent);animation:cx-drop .2s ease-out,cx-glow 1.3s ease-in-out .2s infinite alternate}
 @keyframes cx-glow{from{box-shadow:0 10px 34px rgba(0,0,0,.5),0 0 0 0 color-mix(in srgb,var(--ac,#FF5722) 50%,transparent)}to{box-shadow:0 10px 34px rgba(0,0,0,.5),0 0 0 7px color-mix(in srgb,var(--ac,#FF5722) 0%,transparent)}}
@@ -841,8 +934,8 @@ const CSS = `
 :root:has(.stream-full-bar) .cx-btn,:root:has(.stream-full-bar) .cx-round{height:28px}
 :root:has(.stream-full-bar) .cx-round{width:28px}
 :root:has(.stream-full-bar) .cx-devices{top:42px}
-.reduce-motion .cx-bar,.reduce-motion .cx-bar.ringing.in{animation:none}
-@media (prefers-reduced-motion:reduce){.cx-bar,.cx-bar.ringing.in{animation:none}}
+.reduce-motion .cx-bar,.reduce-motion .cx-bar.ringing.in,.reduce-motion .cx-bar.moved{animation:none}
+@media (prefers-reduced-motion:reduce){.cx-bar,.cx-bar.ringing.in,.cx-bar.moved{animation:none}}
 `;
 function ensureStyles() {
   if (document.getElementById("aura-cx-styles")) return;

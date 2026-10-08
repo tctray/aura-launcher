@@ -1945,7 +1945,7 @@ const CSS = `
 .mx-callback{align-self:flex-start;margin:2px 6px 0;font-size:12px;color:var(--mx-ink2)}
 /* While a call is on, the call bar sits along the top of the window: the page moves down to make room */
 .mx{transition:padding-top .2s ease}
-:root:has(.cx-bar) .mx{padding-top:62px}
+:root:has(.cx-bar):not(.cx-moved) .mx{padding-top:62px} /* (only while the call bar sits at the top) */
 :root:has(.stream-full-bar) .mx{padding-top:18px}
 .reduce-motion .mx{transition:none}
 @media (prefers-reduced-motion:reduce){.mx{transition:none}}
