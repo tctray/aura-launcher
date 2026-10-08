@@ -166,8 +166,15 @@ async function saveProfile(username, avatarUrl) {
   const row = { id: user.id, username: cleanName(username) };
   if (!row.username) throw new Error("Enter a username.");
   if (typeof avatarUrl === "string" && /^https?:\/\//i.test(avatarUrl)) row.avatar_url = avatarUrl;
+  // A picture chosen from this PC is stored in Supabase, so friends see it too (see avatar.js)
+  let pictureProblem = null;
+  if (require("./avatar").isDataUrl(avatarUrl)) {
+    try { row.avatar_url = await require("./avatar").upload(client(), user.id, avatarUrl); }
+    catch (e) { pictureProblem = e; }
+  }
   const { error } = await client().from("profiles").upsert(row);
   if (error) throw new Error(error.code === "23505" ? "That username is already taken." : error.message);
+  if (pictureProblem) throw new Error("Your profile was saved, but not the picture: " + pictureProblem.message);
   return true;
 }
 

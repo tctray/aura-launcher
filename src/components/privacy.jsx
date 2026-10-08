@@ -43,7 +43,7 @@ export const PRIVACY_SECTIONS = [
       "These are stored with Supabase, the database service AURA uses.",
       [
         "Sign-up details: your email address, username and password. The password is stored scrambled; nobody, including the developer, can read it.",
-        "Your profile: username, bio and profile picture. Anyone signed in to AURA can see these, which is how friends find you by username.",
+        "Your profile: username, bio and profile picture. Anyone signed in to AURA can see these, which is how friends find you by username. A profile picture you choose from your PC is stored with its own web address, so anyone who has that address can see it.",
         "Your library: game titles, favorites, how often and how long you've played, and when you last played.",
         "Play sessions: the game, when it started and ended, and the game's file location on your PC.",
         "Achievements, streaks, themes, settings, and your AURA background if it is a web address.",

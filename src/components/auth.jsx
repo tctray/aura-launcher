@@ -44,6 +44,8 @@ export async function cloudCall(method, ...args) {
 
 // Only web links are stored online. Pictures picked from the PC stay on the PC for now.
 const webUrl = (value) => (typeof value === "string" && /^https?:\/\//i.test(value) ? value : undefined);
+// Edit Profile also sends a picture chosen from the PC; the main process uploads it (see electron/avatar.js)
+const pictureToSave = (value) => webUrl(value) ?? (typeof value === "string" && /^data:image\/[a-z.+-]+;base64,/i.test(value) ? value : undefined);
 
 const USERNAME_RULE = /^[A-Za-z0-9_]{3,20}$/;
 const EMAIL_RULE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -85,11 +87,12 @@ export function AuthGate({ children, loadProfile, saveProfile, covers = [], calm
     const mine = local && (!local.userId || local.userId === account.id) ? local : null;
     let username = null;
     let taken = null;
+    let online; // your profile as saved online, once it has been checked
     if (account.offline) {
       username = mine?.username || null;
     } else {
       let reachable = true;
-      try { username = (await cloudCall("getMyProfile"))?.username || null; } catch { reachable = false; }
+      try { online = await cloudCall("getMyProfile"); username = online?.username || null; } catch { reachable = false; }
       if (!reachable) {
         username = mine?.username || null;
       } else if (!username) {
@@ -102,6 +105,9 @@ export function AuthGate({ children, loadProfile, saveProfile, covers = [], calm
       }
     }
     if (username) enter(account, username, mine);
+    // A picture chosen on this PC before pictures were saved online: save it now, quietly.
+    // (online is left undefined when the account couldn't be checked, so nothing is tried offline)
+    if (username && online !== undefined && !online?.avatar_url && /^data:image\//i.test(mine?.avatar || "")) cloudCall("saveProfile", username, mine.avatar).catch(() => {});
     else { setUser(null); setNeedsName({ user: account, mine, taken }); }
   }, [loadProfile, enter]);
 
@@ -141,7 +147,7 @@ export function AuthGate({ children, loadProfile, saveProfile, covers = [], calm
         return { ok: false, error: "You're offline. Reconnect to change your username." };
       }
     } else {
-      try { await cloudCall("saveProfile", username, webUrl(profile.avatar)); }
+      try { await cloudCall("saveProfile", username, pictureToSave(profile.avatar)); }
       catch (e) { return { ok: false, error: e.message }; }
     }
     return { ok: true, profile: { ...profile, username, userId: user?.id } };

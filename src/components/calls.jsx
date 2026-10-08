@@ -25,6 +25,7 @@ const POLL_MS = 2000;         // while ringing or connecting, check on the call 
 const BEAT_MS = 20000;        // while talking, tell Supabase "still here" this often
 const NOTE_MS = 2600;         // how long "Call ended" and the like stay on screen
 const PREFS_KEY = "aura_call_prefs";
+const MAX_VOLUME = 3; // their volume can go up to 300%
 const FALLBACK_SERVERS = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] }];
 // What a missed call leaves in the conversation (written by Supabase, see aura-messages-voice.sql)
 export const MISSED_CALL = "📞 Missed voice call";
@@ -61,7 +62,7 @@ const newRtc = () => ({ pc: null, dc: null, mic: null, audio: null, config: null
 function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
-    return { mic: typeof p.mic === "string" ? p.mic : "", speaker: typeof p.speaker === "string" ? p.speaker : "", volume: Number.isFinite(p.volume) ? Math.min(1, Math.max(0, p.volume)) : 1 };
+    return { mic: typeof p.mic === "string" ? p.mic : "", speaker: typeof p.speaker === "string" ? p.speaker : "", volume: Number.isFinite(p.volume) ? Math.min(MAX_VOLUME, Math.max(0, p.volume)) : 1 };
   } catch { return { mic: "", speaker: "", volume: 1 }; }
 }
 let prefs = loadPrefs();
@@ -197,6 +198,7 @@ const meter = {
 
 // ── Ending and tidying up ─────────────────────────────────────────────────────
 function cleanup() {
+  dropBoost();
   const r = rtc;
   rtc = null;
   remember("");
@@ -267,10 +269,44 @@ function playRemote(stream) {
   if (!rtc) return;
   if (!rtc.audio) { rtc.audio = new Audio(); rtc.audio.autoplay = true; }
   rtc.audio.srcObject = stream;
-  rtc.audio.volume = prefs.volume;
   if (prefs.speaker && typeof rtc.audio.setSinkId === "function") rtc.audio.setSinkId(prefs.speaker).catch(() => {});
+  applyVolume();
   rtc.audio.play().catch(() => {});
   meter.listen("peer", stream);
+}
+
+// Their volume. Up to 100% the call plays as it is. Above that it is made louder on the way to
+// your speakers, with a limiter so loud moments don't crackle. (The <audio> element still has to
+// play the call, muted, or the sound stops arriving.)
+function applyVolume() {
+  const a = rtc?.audio;
+  if (!a) return;
+  const v = prefs.volume;
+  const stream = a.srcObject;
+  const plain = (level) => { dropBoost(); a.muted = false; a.volume = Math.min(1, Math.max(0, level)); };
+  if (v <= 1 || !stream) return plain(v);
+  const ctx = sound();
+  if (!ctx) return plain(1);
+  try {
+    if (!rtc.boost || rtc.boost.stream !== stream) {
+      dropBoost();
+      const source = ctx.createMediaStreamSource(stream);
+      const gain = ctx.createGain();
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -3; limiter.knee.value = 4; limiter.ratio.value = 20; limiter.attack.value = 0.002; limiter.release.value = 0.12;
+      source.connect(gain); gain.connect(limiter); limiter.connect(ctx.destination);
+      rtc.boost = { stream, source, gain, limiter };
+    }
+    rtc.boost.gain.gain.setTargetAtTime(v, ctx.currentTime, 0.03);
+    a.volume = 1;
+    a.muted = true;
+  } catch { plain(1); }
+}
+function dropBoost() {
+  const b = rtc?.boost;
+  if (!b) return;
+  rtc.boost = null;
+  for (const node of [b.source, b.gain, b.limiter]) { try { node.disconnect(); } catch {} }
 }
 function wireChannel(dc) {
   dc.onopen = () => { try { dc.send(JSON.stringify({ t: "mute", on: !!state.call?.muted })); } catch {} };
@@ -569,10 +605,11 @@ export const callActions = {
   useSpeaker(deviceId) {
     savePrefs({ speaker: deviceId || "" });
     if (rtc?.audio && typeof rtc.audio.setSinkId === "function") rtc.audio.setSinkId(deviceId || "").catch(() => toast("AURA couldn't switch to those speakers.", "err"));
+    if (rtc?.boost) sound(); // the louder-than-100% sound follows the speakers too
   },
   setVolume(volume) {
-    savePrefs({ volume: Math.min(1, Math.max(0, volume)) });
-    if (rtc?.audio) rtc.audio.volume = prefs.volume;
+    savePrefs({ volume: Math.min(MAX_VOLUME, Math.max(0, Number(volume) || 0)) });
+    applyVolume();
   },
 
   // Something arrived from the main process
@@ -677,8 +714,10 @@ function Devices({ onClose }) {
           {list.speakers.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{name(d, i, "Speakers")}</option>)}
         </select>
       </label>
-      <label>Their volume
-        <input type="range" min="0" max="100" value={Math.round(prefs.volume * 100)} onChange={(e) => { callActions.setVolume(Number(e.target.value) / 100); redraw((n) => n + 1); }} />
+      <label>
+        <span className="cx-vol-h">Their volume <b>{Math.round(prefs.volume * 100)}%</b></span>
+        <input type="range" min="0" max={MAX_VOLUME * 100} step="5" value={Math.round(prefs.volume * 100)} onChange={(e) => { callActions.setVolume(Number(e.target.value) / 100); redraw((n) => n + 1); }} aria-label="Their volume" aria-valuetext={`${Math.round(prefs.volume * 100)}%${prefs.volume > 1 ? ", boosted" : ""}`} />
+        <span className="cx-vol-marks" aria-hidden="true"><span>0</span><span>100%</span><span>200%</span><span>300%</span></span>
       </label>
     </div>
   );
@@ -787,6 +826,9 @@ const CSS = `
 .cx-devices label{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:var(--t1,#fff)}
 .cx-devices select{width:100%;padding:7px 8px;border-radius:8px;font:12.5px 'DM Sans',sans-serif;background:var(--card,#2D4059);border:1px solid var(--border,rgba(255,255,255,.14));color:var(--t1,#fff)}
 .cx-devices input[type=range]{width:100%;accent-color:var(--ac,#FF5722)}
+.cx-vol-h{display:flex;justify-content:space-between;align-items:baseline}
+.cx-vol-h b{font-weight:600;font-variant-numeric:tabular-nums;color:var(--t2,rgba(255,255,255,.7))}
+.cx-vol-marks{display:flex;justify-content:space-between;margin-top:-2px;font-size:10px;font-weight:500;color:var(--t3,rgba(255,255,255,.45));font-variant-numeric:tabular-nums}
 .cx-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .cx-call{display:inline-flex;align-items:center;justify-content:center;gap:6px}
 .cx-call.in-call:disabled{opacity:1;color:#3ddc84!important}

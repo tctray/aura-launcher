@@ -23,6 +23,8 @@ const steps = [];
 const add = (group, title, file, args = []) => steps.push({ group, title, file: path.join(__dirname, file), args });
 add("files", "Project files", "static.cjs");
 if (fs.existsSync(errorlog)) add("files", "The error log", "errorlog.cjs", [errorlog]);
+const shareFile = path.join(ROOT, "electron", "share.js");
+if (fs.existsSync(shareFile) && fs.existsSync(path.join(__dirname, "share.cjs"))) add("files", "Sharing clips", "share.cjs", [shareFile]);
 const xboxFile = path.join(ROOT, "electron", "xbox.js");
 if (fs.existsSync(xboxFile) && fs.existsSync(path.join(__dirname, "xbox.cjs"))) add("files", "Xbox and Game Pass games", "xbox.cjs", [xboxFile]);
 if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safety.sql"))) {
@@ -60,6 +62,9 @@ if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safe
     add("messages", "GIF search and sending GIFs", "messages/app-gifs.cjs", [social]);
   }
 }
+// Profile pictures saved to the account
+const avatarFile = path.join(ROOT, "electron", "avatar.js");
+if (fs.existsSync(avatarFile) && fs.existsSync(path.join(__dirname, "avatars.cjs")) && fs.existsSync(path.join(sqlDir, "aura-avatars.sql"))) add("messages", "Profile pictures", "avatars.cjs", [avatarFile]);
 add("window", "The window opens and every page loads", "window.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed

@@ -2409,6 +2409,7 @@ function ClipsPage({ nowPlayingGame }) {
       const res = await window.electronAPI.shareClip(clip.path);
       if (res.success) {
         setShareLinks(s => ({ ...s, [clip.id]: res.url }));
+        if (res.note) alert(res.note); // e.g. the link only lasts 3 days
         setSharing(clip.id);
       } else {
         alert("Share failed: " + (res.error || "Unknown error"));

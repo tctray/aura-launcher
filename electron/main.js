@@ -1321,42 +1321,8 @@ ipcMain.handle("trim-clip", async (_e, { path: filePath, start, end }) => {
   }
 });
 
-ipcMain.handle("share-clip", async (_e, filePath) => {
-  try {
-    const FormData = require("form-data");
-    const form = new FormData();
-    form.append("reqtype", "fileupload");
-    form.append("fileToUpload", fs.createReadStream(filePath), {
-      filename: path.basename(filePath),
-      contentType: filePath.endsWith(".webm") ? "video/webm" : "video/mp4",
-    });
-
-    const response = await new Promise((resolve, reject) => {
-      const https = require("https");
-      const req = https.request({
-        hostname: "catbox.moe",
-        path: "/user/api.php",
-        method: "POST",
-        headers: form.getHeaders(),
-      }, (res) => {
-        let data = "";
-        res.on("data", d => data += d);
-        res.on("end", () => resolve(data.trim()));
-      });
-      req.on("error", reject);
-      form.pipe(req);
-    });
-
-    if (response.startsWith("https://")) {
-      console.log("Clip shared:", response);
-      return { success: true, url: response };
-    } else {
-      return { success: false, error: response };
-    }
-  } catch(e) {
-    return { success: false, error: e.message };
-  }
-});
+// Share: uploads a clip from the clip folder and hands back its link (see share.js)
+ipcMain.handle("share-clip", async (_e, filePath) => require("./share").shareClip(filePath, { clipFolder: getClipFolder() }));
 
 ipcMain.handle("save-clip", async (_e, gameName, buffer) => {
   try {
