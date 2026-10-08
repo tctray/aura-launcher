@@ -51,13 +51,17 @@ if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safe
 }
 add("window", "The window opens and every page loads", "window.cjs");
 
+// No check may run for ever: after this many minutes it is stopped and counted as failed
+const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;
+const tooLong = (run) => !!run.error && run.error.code === "ETIMEDOUT";
+
 const results = [];
 for (const step of steps.filter((s) => wants(s.group))) {
   console.log("\n━━ " + step.title + " " + "━".repeat(Math.max(3, 66 - step.title.length)));
   if (step.group === "window" && !process.env.AURA_SKIP_BUILD) {
     // Check the window as it would ship: build it fresh first
     console.log("  building the window (npm run build)…");
-    const built = spawnSync("npm", ["run", "build"], { cwd: ROOT, encoding: "utf8", shell: true });
+    const built = spawnSync("npm", ["run", "build"], { cwd: ROOT, encoding: "utf8", shell: true, timeout: STEP_MINUTES * 60000 });
     if (built.status !== 0) {
       console.log(String(built.stdout || "").split("\n").slice(-25).join("\n") + String(built.stderr || "").split("\n").slice(-25).join("\n"));
       console.log("  FAIL  the window builds");
@@ -67,18 +71,19 @@ for (const step of steps.filter((s) => wants(s.group))) {
     console.log("  ok    the window builds");
   }
   const started = Date.now();
-  const go = () => spawnSync(process.execPath, [step.file, ...step.args], { cwd: ROOT, encoding: "utf8", env: process.env, maxBuffer: 64 * 1024 * 1024 });
+  const go = () => spawnSync(process.execPath, [step.file, ...step.args], { cwd: ROOT, encoding: "utf8", env: process.env, maxBuffer: 64 * 1024 * 1024, timeout: STEP_MINUTES * 60000, killSignal: "SIGKILL" });
   let run = go();
   // The messaging checks wait on timers (a notice that shows after a pause, for example). On a
   // very busy machine one can miss its moment, so a failed part gets one more go before it counts.
   let again = false;
-  if (step.group === "messages" && run.status !== 0 && run.status !== 3) { again = true; run = go(); }
+  if (step.group === "messages" && run.status !== 0 && run.status !== 3 && !tooLong(run)) { again = true; run = go(); }
   const out = String(run.stdout || "") + (run.status === 0 || run.status === 3 ? "" : String(run.stderr || "").split("\n").slice(-30).join("\n"));
   // Passing lines are counted, not printed: only what needs attention is shown
   const lines = out.split("\n");
   const passed = lines.filter((l) => /^\s+ok\s/.test(l)).length;
   const shown = lines.filter((l) => !/^\s+ok\s/.test(l) && !/^(all passed|skipped|\d+ FAILED)?\s*$/.test(l) && !/^\d+\. /.test(l));
   if (shown.length) console.log(shown.join("\n"));
+  if (tooLong(run)) console.log(`  FAIL  this part didn't finish within ${STEP_MINUTES} minutes, so it was stopped`);
   if (again && run.status === 0) console.log("  note  this part failed once and passed when run again (a timing hiccup, not a problem with AURA)");
   const state = run.status === 0 ? "passed" : run.status === 3 ? "skipped" : "FAILED";
   console.log(`  ${state === "passed" ? "✓" : state === "skipped" ? "–" : "✗"} ${passed} check${passed === 1 ? "" : "s"} passed${state === "FAILED" ? ", some FAILED (listed above)" : state === "skipped" ? ", the rest skipped" : ""}  (${((Date.now() - started) / 1000).toFixed(1)}s)`);

@@ -7,6 +7,7 @@ jobs:
   # AURA's checks (the tests folder). If any fail, the builds below don't run and no release is made.
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15   # GitHub stops the job after this, instead of waiting for hours
     steps:
       - uses: actions/checkout@v4
       - name: Setup Node.js
@@ -14,13 +15,16 @@ jobs:
         with:
           node-version: 20
       - name: Install dependencies
-        run: npm install
+        run: npm install --ignore-scripts --no-audit --no-fund   # the checks don't need the Electron program or ffmpeg downloaded
       - name: Install the browser the window check uses
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
+        timeout-minutes: 5
+        continue-on-error: true   # if this can't be fetched, the check uses the Chrome already on GitHub's machine
       - name: Run AURA's checks
         run: npm test
   build-windows:
     runs-on: windows-latest
+    timeout-minutes: 45   # GitHub stops the job after this, instead of waiting for hours
     needs: test
     permissions:
       contents: write
@@ -38,6 +42,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
   build-linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 45   # GitHub stops the job after this, instead of waiting for hours
     needs: test
     permissions:
       contents: write
