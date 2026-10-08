@@ -49,6 +49,23 @@ const SIGNAL_MAX = 20000;
 // On networks where a direct connection is impossible a relay is needed too: the AURA server
 // hands one out if it has been set up (see callConfig below).
 const DIRECT_ONLY = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] }];
+// Likes and dislikes on messages
+const REACTIONS = ["like", "dislike"];
+const REACTIONS_SETUP = "Likes and dislikes aren't set up in Supabase yet. Run aura-messages-reactions.sql first.";
+// GIF search. With KLIPY the AURA server does the searching and the key never leaves it. GIPHY
+// instead asks that the app itself does the searching, so then the server hands this file (never
+// the window) the key. Either way a GIF is sent as its address in an ordinary message, and is
+// shown straight from the GIF service.
+const GIF_API = "https://api.giphy.com/v1/gifs/";
+const GIF_RATING = "pg-13";
+const GIF_PAGE = 24;
+const GIF_SETUP = "GIF search isn't set up yet. Add KLIPY_API_KEY to the AURA server.";
+// The only addresses AURA treats as a GIF: a .gif or .webp on KLIPY's or GIPHY's own servers.
+// (The same pattern is in components/messages.jsx, which decides what gets drawn as a picture.)
+const GIF_URL = /^https:\/\/(?:(?:[a-z0-9-]+\.)*klipy\.(?:com|co)|(?:media[0-9]?|i)\.giphy\.com)\/(?:[A-Za-z0-9._~=-]+\/){0,8}[A-Za-z0-9._~=-]+\.(?:gif|webp)(?:\?[A-Za-z0-9._~=&%-]{0,400})?$/;
+const isGif = (text) => typeof text === "string" && text.length <= 700 && GIF_URL.test(text) && !/\/\.{1,2}\//.test(text);
+// A list preview is cut short, so there the start of the address is enough
+const looksLikeGif = (text) => typeof text === "string" && /^https:\/\/(?:(?:[a-z0-9-]+\.)*klipy\.(?:com|co)|(?:media[0-9]?|i)\.giphy\.com)\/\S+$/.test(text.trim());
 
 // What a file really is, from its first bytes (the name and the type the window reports can be wrong)
 function sniff(b) {
@@ -94,6 +111,10 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
   let relays = null;                 // { at, servers, relay } what callConfig last worked out
   let hangingUp = null;              // a hang-up on its way to Supabase (so closing AURA can wait for it)
   let callsWereDown = false;         // the calls connection dropped: check for a missed ring when it's back
+  let reactChannel = null;           // a fourth connection, for likes and dislikes
+  let reactionsReady = true;         // false once we learn the likes SQL hasn't been run yet
+  let gifKey = null;                 // { at, key } a GIPHY key, if that is what the AURA server uses for GIFs
+  const gifPages = new Map();        // "words|offset" -> { at, page } so the same search isn't sent twice
 
   // ── Small helpers ───────────────────────────────────────────────────────────
   const id = (value, what) => {
@@ -108,6 +129,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
     const code = String(error?.code || "");
     if (/fetch failed|network|timeout|ENOTFOUND|ECONN|EAI_AGAIN/i.test(msg)) return new Error("You're offline. Check your connection and try again.");
     if (/start_call|answer_call|end_call|call_heartbeat|send_call_signal|current_call|voice_calls|voice_signals/.test(msg) && (code === "PGRST202" || code === "PGRST205" || code === "42883" || code === "42P01" || /schema cache|does not exist/i.test(msg))) return new Error(VOICE_SETUP);
+    if (/react_to_message|message_reactions/.test(msg) && (code === "PGRST202" || code === "PGRST205" || code === "42883" || code === "42P01" || /schema cache|does not exist/i.test(msg))) return new Error(REACTIONS_SETUP);
     if (/set_conversation_background|conversation_backgrounds/.test(msg) && (code === "PGRST202" || code === "PGRST205" || code === "42883" || code === "42P01" || /schema cache|does not exist/i.test(msg))) return new Error(BACKGROUND_SETUP);
     if (/delete_message|block_user|unblock_user|list_blocked|report_user/.test(msg) && (code === "PGRST202" || code === "42883" || /schema cache|does not exist/i.test(msg))) return new Error(SAFETY_SETUP);
     if (/bucket not found/i.test(msg)) return new Error(MEDIA_SETUP);
@@ -221,8 +243,8 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
       return {
         id: r.id, userId: r.other_id, username: r.username || "AURA user", avatarUrl: r.avatar_url || "",
         online: isOnline(r.last_seen_at), isFriend: !!r.is_friend,
-        lastMessage: r.last_message || "", lastSenderId: r.last_sender_id || null, lastMessageAt: r.last_message_at, unread: r.unread || 0,
-        lastMedia: r.last_media_kind ? mediaWord({ kind: r.last_media_kind, mime: r.last_media_mime }) : "",
+        lastMessage: looksLikeGif(r.last_message) ? "" : r.last_message || "", lastSenderId: r.last_sender_id || null, lastMessageAt: r.last_message_at, unread: r.unread || 0,
+        lastMedia: looksLikeGif(r.last_message) ? "GIF" : r.last_media_kind ? mediaWord({ kind: r.last_media_kind, mime: r.last_media_mime }) : "",
         background: backgrounds.get(r.id) || null,
       };
     });
@@ -247,7 +269,104 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
     const { data, error } = await withColumns(ask);
     if (error) throw friendly(error);
     const rows = data || [];
-    return { messages: rows.slice(0, PAGE_SIZE).reverse().map(shapeMessage), hasMore: rows.length > PAGE_SIZE };
+    const messages = rows.slice(0, PAGE_SIZE).reverse().map(shapeMessage);
+    await addReactions(messages);
+    return { messages, hasMore: rows.length > PAGE_SIZE };
+  }
+
+  // ── Likes and dislikes ──────────────────────────────────────────────────────
+  // Adds { userId, reaction } entries to each message. They are an extra: if they can't be
+  // fetched, the messages still load.
+  async function addReactions(messages) {
+    for (const m of messages) m.reactions = [];
+    const ids = messages.filter((m) => !m.deleted).map((m) => m.id);
+    if (!reactionsReady || !ids.length) return;
+    try {
+      const { data, error } = await sb().from("message_reactions").select("message_id,user_id,reaction").in("message_id", ids);
+      if (error) { if (missingTable(error)) reactionsReady = false; return; }
+      const byId = new Map(messages.map((m) => [m.id, m]));
+      for (const row of data || []) if (REACTIONS.includes(row.reaction)) byId.get(row.message_id)?.reactions.push({ userId: row.user_id, reaction: row.reaction });
+    } catch {}
+  }
+  // reaction: "like", "dislike", or null to take yours back. Supabase checks it is your conversation.
+  async function react(messageId, reaction) {
+    const user = await currentUser();
+    const mid = id(messageId, "message");
+    const feeling = reaction == null || reaction === "" ? null : String(reaction);
+    if (feeling !== null && !REACTIONS.includes(feeling)) throw new Error("That isn't a reaction AURA knows.");
+    await rpc("react_to_message", { message: mid, feeling });
+    reactionsReady = true;
+    return { messageId: mid, userId: user.id, reaction: feeling };
+  }
+
+  // ── GIF search ──────────────────────────────────────────────────────────────
+  const size = (n) => { const v = Number(n); return v > 0 && v < 5000 ? Math.round(v) : null; };
+  const gifTitle = (t) => String(t || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  // One GIF as the window needs it: a small moving preview for the grid, and the address that
+  // gets sent. Anything that isn't a picture on the GIF service's own servers is dropped here,
+  // whoever it came from.
+  function cleanGif(g) {
+    const one = (v) => (v && isGif(v.url) ? { url: v.url, width: size(v.width), height: size(v.height) } : null);
+    const preview = one(g?.preview), send = one(g?.send);
+    const gid = typeof g?.id === "string" || typeof g?.id === "number" ? String(g.id) : "";
+    return preview && send && /^[A-Za-z0-9_-]{1,80}$/.test(gid) ? { id: gid, title: gifTitle(g.title), preview, send } : null;
+  }
+  const unique = (list) => { const seen = new Set(); return list.filter((g) => g && !seen.has(g.id) && seen.add(g.id)); };
+  // GIPHY's own shape, turned into the one above
+  function fromGiphy(g) {
+    const pick = (rendition) => { const r = g?.images?.[rendition]; const url = isGif(r?.webp) ? r.webp : isGif(r?.url) ? r.url : ""; return url ? { url, width: r.width, height: r.height } : null; };
+    const preview = pick("fixed_width") || pick("fixed_width_downsampled") || pick("fixed_height");
+    return cleanGif({ id: g?.id, title: g?.title, preview, send: pick("fixed_height") || pick("downsized") || preview });
+  }
+  async function askGiphy(key, q, skip) {
+    const params = new URLSearchParams({ api_key: key, limit: String(GIF_PAGE), offset: String(skip), rating: GIF_RATING });
+    if (q) params.set("q", q);
+    let res = null, body = null;
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), 10000);
+    try {
+      res = await fetch(GIF_API + (q ? "search" : "trending") + "?" + params, { signal: stop.signal, headers: { Accept: "application/json" } });
+      body = await res.json().catch(() => null);
+    } catch { throw new Error("Couldn't reach GIPHY. Check your internet connection."); }
+    finally { clearTimeout(timer); }
+    if (res.status === 429) throw new Error("GIF search is busy right now. Try again in a few minutes.");
+    if (res.status === 401 || res.status === 403) { gifKey = null; throw new Error("GIPHY didn't accept AURA's key. Check GIPHY_API_KEY on the AURA server."); }
+    if (!res.ok || !body || !Array.isArray(body.data)) throw new Error("GIPHY answered with an error. Try again in a moment.");
+    const total = Number(body.pagination?.total_count) || 0;
+    const next = skip + body.data.length;
+    return { provider: "giphy", query: q, gifs: unique(body.data.map(fromGiphy)), next: body.data.length >= GIF_PAGE && next < Math.min(total || Infinity, 480) ? next : null };
+  }
+  // words: what to look for, or nothing for what's popular right now. more: the `next` value of
+  // the page before, to carry on from there. Answers { provider, query, gifs, next }.
+  async function gifSearch(words, more) {
+    await currentUser();
+    const q = String(words ?? "").replace(/\s+/g, " ").trim().slice(0, 50);
+    const from = Number.isInteger(more) && more > 0 && more <= 480 ? more : 0;
+    const cacheKey = q.toLowerCase() + "|" + from;
+    const kept = gifPages.get(cacheKey);
+    if (kept && Date.now() - kept.at < (q ? 10 : 15) * 60 * 1000) return kept.page;
+    let page = null;
+    if (gifKey && Date.now() - gifKey.at < 6 * 60 * 60 * 1000) page = await askGiphy(gifKey.key, q, from);
+    else {
+      if (typeof server !== "function") throw new Error(GIF_SETUP);
+      const res = await Promise.race([Promise.resolve(server("/api/gifs/search", { q, page: from || 1 })).catch(() => null), new Promise((resolve) => setTimeout(() => resolve(null), 15000))]);
+      if (!res) throw new Error("GIF search isn't answering. Try again in a moment.");
+      if (res.success && res.provider === "klipy" && Array.isArray(res.gifs)) {
+        const next = Number.isInteger(res.next) && res.next > from && res.next <= 480 ? res.next : null;
+        page = { provider: "klipy", query: q, gifs: unique(res.gifs.slice(0, 60).map(cleanGif)), next };
+      } else if (res.success && res.provider === "giphy" && typeof res.key === "string" && /^[A-Za-z0-9]{16,64}$/.test(res.key)) {
+        gifKey = { at: Date.now(), key: res.key };
+        page = await askGiphy(res.key, q, from);
+      } else {
+        const said = String(res.error || "");
+        // The server's own messages about KLIPY and about being busy are worth passing on; a
+        // server from before this update (or with no key) means it isn't set up
+        throw new Error(/KLIPY|busy right now|couldn't reach|internet|login|Slow down/i.test(said) && said.length < 300 ? said : GIF_SETUP);
+      }
+    }
+    if (gifPages.size > 60) gifPages.delete(gifPages.keys().next().value);
+    gifPages.set(cacheKey, { at: Date.now(), page });
+    return page;
   }
 
   async function sendMessage(conversationId, content) {
@@ -560,8 +679,9 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
     quiet.clear(); names.clear(); friendshipIds.clear();
     stopRinging();
     liveCall = null; relays = null; callsWereDown = false; // (a relay's login isn't kept for the next account)
-    const old = [channel, bgChannel, callChannel];
-    channel = null; bgChannel = null; callChannel = null; channelUser = null; live = false;
+    gifKey = null; gifPages.clear();
+    const old = [channel, bgChannel, callChannel, reactChannel];
+    channel = null; bgChannel = null; callChannel = null; reactChannel = null; channelUser = null; live = false;
     for (const ch of old) if (ch) { try { sb().removeChannel(ch); } catch {} }
   }
 
@@ -569,6 +689,18 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
     if (channel && channelUser === userId) return; // already listening for this account
     unsubscribe();
     channelUser = userId;
+    // Likes and dislikes. On their own connection, like chat backgrounds and calls below: if that
+    // table isn't set up yet, only this one fails. Supabase delivers a row only to the two people
+    // in the conversation. (A like taken back arrives as a change with nothing in it.)
+    const onReaction = (payload) => {
+      const row = payload?.new;
+      if (channelUser !== userId || !row?.message_id || !row.user_id) return;
+      emit({ type: "reaction", messageId: row.message_id, conversationId: row.conversation_id || null, userId: row.user_id, reaction: REACTIONS.includes(row.reaction) ? row.reaction : null });
+    };
+    reactChannel = sb().channel("aura-social-reactions:" + userId)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "message_reactions" }, onReaction)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "message_reactions" }, onReaction)
+      .subscribe();
     // Supabase only delivers rows this user is allowed to read, so no filter is needed here
     channel = sb().channel("aura-social:" + userId)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, (payload) => {
@@ -643,7 +775,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
   // Called by the window when it opens. Safe to call again.
   async function start() {
     const user = await currentUser();
-    mediaReady = true; listReady = true; backgroundsReady = true; deleteReady = true; // check again each time AURA starts, in case the SQL has been run since
+    mediaReady = true; listReady = true; backgroundsReady = true; deleteReady = true; reactionsReady = true; // check again each time AURA starts, in case the SQL has been run since
     if (!authWatched) {
       authWatched = true;
       try { sb().auth.onAuthStateChange((event) => { if (event === "SIGNED_OUT") unsubscribe(); }); } catch {}
@@ -687,7 +819,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
       if (entry.count > 0) show(sender, entry.count === 1 ? "Sent another message" : "Sent " + entry.count + " more messages", key);
     }, NOTIFY_QUIET_MS);
     quiet.set(key, entry);
-    const text = message.content.replace(/\s+/g, " ").trim() || (message.media ? "Sent a " + mediaWord(message.media).toLowerCase().replace("gif", "GIF") : "");
+    const text = isGif(message.content) ? "Sent a GIF" : message.content.replace(/\s+/g, " ").trim() || (message.media ? "Sent a " + mediaWord(message.media).toLowerCase().replace("gif", "GIF") : "");
     show(sender, text.length > 140 ? text.slice(0, 139) + "…" : text, key);
   }
 
@@ -701,7 +833,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
   } catch {}
 
   // ── What the window may ask for ─────────────────────────────────────────────
-  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, deleteMessage, blockUser, unblockUser, listBlocked, reportUser, markRead, startCall, answerCall, endCall, callSignal, callState, callBeat, currentCall, callConfig };
+  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, deleteMessage, blockUser, unblockUser, listBlocked, reportUser, markRead, react, gifSearch, startCall, answerCall, endCall, callSignal, callState, callBeat, currentCall, callConfig };
   for (const [name, fn] of Object.entries(api)) ipcMain.handle("social:" + name, cloudHandler(fn));
   return api;
 }

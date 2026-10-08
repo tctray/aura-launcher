@@ -196,6 +196,9 @@ contextBridge.exposeInMainWorld("auraSocial", {
   callBeat: (callId) => ipcRenderer.invoke("social:callBeat", callId),
   currentCall: () => ipcRenderer.invoke("social:currentCall"),
   callConfig: () => ipcRenderer.invoke("social:callConfig"),
+  // Likes and dislikes on messages, and GIF search (answered by the main process, never the window)
+  react: (messageId, reaction) => ipcRenderer.invoke("social:react", messageId, reaction),
+  gifSearch: (words, more) => ipcRenderer.invoke("social:gifSearch", words, more),
   markRead: (conversationId) => ipcRenderer.invoke("social:markRead", conversationId),
   // New messages and friend changes pushed from the main process
   onEvent: (cb) => {

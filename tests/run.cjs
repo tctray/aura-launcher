@@ -49,6 +49,17 @@ if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safe
     }
   }
 }
+// Likes and dislikes on messages, and GIF search, once that update is in both the database files and the app
+if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safety.sql")) && fs.existsSync(path.join(sqlDir, "aura-messages-reactions.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-reactions.mjs"))) {
+  add("messages", "Database rules: likes and dislikes", "messages/sql-reactions.mjs");
+  let hasLikes = false;
+  try { hasLikes = /\bgifSearch\b/.test(fs.readFileSync(social, "utf8")); } catch {}
+  if (hasLikes) {
+    add("messages", "Likes and dislikes on messages", "messages/app-reactions.cjs", [social]);
+    add("messages", "Messaging on a database missing the likes update", "messages/app-before-reactions-sql.cjs", [social]);
+    add("messages", "GIF search and sending GIFs", "messages/app-gifs.cjs", [social]);
+  }
+}
 add("window", "The window opens and every page loads", "window.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed

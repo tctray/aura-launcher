@@ -52,6 +52,10 @@ async function createWorld(socialPath) {
   if (!process.env.NO_MEDIA_SQL && !process.env.NO_BG_SQL) await db.exec(fs.readFileSync(path.join(__dirname, "..", "..", "supabase", "aura-messages-background.sql"), "utf8"));
   if (!process.env.NO_MEDIA_SQL && !process.env.NO_BG_SQL && !process.env.NO_SAFETY_SQL) await db.exec(fs.readFileSync(path.join(__dirname, "..", "..", "supabase", "aura-messages-safety.sql"), "utf8"));
   if (!process.env.NO_VOICE_SQL) await db.exec(fs.readFileSync(path.join(__dirname, "..", "..", "supabase", "aura-messages-voice.sql"), "utf8"));
+  // Likes and dislikes (left out for the checks that imitate a database from before the safety update)
+  const reactionsSql = path.join(__dirname, "..", "..", "supabase", "aura-messages-reactions.sql");
+  const hasReactions = !process.env.NO_REACTIONS_SQL && !process.env.NO_SAFETY_SQL && fs.existsSync(reactionsSql);
+  if (hasReactions) await db.exec(fs.readFileSync(reactionsSql, "utf8"));
   // Rows as they arrive over HTTP: dates as text, big whole numbers as plain numbers
   const plain = (v) => JSON.parse(JSON.stringify(v, (_k, x) => (typeof x === "bigint" ? Number(x) : x)));
 
@@ -81,6 +85,7 @@ async function createWorld(socialPath) {
   const SETS = new Set(["list_friends", "list_conversations", "list_conversations_v2", "list_blocked", "current_call"]);
   const ROWS = new Set(["start_call", "answer_call", "end_call"]); // answer with one whole row
   const callsNow = async () => (process.env.NO_VOICE_SQL ? new Map() : new Map((await run(null, "select * from public.voice_calls")).rows.map((r) => [r.id, r])));
+  const reactionsNow = async () => (!hasReactions ? new Map() : new Map((await run(null, "select * from public.message_reactions")).rows.map((r) => [String(r.id), r])));
   const messageIds = async () => new Set((await run(null, "select id from public.messages")).rows.map((r) => r.id));
   const snapshot = async () => new Map((await run(null, "select * from public.friendships")).rows.map((r) => [r.id, r]));
 
@@ -125,6 +130,7 @@ async function createWorld(socialPath) {
         eq(col, v) { add(`${col} = ?`, v); return api; },
         lt(col, v) { add(`${col} < ?`, v); return api; },
         gt(col, v) { add(`${col} > ?`, v); return api; },
+        in(col, list) { add(`${col}::text = any(?::text[])`, list); return api; },
         ilike(col, v) { add(`${col} ilike ?`, v); return api; },
         order(col, o) { s.order.push(col + (o && o.ascending === false ? " desc" : "")); return api; },
         limit(n) { s.limit = n; return api; },
@@ -195,6 +201,7 @@ async function createWorld(socialPath) {
           const call = `public.${name}(${keys.map((k, i) => `${k} => $${i + 1}`).join(", ")})`;
           const before = /friend|block/.test(name) ? await snapshot() : null;
           const voice = /call|friend|block/.test(name) ? { calls: await callsNow(), messages: await messageIds() } : null;
+          const liked = /react_to_message|delete_message/.test(name) ? await reactionsNow() : null;
           const res = await run(uid, SETS.has(name) || ROWS.has(name) ? `select * from ${call}` : `select ${call} as r`, keys.map((k) => args[k]));
           if (voice) {
             // Calls starting, being answered and ending arrive live, as do the details the PCs swap
@@ -203,6 +210,10 @@ async function createWorld(socialPath) {
             for (const [cid, row] of after) { const was = voice.calls.get(cid); if (!was) await broadcast("voice_calls", "INSERT", plain(row)); else if (was.status !== row.status) await broadcast("voice_calls", "UPDATE", plain(row)); }
             if (name === "send_call_signal") { const row = (await run(null, "select * from public.voice_signals where id = $1", [res.rows[0].r])).rows[0]; if (row) await broadcast("voice_signals", "INSERT", plain(row)); }
             for (const row of (await run(null, "select * from public.messages order by created_at")).rows) if (!voice.messages.has(row.id)) await broadcast("messages", "INSERT", plain(row));
+          }
+          if (liked) {
+            // A like or dislike being added, changed or taken back arrives live for the two people in the chat
+            for (const [rid, row] of await reactionsNow()) { const was = liked.get(rid); if (!was) await broadcast("message_reactions", "INSERT", plain(row)); else if (was.reaction !== row.reaction) await broadcast("message_reactions", "UPDATE", plain(row)); }
           }
           if (name === "delete_message") {
             const row = (await run(null, "select * from public.messages where id = $1", [args.message])).rows[0];
@@ -242,7 +253,7 @@ async function createWorld(socialPath) {
           _remove() { world.subs = world.subs.filter((x) => !mine.includes(x)); },
           _status(st) { statusCb && statusCb(st); },
         };
-        if (world.sessions[uid]) { (world.sessions[uid].channels ||= []).push(ch); if (!/-(bg|calls):/.test(name)) world.sessions[uid].channel = ch; }
+        if (world.sessions[uid]) { (world.sessions[uid].channels ||= []).push(ch); if (!/-(bg|calls|reactions):/.test(name)) world.sessions[uid].channel = ch; }
         return ch;
       },
       removeChannel(ch) { ch._remove(); },

@@ -13,7 +13,6 @@ Most of what AURA does stays on your PC. If you create an AURA account, the thin
 
 - Clips, recordings and screenshots you make with AURA.
 - Performance readings (frame rate, temperatures and the like).
-- An error log: if AURA runs into a problem it notes it in a file on your PC. It is never sent anywhere unless you send it yourself.
 - Your login, kept encrypted by Windows so you stay signed in.
 - How you've set up the Messages page, including a background picture of your own.
 - Which microphone and speakers you chose for voice calls.
@@ -28,7 +27,7 @@ These are stored with Supabase, the database service AURA uses.
 - Play sessions: the game, when it started and ended, and the game's file location on your PC.
 - Achievements, streaks, themes, settings, and your AURA background if it is a web address.
 - Friends: the requests you send and receive, your friends, the people you block, and when you were last online. Only your friends see whether you're online.
-- Messages: the text, pictures, GIFs and videos you send, a chat's shared background, and whether a message has been read.
+- Messages: the text, pictures, GIFs and videos you send, the likes and dislikes you put on messages, a chat's shared background, and whether a message has been read.
 - Voice calls: who called whom, when, and whether the call was answered. This is kept for 30 days. The sound of a call is never recorded or saved.
 - Reports you send: the reason, anything you add, and a copy of the message you reported.
 
@@ -59,6 +58,7 @@ AURA uses these to do its job. Each sees your internet address, as any website d
 - Steam: if you connect Steam, your Steam ID is used to show your profile, friends and playtime.
 - Discord: if you connect Discord, you sign in with Discord, and AURA can show the game you're playing on your Discord profile.
 - Google and Cloudflare: when a voice call connects, their free public servers tell your PC its own internet address, so the two PCs can find each other. They learn nothing else about the call.
+- KLIPY: when you use GIF search, what you type goes through the AURA server to KLIPY to find GIFs, along with a scrambled ID that stands for you (not your name, email or AURA account). A GIF picked from the search is not copied into AURA: the message holds its address at KLIPY, and both people's AURA loads it from KLIPY when the chat is opened.
 - GitHub: AURA checks GitHub for new versions and downloads updates from it.
 
 ## Deleting things

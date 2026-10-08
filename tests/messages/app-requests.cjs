@@ -36,6 +36,8 @@ const fakeFetch = async (url, opts = {}) => {
   else if (u.pathname.endsWith("/rpc/list_blocked")) body = [{ user_id: OTHER, username: "Alex", avatar_url: null, blocked_at: "2026-10-06T01:00:00+00:00" }];
   else if (/\/rpc\/(delete_message|block_user|unblock_user|report_user)$/.test(u.pathname)) body = true;
   else if (u.pathname.endsWith("/messages")) body = [row];
+  else if (u.pathname.endsWith("/message_reactions")) body = [{ message_id: row.id, user_id: OTHER, reaction: "like" }, { message_id: row.id, user_id: ME, reaction: null }, { message_id: row.id, user_id: ME, reaction: "shrug" }];
+  else if (u.pathname.endsWith("/rpc/react_to_message")) body = "like";
   else if (u.pathname.endsWith("/profiles")) body = /vnd\.pgrst\.object/.test(headers.accept || "") ? { id: OTHER, username: "Alex", avatar_url: null } : [{ id: OTHER, username: "Alex", avatar_url: null }];
   else if (u.pathname.endsWith("/friendships")) body = [{ id: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee" }];
   else if (u.pathname.endsWith("/conversation_backgrounds")) body = [{ conversation_id: CONV, path: CONV + "/22222222-2222-2222-2222-222222222222.jpg", set_by: OTHER }];
@@ -68,6 +70,7 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   register({ ipcMain: { handle: (c, f) => (handlers[c] = f) }, cloudHandler, cloud: { internals: { client: () => supabase, currentUser: async () => ({ id: ME, user_metadata: { username: "tctray" } }) } }, getWindow: () => null });
   const call = (n, ...a) => handlers["social:" + n](null, ...a);
   const last = () => requests[requests.length - 1];
+  const lastTo = (path) => requests.filter((q) => q.path === path).pop() || { query: "", body: null }; // the newest request to one address
 
   let r = await call("findUser", "Al_ex%");
   check("find user: exact, case-insensitive match with wildcards escaped", r.success && last().path === "/rest/v1/profiles" && last().query.includes("username=ilike.Al\\_ex\\%") && last().query.includes("limit=1") && last().query.includes("select=id,username,avatar_url"), last());
@@ -80,9 +83,22 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   r = await call("openConversation", OTHER);
   check("open conversation: calls open_conversation", r.data === CONV && last().path === "/rest/v1/rpc/open_conversation" && last().body.other === OTHER, last());
   r = await call("getMessages", CONV);
-  check("messages: this conversation only, newest first, one page", r.success && r.data.messages[0].conversationId === CONV && last().query.includes("conversation_id=eq." + CONV) && last().query.includes("order=created_at.desc,id.desc") && last().query.includes("limit=41"), last());
+  const history = () => lastTo("/rest/v1/messages");
+  check("messages: this conversation only, newest first, one page", r.success && r.data.messages[0].conversationId === CONV && history().query.includes("conversation_id=eq." + CONV) && history().query.includes("order=created_at.desc,id.desc") && history().query.includes("limit=41"), history());
+  const LIKES = !!handlers["social:react"]; // an AURA from before likes and GIF search has none of this
+  if (LIKES) {
+    check("likes: asked for in one request, for just the messages on this page", last().path === "/rest/v1/message_reactions" && last().method === "GET" && last().query.includes("select=message_id,user_id,reaction") && last().query.includes("message_id=in.(dddddddd-dddd-dddd-dddd-dddddddddddd)"), last());
+    check("likes: each message carries who liked or disliked it (taken-back and unknown ones are left out)", JSON.stringify(r.data.messages[0].reactions) === JSON.stringify([{ userId: OTHER, reaction: "like" }]), r.data.messages[0].reactions);
+    r = await call("react", "dddddddd-dddd-dddd-dddd-dddddddddddd", "like");
+    check("like: calls react_to_message with the message and the feeling", r.success && last().path === "/rest/v1/rpc/react_to_message" && JSON.stringify(last().body) === JSON.stringify({ message: "dddddddd-dddd-dddd-dddd-dddddddddddd", feeling: "like" }) && r.data.reaction === "like" && r.data.userId === ME, [last().body, r]);
+    r = await call("react", "dddddddd-dddd-dddd-dddd-dddddddddddd", null);
+    check("taking a like back sends no feeling", r.success && JSON.stringify(last().body) === JSON.stringify({ message: "dddddddd-dddd-dddd-dddd-dddddddddddd", feeling: null }) && r.data.reaction === null, [last().body, r]);
+    const before = requests.length;
+    r = await call("react", "dddddddd-dddd-dddd-dddd-dddddddddddd", "love");
+    check("an unknown reaction is refused before asking Supabase", r.success === false && requests.length === before, r);
+  }
   r = await call("getMessages", CONV, "2026-10-06T01:00:00.000Z");
-  check("older messages: adds 'before this time'", last().query.includes("created_at=lt.2026-10-06T01:00:00.000Z"), last());
+  check("older messages: adds 'before this time'", history().query.includes("created_at=lt.2026-10-06T01:00:00.000Z"), history());
   r = await call("sendMessage", CONV, "  hello\n\nthere  \n");
   check("send: inserts as the signed-in user, tidied, and gets the saved row back", r.success && last().method === "POST" && last().path === "/rest/v1/messages" && last().body.sender_id === ME && last().body.conversation_id === CONV && last().body.content === "hello\n\nthere" && /return=representation/.test(last().prefer), last());
   r = await call("markRead", CONV);
@@ -138,7 +154,7 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   check("viewing links: full addresses for the ones Supabase allows, nothing for the rest", r.success && Object.keys(r.data.urls).length === 1 && /^https:\/\/proj\.supabase\.co\/storage\/v1\/object\/sign\/message-media\/.+token=tok/.test(r.data.urls[good]), r);
   getMessagesCols: {
     await call("getMessages", CONV);
-    check("history asks for the file columns too", last().query.includes("media_path") && last().query.includes("media_kind") && last().query.includes("media_name"), last().query);
+    check("history asks for the file columns too", history().query.includes("media_path") && history().query.includes("media_kind") && history().query.includes("media_name"), history().query);
   }
 
 
@@ -172,14 +188,17 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   const changes = mainJoin ? mainJoin.changes : [];
   check("live: opens Supabase's realtime socket", /^wss:\/\/proj\.supabase\.co\/realtime\/v1\/websocket/.test(String(FakeSocket.url)), FakeSocket.url);
   const callJoin = joins.find((j) => j.topic === "realtime:aura-social-calls:" + ME);
-  check(VOICE ? "live: joins three channels for this user (messages and friends; chat backgrounds; calls)" : "live: joins two channels for this user (messages and friends; chat backgrounds)", r.success && joins.length === (VOICE ? 3 : 2) && !!mainJoin && !!bgJoin && !!callJoin === VOICE, joins.map((j) => j.topic));
+  const likeJoin = joins.find((j) => j.topic === "realtime:aura-social-reactions:" + ME);
+  const CHANNELS = 2 + (VOICE ? 1 : 0) + (LIKES ? 1 : 0);
+  check("live: joins " + CHANNELS + " channels for this user (messages and friends; chat backgrounds" + (VOICE ? "; calls" : "") + (LIKES ? "; likes" : "") + ")", r.success && joins.length === CHANNELS && !!mainJoin && !!bgJoin && !!callJoin === VOICE && !!likeJoin === LIKES, joins.map((j) => j.topic));
+  if (LIKES) check("live: the likes channel watches likes being added and changed, and nothing else", likeJoin && likeJoin.changes.length === 2 && likeJoin.changes.some((c) => c.event === "INSERT" && c.table === "message_reactions") && likeJoin.changes.some((c) => c.event === "UPDATE" && c.table === "message_reactions") && likeJoin.changes.every((c) => c.schema === "public"), likeJoin && likeJoin.changes);
   if (VOICE) check("live: the third channel watches calls starting and changing, and connection details arriving", callJoin && callJoin.changes.length === 3 && callJoin.changes.some((c) => c.event === "INSERT" && c.table === "voice_calls") && callJoin.changes.some((c) => c.event === "UPDATE" && c.table === "voice_calls") && callJoin.changes.some((c) => c.event === "INSERT" && c.table === "voice_signals") && callJoin.changes.every((c) => c.schema === "public"), callJoin && callJoin.changes);
   check("live: asks for new messages, changed messages (deletions) and all friendship changes", changes.length === 3 && changes.some((c) => c.event === "INSERT" && c.table === "messages" && c.schema === "public") && changes.some((c) => c.event === "UPDATE" && c.table === "messages") && changes.some((c) => c.event === "*" && c.table === "friendships"), changes);
   check("live: the second channel only watches chat backgrounds", bgJoin && bgJoin.changes.length === 1 && bgJoin.changes[0].table === "conversation_backgrounds" && bgJoin.changes[0].schema === "public", bgJoin && bgJoin.changes);
   const beats = requests.filter((q) => q.path === "/rest/v1/rpc/aura_heartbeat").length;
   check("live: sends an 'online' heartbeat", beats === 1, beats);
   await call("start"); await new Promise((res) => setTimeout(res, 100));
-  check("starting again doesn't join twice", sent.filter((m) => (Array.isArray(m) ? m[3] : m.event) === "phx_join").length === (VOICE ? 3 : 2));
+  check("starting again doesn't join twice", sent.filter((m) => (Array.isArray(m) ? m[3] : m.event) === "phx_join").length === CHANNELS);
   await call("stop");
   console.log(failed ? "\n" + failed + " FAILED" : "\nall passed");
   process.exit(failed ? 1 : 0);

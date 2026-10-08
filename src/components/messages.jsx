@@ -5,7 +5,7 @@
  *   - useAuraSocial     started once in AuraApp: loads your friends and conversations, listens
  *                       for live updates, shows in-app notices, and returns the unread count
  *   - MessagesPage      the Messages page (frosted glass, with its own colors and background),
- *                       including pictures, GIFs and videos
+ *                       including pictures, GIFs and videos, GIF search, and likes and dislikes
  *   - AuraFriendsTab    the "AURA" tab in the Friends panel: add friends, requests, Message
  *   - MessagesIcon      the icon used in the left menu
  *
@@ -17,7 +17,7 @@
  *
  * Added by aura-messages-setup.cjs.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { PrivacyButton } from "./privacy";
 import { CallButton, IconPhone, MISSED_CALL, callActions, callHooks, callsAvailable, mountCallLayer, useCall } from "./calls";
@@ -55,6 +55,34 @@ const isLooking = (conversationId) => state.pageOpen && state.activeId === conve
 let tempCounter = 0;
 const readTimers = {};
 const lastNotice = {};
+
+// ── GIFs from KLIPY (or GIPHY) ────────────────────────────────────────────────
+// A GIF picked from the search is sent as an ordinary message holding nothing but the GIF's
+// address. A message like that is drawn as the GIF, loaded straight from the GIF service. Only
+// addresses on KLIPY's or GIPHY's own servers count (the same pattern is in electron/social.js);
+// any other link stays plain text and is never loaded.
+const GIF_URL = /^https:\/\/(?:(?:[a-z0-9-]+\.)*klipy\.(?:com|co)|(?:media[0-9]?|i)\.giphy\.com)\/(?:[A-Za-z0-9._~=-]+\/){0,8}[A-Za-z0-9._~=-]+\.(?:gif|webp)(?:\?[A-Za-z0-9._~=&%-]{0,400})?$/;
+const gifOf = (content) => {
+  const text = typeof content === "string" ? content.trim() : "";
+  return text && text.length <= 700 && GIF_URL.test(text) && !/\/\.{1,2}\//.test(text) ? text : "";
+};
+const gifsAvailable = () => typeof window.auraSocial?.gifSearch === "function";
+// Both services ask to be named where their GIFs are searched for and shown
+const GIF_SERVICES = { klipy: "KLIPY", giphy: "GIPHY" };
+const gifServiceOf = (url) => (/^https:\/\/[^/]*giphy\.com\//.test(url) ? "GIPHY" : "KLIPY");
+let gifService = ""; // which one this AURA searches, known after the first search
+
+// ── Likes and dislikes ────────────────────────────────────────────────────────
+const reactionsAvailable = () => typeof window.auraSocial?.react === "function";
+const reactQueue = {};   // message id -> the request in flight, so yours arrive in the order you clicked
+const reactWaiting = {}; // message id -> how many of yours haven't been answered yet
+// Someone's 👍 or 👎 on a message changed (reaction is null when they took it back)
+function applyReaction({ conversationId, messageId, userId, reaction }) {
+  const cid = conversationId && state.threads[conversationId] ? conversationId : Object.keys(state.threads).find((k) => state.threads[k].items.some((m) => m.id === messageId));
+  if (!cid || !state.threads[cid].items.some((m) => m.id === messageId)) return null;
+  setThread(cid, (t) => ({ items: t.items.map((m) => (m.id !== messageId || m.deleted ? m : { ...m, reactions: [...(m.reactions || []).filter((r) => r.userId !== userId), ...(reaction ? [{ userId, reaction }] : [])] })) }));
+  return state.threads[cid].items.find((m) => m.id === messageId) || null;
+}
 
 const actions = {
   async refreshFriends() {
@@ -187,6 +215,23 @@ const actions = {
     applyDeleted({ id: messageId, conversationId });
   },
 
+  // Puts your 👍 or 👎 on a message, or takes it back (reaction: "like", "dislike" or null).
+  // It shows straight away; if Supabase says no, it goes back to how it was.
+  react(conversationId, messageId, reaction) {
+    if (!state.me) return;
+    const me = state.me.id;
+    const was = thread(conversationId).items.find((m) => m.id === messageId)?.reactions?.find((r) => r.userId === me)?.reaction || null;
+    applyReaction({ conversationId, messageId, userId: me, reaction });
+    reactWaiting[messageId] = (reactWaiting[messageId] || 0) + 1;
+    const sent = (reactQueue[messageId] || Promise.resolve()).then(() => call("react", messageId, reaction));
+    reactQueue[messageId] = sent.then(() => {}, () => {});
+    sent.then(() => true, (e) => { hooks.toast?.(e.message, "err"); return false; }).then((ok) => {
+      const last = --reactWaiting[messageId] <= 0;
+      if (last) { delete reactWaiting[messageId]; delete reactQueue[messageId]; }
+      if (!ok && last) applyReaction({ conversationId, messageId, userId: me, reaction: was });
+    });
+  },
+
   // Blocks someone: no more messages or friend requests either way. They aren't told.
   async block(person) {
     callActions.endWith(person.userId); // a call with them ends too
@@ -239,6 +284,7 @@ const actions = {
     if (event.type === "call" || event.type === "signal") return callActions.onEvent(event); // voice calls
     if (event.type === "friends") { actions.refreshFriends(); actions.refreshConversations(); actions.refreshBlocked(); return; }
     if (event.type === "deleted") { if (event.message?.id) applyDeleted(event.message); return; }
+    if (event.type === "reaction") return onReaction(event);
     if (event.type === "open") { hooks.goToMessages?.(); actions.open(event.conversationId); return; }
     if (event.type === "background") {
       const c = state.conversations.find((x) => x.id === event.conversationId);
@@ -267,11 +313,30 @@ const actions = {
 function applyDeleted(message) {
   const t = state.threads[message.conversationId];
   const was = t?.items.find((m) => m.id === message.id);
-  if (was && !was.deleted) setThread(message.conversationId, (cur) => ({ items: cur.items.map((m) => (m.id === message.id ? { ...m, content: "", media: null, deleted: true } : m)) }));
+  if (was && !was.deleted) setThread(message.conversationId, (cur) => ({ items: cur.items.map((m) => (m.id === message.id ? { ...m, content: "", media: null, reactions: [], deleted: true } : m)) }));
   if (!was || !was.deleted) actions.refreshConversations(); // the list's preview and unread count may have been about it
 }
 // Conversations with people you've blocked are kept out of sight until you unblock them
 const visibleConversations = (s) => (s.blocked.length ? s.conversations.filter((c) => !s.blocked.some((b) => b.userId === c.userId)) : s.conversations);
+
+// A like or dislike arrived live. Your own clicks are already on screen, so while one of yours is
+// still on its way its echo is skipped (it could be older than what you clicked since).
+function onReaction(event) {
+  if (!event.messageId || !event.userId) return;
+  const mine = event.userId === state.me.id;
+  if (mine && reactWaiting[event.messageId]) return;
+  const before = Object.values(state.threads).flatMap((t) => t.items).find((m) => m.id === event.messageId);
+  const had = before?.reactions?.find((r) => r.userId === event.userId)?.reaction || null;
+  const message = applyReaction(event);
+  // A short notice when a friend reacts to something you said and you aren't looking at that chat
+  if (mine || !message || !event.reaction || had === event.reaction || message.senderId !== state.me.id) return;
+  if (isLooking(message.conversationId) || !document.hasFocus()) return;
+  const now = Date.now();
+  if (now - (lastNotice["r-" + message.conversationId] || 0) < 4000) return;
+  lastNotice["r-" + message.conversationId] = now;
+  const name = state.conversations.find((c) => c.id === message.conversationId)?.username;
+  if (name) hooks.toast?.(`${name} ${event.reaction === "like" ? "liked" : "disliked"} your message`);
+}
 
 function applyBackground(conversationId, background) {
   set((s) => ({ conversations: s.conversations.map((c) => (c.id === conversationId ? { ...c, background: background?.path ? background : null } : c)) }));
@@ -349,7 +414,7 @@ function mergeMessage(items, message) {
 function touchConversation(message, countUnread) {
   set((s) => ({
     conversations: sortByNewest(s.conversations.map((c) => (c.id !== message.conversationId ? c : {
-      ...c, lastMessage: message.content.slice(0, 160), lastMedia: mediaWord(message.media), lastSenderId: message.senderId, lastMessageAt: message.createdAt,
+      ...c, lastMessage: gifOf(message.content) ? "" : message.content.slice(0, 160), lastMedia: gifOf(message.content) ? "GIF" : mediaWord(message.media), lastSenderId: message.senderId, lastMessageAt: message.createdAt,
       unread: countUnread ? c.unread + 1 : c.unread,
     }))),
   }));
@@ -379,7 +444,7 @@ function onMessage(message) {
   const now = Date.now();
   if (now - (lastNotice[message.conversationId] || 0) < 4000) return;
   lastNotice[message.conversationId] = now;
-  const text = message.content.replace(/\s+/g, " ").trim() || (message.media ? `sent a ${mediaWord(message.media) === "GIF" ? "GIF" : mediaWord(message.media).toLowerCase()}` : "");
+  const text = gifOf(message.content) ? "sent a GIF" : message.content.replace(/\s+/g, " ").trim() || (message.media ? `sent a ${mediaWord(message.media) === "GIF" ? "GIF" : mediaWord(message.media).toLowerCase()}` : "");
   const say = (name) => hooks.toast?.(`${name || "New message"}: ${text.length > 60 ? text.slice(0, 59) + "…" : text}`);
   const known = conversation?.username || state.friends.find((f) => f.userId === message.senderId)?.username;
   if (known || !listed) say(known);
@@ -488,6 +553,9 @@ const IconPlay = () => <Svg d={<path d="M8 5.5v13l11-6.5z" fill="currentColor" s
 const IconPhoto = () => <Svg d={<><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l5-4.5 3.5 3 3-2.5L21 17"/></>} size={20} />;
 const IconTrash = () => <Svg d={<path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.9 12.2h9.2L17.5 7M10 10.5v5.5M14 10.5v5.5"/>} size={15} />;
 const IconFlag = () => <Svg d={<path d="M5.5 21V4M5.5 4.5h11l-2.2 3.7 2.2 3.8h-11"/>} size={15} />;
+const IconLike = ({ size = 15 }) => <Svg d={<path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>} size={size} />;
+const IconDislike = ({ size = 15 }) => <Svg d={<path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/>} size={size} />;
+const IconSearch = () => <Svg d={<><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></>} size={15} />;
 const IconGame = () => <Svg d={<><rect x="2.5" y="7" width="19" height="10" rx="5"/><path d="M7.5 10.5v3M6 12h3M15.5 11h.01M17.5 13h.01"/></>} />;
 
 function Avatar({ name, url, size = 38, online = null }) {
@@ -1053,6 +1121,140 @@ function MediaView({ message, onOpen }) {
   );
 }
 
+// A GIF from KLIPY or GIPHY, shown straight from their servers. Its height is fixed, so the chat
+// doesn't jump when it loads.
+function GifView({ url, pending }) {
+  const [state, setState] = useState("loading"); // loading | ok | broken
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => { setState("loading"); }, [url, attempt]);
+  return (
+    <div className={`mx-media image mx-gif ${state}`}>
+      {state === "broken" ? (
+        <div className="mx-media-note">Couldn't load this GIF. <button type="button" className="mx-link" onClick={() => setAttempt((n) => n + 1)}>Try again</button></div>
+      ) : (
+        <img key={attempt} src={url} alt="GIF" draggable={false} referrerPolicy="no-referrer" onLoad={() => setState("ok")} onError={() => setState("broken")} />
+      )}
+      {state === "loading" && <div className="mx-media-note wait"><IconPhoto /> Loading…</div>}
+      <span className="mx-media-tag" title={`This GIF comes from ${gifServiceOf(url)}`}>{gifServiceOf(url)}</span>
+      {pending && <span className="mx-media-busy"><i className="mx-spin" /> Sending…</span>}
+    </div>
+  );
+}
+
+// Find a GIF and send it. Opens above the typing box: popular GIFs first, then whatever you
+// search for. The search goes through the main process; no key is ever in the window.
+function GifPicker({ onPick, onClose }) {
+  const [words, setWords] = useState("");
+  const [r, setR] = useState({ query: "", gifs: [], next: null, loading: true, more: false, error: "" });
+  const [service, setService] = useState(gifService);
+  const box = useRef(null);
+  const input = useRef(null);
+  const grid = useRef(null);
+  const asked = useRef(0);
+
+  const load = async (query, offset = 0) => {
+    const mine = ++asked.current;
+    setR((cur) => (offset ? { ...cur, more: true } : { ...cur, loading: true, error: "" }));
+    try {
+      const page = await call("gifSearch", query, offset);
+      if (mine !== asked.current) return; // a newer search has been asked for since
+      if (!offset && grid.current) grid.current.scrollTop = 0; // new results start at the top
+      if (GIF_SERVICES[page.provider]) { gifService = GIF_SERVICES[page.provider]; setService(gifService); }
+      setR((cur) => ({ query, gifs: offset ? [...cur.gifs, ...page.gifs.filter((g) => !cur.gifs.some((x) => x.id === g.id))] : page.gifs, next: page.next ?? null, loading: false, more: false, error: "" }));
+    } catch (e) {
+      if (mine !== asked.current) return;
+      setR((cur) => (offset ? { ...cur, more: false, next: null } : { query, gifs: [], next: null, loading: false, more: false, error: e.message }));
+    }
+  };
+  // A moment after the typing stops (each search counts against an hourly limit)
+  useEffect(() => {
+    const query = words.replace(/\s+/g, " ").trim();
+    if (query.length === 1) return;
+    const t = setTimeout(() => load(query), query ? 500 : 0);
+    return () => clearTimeout(t);
+  }, [words]);
+  useEffect(() => {
+    input.current?.focus();
+    const away = (e) => { if (box.current && !box.current.contains(e.target) && !e.target.closest?.("[data-mx-gifs]")) onClose(); };
+    const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc, true);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc, true); };
+  }, [onClose]);
+
+  // Three columns, each new GIF going to whichever is shortest so far
+  const columns = useMemo(() => {
+    const cols = [[], [], []], tall = [0, 0, 0];
+    for (const g of r.gifs) {
+      const i = tall.indexOf(Math.min(...tall));
+      cols[i].push(g);
+      tall[i] += g.preview.width && g.preview.height ? g.preview.height / g.preview.width : 0.75;
+    }
+    return cols;
+  }, [r.gifs]);
+  const onScroll = (e) => {
+    const el = e.currentTarget;
+    if (r.next !== null && !r.more && !r.loading && el.scrollHeight - el.scrollTop - el.clientHeight < 240) load(r.query, r.next);
+  };
+
+  return (
+    <div className="mx-pop mx-gifs" ref={box} role="dialog" aria-label="Send a GIF">
+      <label className="mx-gifs-find">
+        <IconSearch />
+        <input ref={input} type="text" value={words} onChange={(e) => setWords(e.target.value)} maxLength={50} placeholder={service ? `Search ${service}` : "Search GIFs"} aria-label={service ? `Search ${service}` : "Search GIFs"} spellCheck={false} />
+        {words && <button type="button" onClick={() => { setWords(""); input.current?.focus(); }} aria-label="Clear search"><IconX /></button>}
+      </label>
+      <div className="mx-gifs-grid" ref={grid} onScroll={onScroll} aria-busy={r.loading}>
+        {r.error ? (
+          <div className="mx-note err" role="alert">{r.error} <button type="button" className="mx-link" onClick={() => load(r.query)}>Try again</button></div>
+        ) : r.loading && !r.gifs.length ? (
+          <div className="mx-gifs-cols" aria-hidden="true">{[0, 1, 2].map((c) => <div key={c}>{[0, 1, 2].map((i) => <span key={i} className="mx-gif-tile wait" style={{ aspectRatio: `1 / ${[0.7, 1, 0.56, 0.8, 0.6, 1.1, 1, 0.62, 0.75][c * 3 + i]}` }} />)}</div>)}</div>
+        ) : !r.gifs.length ? (
+          <div className="mx-note center">{r.query ? `No GIFs found for "${r.query}".` : "No GIFs to show right now."}</div>
+        ) : (
+          <div className={`mx-gifs-cols ${r.loading ? "stale" : ""}`}>
+            {columns.map((col, c) => (
+              <div key={c}>
+                {col.map((g) => (
+                  <button key={g.id} type="button" className="mx-gif-tile" style={{ aspectRatio: `${g.preview.width || 4} / ${g.preview.height || 3}` }} onClick={() => onPick(g)} title={g.title || "GIF"} aria-label={`Send GIF${g.title ? ": " + g.title : ""}`}>
+                    <img src={g.preview.url} alt="" loading="lazy" draggable={false} referrerPolicy="no-referrer" />
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+        {r.more && <div className="mx-note center">Loading more…</div>}
+      </div>
+      <div className="mx-gifs-foot">{service ? `Powered by ${service}` : "\u00a0"}</div>
+    </div>
+  );
+}
+
+// The 👍 and 👎 already on a message. Yours is filled in; click it to take it back.
+function ReactionChips({ message, me, name, canAdd, onReact }) {
+  const list = message.reactions || [];
+  if (!list.length) return null;
+  const mine = list.find((x) => x.userId === me)?.reaction || null;
+  return (
+    <div className="mx-reacts">
+      {["like", "dislike"].map((kind) => {
+        const who = list.filter((x) => x.reaction === kind);
+        if (!who.length) return null;
+        const names = who.map((x) => (x.userId === me ? "You" : name)).sort((a) => (a === "You" ? -1 : 1));
+        const label = `${names.join(" and ")} ${kind === "like" ? "liked" : "disliked"} this`;
+        const on = mine === kind;
+        return (
+          <button key={kind} type="button" className={`mx-react ${kind} ${on ? "on" : ""}`} disabled={!on && !canAdd} aria-pressed={on} onClick={() => onReact(on ? null : kind)}
+            title={on ? `${label}. Click to take yours back.` : label} aria-label={label}>
+            {kind === "like" ? <IconLike size={13} /> : <IconDislike size={13} />}{who.length > 1 && <span>{who.length}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // A picture at full size, over the whole window. Esc or a click outside closes it.
 function Lightbox({ item, onClose }) {
   useEffect(() => {
@@ -1086,7 +1288,7 @@ function ReportSheet({ conversation, message, onClose }) {
     return () => document.removeEventListener("keydown", esc, true);
   }, [onClose]);
   const name = conversation.username;
-  const quoted = message ? (message.content ? message.content.replace(/\s+/g, " ").slice(0, 140) : mediaWord(message.media) || "Message") : "";
+  const quoted = message ? (gifOf(message.content) ? "GIF" : message.content ? message.content.replace(/\s+/g, " ").slice(0, 140) : mediaWord(message.media) || "Message") : "";
   const send = async (e) => {
     e.preventDefault();
     if (!reason) { setError("Pick a reason."); return; }
@@ -1137,6 +1339,7 @@ function Thread({ conversation, nowPlaying }) {
   const [reporting, setReporting] = useState(null); // { message } while the report form is open
   const [showProfile, setShowProfile] = useState(false);
   const [newBelow, setNewBelow] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);     // the GIF search, above the typing box
   const scroller = useRef(null);
   const input = useRef(null);
   const picker = useRef(null);
@@ -1149,7 +1352,7 @@ function Thread({ conversation, nowPlaying }) {
   useEffect(() => {
     setText(drafts[conversation.id] || "");
     setTray(trays[conversation.id] || []);
-    setShowProfile(false); setNewBelow(false); setViewing(null); setDropping(false); setReporting(null);
+    setShowProfile(false); setNewBelow(false); setViewing(null); setDropping(false); setReporting(null); setGifOpen(false);
     stick.current = true; lastId.current = null;
     input.current?.focus();
     return () => {};
@@ -1173,7 +1376,8 @@ function Thread({ conversation, nowPlaying }) {
     const newest = t.items[t.items.length - 1];
     const changed = newest && newest.id !== lastId.current;
     lastId.current = newest?.id || null;
-    if (!changed) return;
+    // Nothing new, but something grew (a like appearing under the last message): stay at the bottom
+    if (!changed) { if (stick.current) el.scrollTop = el.scrollHeight; return; }
     if (stick.current || (s.me && newest.senderId === s.me.id)) { el.scrollTop = el.scrollHeight; setNewBelow(false); }
     else setNewBelow(true);
   }, [t.items, conversation.id]);
@@ -1244,6 +1448,10 @@ function Thread({ conversation, nowPlaying }) {
     try { await actions.deleteMessage(conversation.id, m.id); }
     catch (e) { hooks.toast?.(e.message, "err"); }
   };
+  const closeGifs = useCallback(() => setGifOpen(false), []);
+  const sendGif = (g) => { setGifOpen(false); send(g.send.url); }; // what you were typing stays in the box
+  const meId = s.me?.id || null;
+  const canReact = reactionsAvailable();
   const retry = (m) => (m.attachment ? actions.sendMedia(conversation.id, m.attachment, m.content, m.id) : actions.send(conversation.id, m.content, m.id));
 
   // Group messages: a new block when the sender changes or five minutes pass; a divider per day
@@ -1295,28 +1503,39 @@ function Thread({ conversation, nowPlaying }) {
           <div key={b.key} className="mx-day"><span>{b.label}</span></div>
         ) : (
           <div key={b.key} className={`mx-group ${s.me && b.senderId === s.me.id ? "me" : "them"}`}>
-            {b.items.map((m) => (
-              <div key={m.id} className={`mx-msg ${m.pending ? "pending" : ""} ${m.failed ? "failed" : ""} ${m.media ? "has-media" : ""} ${m.deleted ? "gone" : ""}`}>
-                {m.deleted && <div className="mx-bubble">{s.me && m.senderId === s.me.id ? "You deleted this message" : "This message was deleted"}</div>}
-                {m.media && <MediaView message={m} onOpen={setViewing} />}
-                {m.content && (m.content === MISSED_CALL
-                  ? <div className="mx-bubble mx-missed"><IconPhone size={15} /> {callNote(m.content, !!s.me && m.senderId === s.me.id)}</div>
-                  : <div className="mx-bubble">{m.content}</div>)}
-                {m.content === MISSED_CALL && conversation.isFriend && s.me && m.senderId !== s.me.id && (
-                  <CallButton person={toPerson(conversation)} className="mx-link mx-callback">Call back</CallButton>
-                )}
-                {!m.pending && !m.failed && !m.deleted && (
-                  <div className="mx-acts">
-                    {s.me && m.senderId === s.me.id
-                      ? <button type="button" onClick={() => remove(m)} title="Delete message" aria-label="Delete message"><IconTrash /></button>
-                      : <button type="button" onClick={() => setReporting({ message: m })} title="Report message" aria-label="Report message"><IconFlag /></button>}
-                  </div>
-                )}
-                {m.failed && (
-                  <div className="mx-fail">Not sent. {m.error} <button type="button" className="mx-link" onClick={() => retry(m)}>Try again</button> <button type="button" className="mx-link" onClick={() => actions.discard(conversation.id, m.id)}>Delete</button></div>
-                )}
-              </div>
-            ))}
+            {b.items.map((m) => {
+              const gif = m.deleted ? "" : gifOf(m.content);
+              const settled = !m.pending && !m.failed && !m.deleted;
+              const reactable = settled && canReact && m.content !== MISSED_CALL;
+              const mine = reactable ? (m.reactions || []).find((x) => x.userId === meId)?.reaction || null : null;
+              return (
+                <div key={m.id} className={`mx-msg ${m.pending ? "pending" : ""} ${m.failed ? "failed" : ""} ${m.media || gif ? "has-media" : ""} ${m.deleted ? "gone" : ""}`}>
+                  {m.deleted && <div className="mx-bubble">{s.me && m.senderId === s.me.id ? "You deleted this message" : "This message was deleted"}</div>}
+                  {m.media && <MediaView message={m} onOpen={setViewing} />}
+                  {gif ? <GifView url={gif} pending={m.pending} /> : m.content && (m.content === MISSED_CALL
+                    ? <div className="mx-bubble mx-missed"><IconPhone size={15} /> {callNote(m.content, !!s.me && m.senderId === s.me.id)}</div>
+                    : <div className="mx-bubble">{m.content}</div>)}
+                  {m.content === MISSED_CALL && conversation.isFriend && s.me && m.senderId !== s.me.id && (
+                    <CallButton person={toPerson(conversation)} className="mx-link mx-callback">Call back</CallButton>
+                  )}
+                  {reactable && <ReactionChips message={m} me={meId} name={conversation.username} canAdd={conversation.isFriend} onReact={(kind) => actions.react(conversation.id, m.id, kind)} />}
+                  {settled && (
+                    <div className="mx-acts">
+                      {reactable && conversation.isFriend && <>
+                        <button type="button" className={`mx-act-react ${mine === "like" ? "on" : ""}`} aria-pressed={mine === "like"} onClick={() => actions.react(conversation.id, m.id, mine === "like" ? null : "like")} title={mine === "like" ? "Take back your like" : "Like"} aria-label={mine === "like" ? "Take back your like" : "Like"}><IconLike /></button>
+                        <button type="button" className={`mx-act-react ${mine === "dislike" ? "on" : ""}`} aria-pressed={mine === "dislike"} onClick={() => actions.react(conversation.id, m.id, mine === "dislike" ? null : "dislike")} title={mine === "dislike" ? "Take back your dislike" : "Dislike"} aria-label={mine === "dislike" ? "Take back your dislike" : "Dislike"}><IconDislike /></button>
+                      </>}
+                      {s.me && m.senderId === s.me.id
+                        ? <button type="button" className="mx-act-del" onClick={() => remove(m)} title="Delete message" aria-label="Delete message"><IconTrash /></button>
+                        : <button type="button" onClick={() => setReporting({ message: m })} title="Report message" aria-label="Report message"><IconFlag /></button>}
+                    </div>
+                  )}
+                  {m.failed && (
+                    <div className="mx-fail">Not sent. {m.error} <button type="button" className="mx-link" onClick={() => retry(m)}>Try again</button> <button type="button" className="mx-link" onClick={() => actions.discard(conversation.id, m.id)}>Delete</button></div>
+                  )}
+                </div>
+              );
+            })}
             <div className="mx-meta"><b>{s.me && b.senderId === s.me.id ? "You" : conversation.username}</b>{b.items[b.items.length - 1].failed ? "" : b.items[b.items.length - 1].pending ? "Sending…" : clock(b.items[b.items.length - 1].createdAt)}</div>
           </div>
         ))}
@@ -1337,8 +1556,10 @@ function Thread({ conversation, nowPlaying }) {
               ))}
             </div>
           )}
+          {gifOpen && <GifPicker onPick={sendGif} onClose={closeGifs} />}
           <div className="mx-compose-row">
             <button type="button" className="mx-attach" onClick={() => picker.current?.click()} disabled={tray.length >= MAX_ATTACHMENTS} title="Attach a picture, GIF or video" aria-label="Attach a picture, GIF or video"><IconClip /></button>
+            {gifsAvailable() && <button type="button" className={`mx-attach mx-gifbtn ${gifOpen ? "on" : ""}`} data-mx-gifs onClick={() => setGifOpen((v) => !v)} title="Send a GIF" aria-label="Send a GIF" aria-expanded={gifOpen}>GIF</button>}
             <input ref={picker} type="file" accept={MEDIA_ACCEPT} multiple hidden data-mx-file onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; addFiles(files); }} />
             <textarea ref={input} rows={1} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onPaste={onPaste} placeholder={tray.length ? "Add a message (optional)" : `Message ${conversation.username}`} aria-label={`Message ${conversation.username}`} />
             {ready.length > MAX_LENGTH - 400 && <span className="mx-count">{ready.length} / {MAX_LENGTH}</span>}
@@ -1513,14 +1734,22 @@ const CSS = `
 .mx-group.me{align-self:flex-end;align-items:flex-end}
 .mx-group.them{align-self:flex-start;align-items:flex-start}
 .mx-msg{position:relative;display:flex;flex-direction:column;max-width:100%}
-/* Delete (your messages) or Report (theirs): appears beside a message when you point at it or tab to it */
-.mx-acts{position:absolute;top:50%;transform:translateY(-50%);opacity:0;transition:opacity .12s}
+/* Like, Dislike, and Delete (your messages) or Report (theirs): appear beside a message when you point at it or tab to it */
+.mx-acts{position:absolute;top:50%;transform:translateY(-50%);display:flex;gap:4px;opacity:0;transition:opacity .12s}
 .mx-group.me .mx-acts{right:100%;padding-right:6px}
 .mx-group.them .mx-acts{left:100%;padding-left:6px}
 .mx-msg:hover .mx-acts,.mx-acts:focus-within{opacity:1}
 .mx-acts button{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:color-mix(in srgb,var(--mx-base) 70%,transparent);border:1px solid rgba(255,255,255,.16);color:var(--mx-ink2)!important}
 .mx-acts button:hover{color:#fff!important;border-color:rgba(255,255,255,.4)}
-.mx-group.me .mx-acts button:hover{background:rgba(255,77,109,.3);border-color:rgba(255,77,109,.6)}
+.mx-acts .mx-act-del:hover{background:rgba(255,77,109,.3);border-color:rgba(255,77,109,.6)}
+.mx-acts .mx-act-react.on{background:linear-gradient(135deg,var(--mx-a),var(--mx-b));color:var(--mx-on)!important;border-color:rgba(255,255,255,.3)}
+/* The likes and dislikes already on a message */
+.mx-reacts{display:flex;gap:4px;margin-top:-7px;padding:0 8px;position:relative;z-index:1}
+.mx-react{display:inline-flex;align-items:center;gap:4px;height:22px;min-width:28px;justify-content:center;padding:0 7px;border-radius:999px;cursor:pointer;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;background:color-mix(in srgb,var(--mx-base) 86%,#fff 8%);border:1px solid rgba(255,255,255,.2);color:var(--mx-ink2)!important;box-shadow:0 2px 8px rgba(0,0,0,.3);text-shadow:none!important}
+.mx-react:hover:not(:disabled){color:#fff!important;border-color:rgba(255,255,255,.45)}
+.mx-react.on{background:linear-gradient(135deg,var(--mx-a),var(--mx-b));color:var(--mx-on)!important;border-color:rgba(255,255,255,.3)}
+.mx-react:disabled{cursor:default}
+.mx-msg.has-media .mx-reacts{margin-top:-13px}
 .mx-msg.gone .mx-bubble{background:transparent!important;border:1px dashed rgba(255,255,255,.28)!important;color:var(--mx-ink3)!important;font-style:italic;font-size:13px;text-shadow:none}
 .mx.has-pic .mx-msg.gone .mx-bubble{background:color-mix(in srgb,var(--mx-base) 62%,transparent)!important;color:var(--mx-ink2)!important}
 .mx-group.me .mx-msg{align-items:flex-end}
@@ -1548,6 +1777,10 @@ const CSS = `
 .mx-media-busy{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:8px;font-size:12.5px;font-weight:600;color:#fff;background:rgba(0,0,0,.5);pointer-events:none}
 .mx-spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;animation:mx-spin .8s linear infinite}
 @keyframes mx-spin{to{transform:rotate(360deg)}}
+/* A GIF from the GIF search: a fixed height, as wide as the GIF needs */
+.mx-gif{display:inline-flex;height:200px;min-width:150px;max-width:min(340px,100%)}
+.mx-gif img{width:auto;max-width:100%;min-width:150px}
+.mx-gif.loading img{opacity:0}
 .mx-msg.failed .mx-media{border-color:rgba(255,77,109,.6);opacity:.75}
 .mx-drop{position:absolute;inset:8px;z-index:5;display:flex;align-items:center;justify-content:center;border-radius:16px;border:2px dashed var(--mx-b);background:color-mix(in srgb,var(--mx-base) 82%,transparent);pointer-events:none}
 .mx-drop div{display:flex;align-items:center;gap:10px;font-family:'Rajdhani',sans-serif;font-size:22px;font-weight:700;letter-spacing:.4px}
@@ -1584,13 +1817,38 @@ const CSS = `
 .mx-none-t{margin-top:0}
 
 /* Typing box */
-.mx-compose{display:flex;flex-direction:column;gap:6px;margin:6px 18px 18px;padding:6px;border-radius:20px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);flex-shrink:0;transition:border-color .15s}
+.mx-compose{position:relative;display:flex;flex-direction:column;gap:6px;margin:6px 18px 18px;padding:6px;border-radius:20px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);flex-shrink:0;transition:border-color .15s}
 .mx-compose:focus-within{border-color:color-mix(in srgb,var(--mx-b) 70%,transparent)}
 .mx-compose.over{border-color:rgba(255,77,109,.7)}
 .mx-compose-row{display:flex;align-items:flex-end;gap:6px}
 .mx-attach{width:38px;height:38px;flex-shrink:0;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;background:transparent;color:var(--mx-ink2)!important;transition:background .15s,color .15s}
 .mx-attach:hover:not(:disabled){background:rgba(255,255,255,.12);color:#fff!important}
 .mx-attach:disabled{opacity:.4;cursor:default}
+.mx-gifbtn{width:auto;height:26px;align-self:center;margin:0 2px 0 -2px;padding:0 7px;border-radius:8px;border:1.5px solid currentColor;font-size:11px;font-weight:800;letter-spacing:.5px}
+.mx-gifbtn.on,.mx-gifbtn.on:hover:not(:disabled){background:linear-gradient(135deg,var(--mx-a),var(--mx-b));color:var(--mx-on)!important;border-color:transparent}
+/* GIF search, opening above the typing box */
+.mx-gifs{left:0;bottom:calc(100% + 10px);width:min(440px,100%);height:min(460px,calc(100vh - 260px));min-height:240px;display:flex;flex-direction:column;gap:10px;padding:12px;animation:mx-rise .16s ease}
+@keyframes mx-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.reduce-motion .mx-gifs{animation:none}
+@media (prefers-reduced-motion:reduce){.mx-gifs{animation:none}}
+.mx-gifs-find{display:flex;align-items:center;gap:8px;height:38px;padding:0 6px 0 12px;border-radius:12px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);color:var(--mx-ink2);flex-shrink:0}
+.mx-gifs-find:focus-within{border-color:color-mix(in srgb,var(--mx-b) 70%,transparent)}
+.mx-gifs-find input{flex:1;min-width:0;height:100%;border:none;outline:none!important;background:transparent;color:#fff;font:14px 'DM Sans',sans-serif}
+.mx-gifs-find input::placeholder{color:var(--mx-ink3)}
+.mx-gifs-find button{width:26px;height:26px;border-radius:50%;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;background:transparent;color:var(--mx-ink2)!important}
+.mx-gifs-find button:hover{background:rgba(255,255,255,.12);color:#fff!important}
+.mx-gifs-grid{flex:1;min-height:0;overflow-y:auto;border-radius:10px}
+.mx-gifs-grid::-webkit-scrollbar{width:6px}
+.mx-gifs-grid::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:3px}
+.mx-gifs-cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;align-items:start;transition:opacity .15s}
+.mx-gifs-cols.stale{opacity:.45}
+.mx-gifs-cols>div{display:flex;flex-direction:column;gap:6px;min-width:0}
+.mx-gif-tile{display:block;width:100%;padding:0;border:none;border-radius:9px;overflow:hidden;cursor:pointer;background:rgba(255,255,255,.08)}
+.mx-gif-tile img{display:block;width:100%;height:100%;object-fit:cover}
+.mx-gif-tile:hover,.mx-gif-tile:focus-visible{box-shadow:0 0 0 2px var(--mx-b)}
+.mx-gif-tile:focus-visible{outline-offset:-2px}
+.mx-gif-tile.wait{cursor:default;animation:mx-pulse 1.2s ease-in-out infinite alternate}
+.mx-gifs-foot{flex-shrink:0;text-align:right;font-size:10.5px;font-weight:700;letter-spacing:.3px;color:var(--mx-ink3)}
 .mx-tray{display:flex;gap:8px;padding:6px 6px 2px;overflow-x:auto}
 .mx-tray-i{position:relative;width:76px;height:76px;flex-shrink:0;border-radius:12px;overflow:hidden;background:#000;border:1px solid rgba(255,255,255,.18)}
 .mx-tray-i img,.mx-tray-i video{width:100%;height:100%;object-fit:cover;display:block}
