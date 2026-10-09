@@ -104,11 +104,16 @@ export function AuthGate({ children, loadProfile, saveProfile, covers = [], calm
         }
       }
     }
-    if (username) enter(account, username, mine);
-    // A picture chosen on this PC before pictures were saved online: save it now, quietly.
-    // (online is left undefined when the account couldn't be checked, so nothing is tried offline)
-    if (username && online !== undefined && !online?.avatar_url && /^data:image\//i.test(mine?.avatar || "")) cloudCall("saveProfile", username, mine.avatar).catch(() => {});
-    else { setUser(null); setNeedsName({ user: account, mine, taken }); }
+    if (username) {
+      enter(account, username, mine);
+      // A picture chosen on this PC before pictures were saved online: save it now, quietly.
+      // (online is left undefined when the account couldn't be checked, so nothing is tried offline)
+      if (online !== undefined && !online?.avatar_url && /^data:image\//i.test(mine?.avatar || "")) cloudCall("saveProfile", username, mine.avatar).catch(() => {});
+    } else {
+      // Only an account that really has no username yet is asked for one
+      setUser(null);
+      setNeedsName({ user: account, mine, taken });
+    }
   }, [loadProfile, enter]);
 
   // At startup, look for a saved login

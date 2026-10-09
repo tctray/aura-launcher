@@ -68,6 +68,7 @@ if (fs.existsSync(avatarFile) && fs.existsSync(path.join(__dirname, "avatars.cjs
 const securityFile = path.join(ROOT, "electron", "security.js");
 if (fs.existsSync(securityFile) && fs.existsSync(path.join(__dirname, "security.cjs"))) add("files", "Security: windows, links, games and clip files", "security.cjs", [securityFile]);
 add("window", "The window opens and every page loads", "window.cjs");
+if (fs.existsSync(path.join(__dirname, "login.cjs"))) add("window", "Staying logged in when AURA restarts", "login.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;
