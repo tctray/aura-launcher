@@ -2737,22 +2737,26 @@ function AchievementsScreen({ unlockedMap }) {
 }
 
 // ── Auto Updater ──────────────────────────────────────────────────────────────
+// The update notice (bottom right). Restyled by aura-update-notice-setup.cjs.
 const UPDATE_CSS = `
-@keyframes updatePulse{0%,100%{box-shadow:0 0 0 0 rgba(var(--ac-rgb),.4)}50%{box-shadow:0 0 0 10px rgba(var(--ac-rgb),0)}}
-@keyframes progressShimmer{0%{transform:translateX(-100%)}100%{transform:translateX(200%)}}
-.update-toast{position:fixed;bottom:88px;right:20px;z-index:999;background:linear-gradient(135deg,var(--panel),var(--card));border:1px solid var(--acg);border-radius:14px;padding:14px 18px;min-width:280px;max-width:320px;box-shadow:0 12px 40px rgba(0,0,0,.6),0 0 0 1px var(--acg);animation:fadeUp .35s ease;}
-.update-toast-hdr{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
-.update-toast-icon{font-size:18px;}
-.update-toast-title{font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:700;letter-spacing:.5px;color:var(--t1);flex:1;}
-.update-toast-close{background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;padding:0;line-height:1;}
-.update-toast-close:hover{color:var(--t1);}
-.update-progress-wrap{height:4px;background:var(--hover);border-radius:2px;overflow:hidden;margin-bottom:8px;position:relative;}
-.update-progress-bar{height:100%;background:linear-gradient(90deg,var(--ac),var(--ac2));border-radius:2px;transition:width .3s ease;position:relative;overflow:hidden;}
-.update-progress-bar::after{content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.3),transparent);animation:progressShimmer 1.5s infinite;}
-.update-pct{font-size:10px;color:var(--t2);margin-bottom:10px;}
-.update-restart-btn{width:100%;background:linear-gradient(90deg,var(--ac),var(--ac2));border:none;color:#fff;border-radius:10px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:'Rajdhani',sans-serif;letter-spacing:1.5px;animation:updatePulse 2s infinite;transition:filter .15s;}
-.update-restart-btn:hover{filter:brightness(1.15);}
-.update-msg{font-size:11px;color:var(--t2);}
+.update-toast{position:fixed;bottom:88px;right:20px;z-index:999;width:320px;box-sizing:border-box;text-align:left;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;box-shadow:0 16px 44px rgba(0,0,0,.55);animation:fadeUp .3s ease;font-family:'DM Sans',sans-serif;}
+.update-toast-hdr{display:flex;align-items:flex-start;gap:12px;}
+.update-toast-icon{flex-shrink:0;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--acd);color:var(--ac);}
+.update-toast-icon.done{background:rgba(34,197,94,.15);color:#22c55e;}
+.update-toast-text{flex:1;min-width:0;}
+.update-toast-title{font-size:13.5px;font-weight:700;line-height:1.3;color:var(--t1);}
+.update-msg{font-size:12px;line-height:1.45;color:var(--t2);margin-top:2px;}
+.update-progress-wrap{height:4px;background:var(--hover);border-radius:2px;overflow:hidden;margin-top:14px;}
+.update-progress-bar{height:100%;background:var(--ac);border-radius:2px;transition:width .3s ease;}
+.update-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
+.update-btn{border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;border:1px solid var(--border);background:transparent;color:var(--t2);transition:background .15s,color .15s,filter .15s;}
+.update-btn:hover{background:var(--hover);color:var(--t1);}
+.update-btn.primary{background:var(--ac);border-color:var(--ac);color:#fff;}
+.update-btn.primary:hover{background:var(--ac);color:#fff;filter:brightness(1.1);}
+.update-btn:focus-visible{outline:2px solid var(--ac);outline-offset:2px;}
+.update-ok{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--t2);}
+.update-ok svg{color:#22c55e;}
+.reduce-motion .update-toast{animation:none;}
 `;
 
 function AutoUpdater() {
@@ -2769,37 +2773,45 @@ function AutoUpdater() {
   }, []);
 
   if (!state || dismissed) return null;
+  const done = state === "ready";
 
   return (
     <>
       <style>{UPDATE_CSS}</style>
-      <div className="update-toast">
+      <div className="update-toast" role="status" aria-live="polite">
         <div className="update-toast-hdr">
-          <span className="update-toast-icon">{state==="ready"?"🚀":"✨"}</span>
-          <span className="update-toast-title">
-            {state==="available" && `AURA ${version} Available`}
-            {state==="downloading" && "Downloading Update…"}
-            {state==="ready" && "Update Ready"}
+          <span className={"update-toast-icon" + (done ? " done" : "")} aria-hidden="true">
+            {done
+              ? <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+              : <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11"/><path d="M7 10.5l5 5 5-5"/><path d="M5 20h14"/></svg>}
           </span>
-          {state!=="downloading"&&<button className="update-toast-close" onClick={()=>setDismissed(true)}>×</button>}
+          <div className="update-toast-text">
+            <div className="update-toast-title">
+              {state==="available" && "Update available"}
+              {state==="downloading" && "Downloading update"}
+              {done && "Download complete"}
+            </div>
+            <div className="update-msg">
+              {state==="available" && (version ? "AURA " + version : "A new version of AURA") + " is ready to download."}
+              {state==="downloading" && progress + "% downloaded"}
+              {done && "Restart AURA to finish updating" + (version ? " to " + version : "") + ". It also installs the next time you close AURA."}
+            </div>
+          </div>
         </div>
         {state==="downloading"&&(
-          <>
-            <div className="update-progress-wrap"><div className="update-progress-bar" style={{width:`${progress}%`}}/></div>
-            <div className="update-pct">{progress}% downloaded</div>
-          </>
+          <div className="update-progress-wrap"><div className="update-progress-bar" style={{width:`${progress}%`}}/></div>
         )}
         {state==="available"&&(
-          <div className="update-msg" style={{marginBottom:10}}>A new version is ready to download.</div>
+          <div className="update-actions">
+            <button type="button" className="update-btn" onClick={()=>setDismissed(true)}>Later</button>
+            <button type="button" className="update-btn primary" onClick={async()=>{setState("downloading");const r=await window.electronAPI.downloadUpdate?.();if(!r?.success) setDismissed(true);}}>Download</button>
+          </div>
         )}
-        {state==="available"&&(
-          <button className="update-restart-btn" onClick={async()=>{setState("downloading");const r=await window.electronAPI.downloadUpdate?.();if(!r?.success) setDismissed(true);}}>↓ Download Now</button>
-        )}
-        {state==="ready"&&(
-          <>
-            <div className="update-msg" style={{marginBottom:10}}>Restart AURA to apply the update.</div>
-            <button className="update-restart-btn" onClick={()=>window.electronAPI.installUpdate?.()}>⚡ Restart &amp; Update</button>
-          </>
+        {done&&(
+          <div className="update-actions">
+            <button type="button" className="update-btn" onClick={()=>setDismissed(true)}>Later</button>
+            <button type="button" className="update-btn primary" onClick={()=>window.electronAPI.installUpdate?.()}>Restart now</button>
+          </div>
         )}
       </div>
     </>
@@ -2831,20 +2843,20 @@ function UpdateButton() {
   useEffect(() => { check(); }, []);
 
   if (status === "checking") return <span style={{fontSize:11,color:"var(--t3)"}}>Checking...</span>;
-  if (status === "latest")   return <span style={{fontSize:11,color:"var(--ac)"}}>Up to date ✓</span>;
+  if (status === "latest")   return <><style>{UPDATE_CSS}</style><span className="update-ok"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Up to date</span></>;
   if (status === "error")    return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Retry</button>;
   if (status === "update")   return (
     <button className="btn-p" onClick={async()=>{
       setStatus("downloading");
       const r = await window.electronAPI.downloadUpdate?.();
       setStatus(r?.success ? "ready" : "page");
-    }} style={{fontSize:11,padding:"5px 14px",animation:"pulse 2s infinite"}}>
-      v{latest} — Download
+    }} style={{fontSize:11,padding:"5px 14px"}}>
+      Download v{latest}
     </button>
   );
   if (status === "downloading") return <span style={{fontSize:11,color:"var(--t2)"}}>Downloading v{latest}… progress shows bottom right</span>;
   if (status === "ready") return (
-    <button className="btn-p" onClick={()=>window.electronAPI.installUpdate?.()} style={{fontSize:11,padding:"5px 14px"}}>⚡ Restart &amp; Update</button>
+    <button className="btn-p" onClick={()=>window.electronAPI.installUpdate?.()} style={{fontSize:11,padding:"5px 14px"}}>Restart now</button>
   );
   if (status === "page") return <span style={{fontSize:11,color:"var(--t2)"}}>Opened the download page in your browser</span>;
   return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Check</button>;

@@ -69,6 +69,7 @@ if (fs.existsSync(avatarFile) && fs.existsSync(path.join(__dirname, "avatars.cjs
 const securityFile = path.join(ROOT, "electron", "security.js");
 if (fs.existsSync(securityFile) && fs.existsSync(path.join(__dirname, "security.cjs"))) add("files", "Security: windows, links, games and clip files", "security.cjs", [securityFile]);
 add("window", "The window opens and every page loads", "window.cjs");
+if (fs.existsSync(path.join(__dirname, "update-notice.cjs"))) add("window", "The update notice", "update-notice.cjs");
 if (fs.existsSync(path.join(__dirname, "twitch-glass.cjs"))) add("window", "Twitch streams as glass cards", "twitch-glass.cjs");
 if (fs.existsSync(path.join(__dirname, "video-popout.cjs"))) add("window", "Videos pop out of the Social browser", "video-popout.cjs");
 if (fs.existsSync(path.join(__dirname, "miniplayer.cjs"))) add("window", "The stream mini-player", "miniplayer.cjs");
