@@ -598,8 +598,8 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .gm-app{display:flex;height:100vh;width:100vw;background:transparent;overflow:hidden;position:fixed;top:0;left:0;}
 .gm-rail{width:64px;min-width:64px;background:rgba(0,0,0,.6);backdrop-filter:blur(20px);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:4px;z-index:10;}
 .gm-rail-logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--ac),var(--ac2));display:flex;align-items:center;justify-content:center;font-size:14px;margin-bottom:16px;box-shadow:0 4px 14px var(--acg);}
-.gm-rail-item{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--t3);transition:all .18s;position:relative;}
-.gm-rail-item:hover{background:var(--hover);color:var(--t2);}
+.gm-rail-item{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:rgba(255,255,255,.85);transition:all .18s;position:relative;}
+.gm-rail-item:hover{background:var(--hover);color:#fff;}
 .gm-rail-item.on{background:var(--acd);color:var(--ac);}
 .gm-rail-item.on::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:60%;background:var(--ac);border-radius:0 3px 3px 0;}
 .gm-rail-badge{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;background:var(--ac);border:2px solid var(--bg);}
@@ -721,23 +721,48 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .twitch-shelf-hdr{display:flex;align-items:center;justify-content:space-between;padding:0 40px;margin-bottom:16px;}
 .twitch-shelf-title{font-family:'Rajdhani',sans-serif;font-size:22px;font-weight:700;letter-spacing:1px;color:var(--t1);display:flex;align-items:center;gap:10px;}
 .twitch-live-dot{width:10px;height:10px;border-radius:50%;background:#eb0400;flex-shrink:0;box-shadow:0 0 8px #eb0400;animation:pulse 2s infinite;}
-.twitch-row{display:flex;gap:14px;padding:4px 40px 12px;overflow-x:auto;scrollbar-width:none;}
+.twitch-row{display:flex;gap:12px;padding:6px 40px 14px;overflow-x:auto;scrollbar-width:none;}
 .twitch-row::-webkit-scrollbar{display:none;}
-.twitch-card{flex-shrink:0;width:200px;height:200px;border-radius:14px;overflow:hidden;cursor:pointer;position:relative;border:1px solid rgba(255,255,255,.07);transition:transform .22s,box-shadow .22s;}
-.twitch-card:hover{transform:translateY(-6px) scale(1.04);box-shadow:0 20px 48px rgba(0,0,0,.8),0 0 0 2px #9147ff;}
-.twitch-thumb{width:100%;height:100%;object-fit:cover;display:block;transition:transform .35s;}
-.twitch-card:hover .twitch-thumb{transform:scale(1.08);}
-.twitch-thumb-ph{width:100%;height:100%;background:linear-gradient(135deg,#1a1a2e,#2d1b69);display:flex;align-items:center;justify-content:center;font-size:42px;}
-.twitch-badge{position:absolute;top:10px;left:10px;background:linear-gradient(90deg,#eb0400,#9147ff);color:#fff;font-size:9px;font-weight:800;padding:3px 9px;border-radius:20px;letter-spacing:1.5px;display:flex;align-items:center;gap:4px;z-index:2;}
-.twitch-badge-dot{width:5px;height:5px;border-radius:50%;background:#fff;}
-.twitch-ov{position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.92) 0%,rgba(0,0,0,.3) 55%,transparent 100%);opacity:0;transition:opacity .2s;display:flex;flex-direction:column;justify-content:flex-end;padding:14px;z-index:3;}
-.twitch-card:hover .twitch-ov{opacity:1;}
-.twitch-user{font-family:'Rajdhani',sans-serif;font-size:15px;font-weight:700;color:#fff;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.twitch-game{font-size:10px;color:#9147ff;font-weight:700;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.twitch-viewers-row{display:flex;align-items:center;gap:5px;font-size:10px;color:rgba(255,255,255,.7);font-weight:600;margin-top:3px;}
-.twitch-viewer-dot{width:6px;height:6px;border-radius:50%;background:#eb0400;flex-shrink:0;}
-.twitch-watch-btn{width:100%;background:rgba(145,71,255,.85);border:none;color:#fff;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;letter-spacing:.3px;transition:all .15s;margin-top:8px;backdrop-filter:blur(4px);}
-.twitch-watch-btn:hover{background:#9147ff;}
+/* A stream rests as a pane of glass, its picture showing faintly through. The one you point at
+   (or reach with Tab or a controller) opens out to the full picture, with the LIVE tag and the
+   play button. Used on Home (a row you scroll) and on the Live Streams page (rows that fill
+   the page). Added by aura-twitch-glass-setup.cjs. */
+.twitch-card{flex-shrink:0;position:relative;width:150px;height:220px;text-align:left;border-radius:16px;overflow:hidden;cursor:pointer;outline:none;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 10px 28px rgba(0,0,0,.28);backdrop-filter:blur(18px) saturate(1.3);transition:width .34s cubic-bezier(.2,.8,.2,1),flex-grow .34s cubic-bezier(.2,.8,.2,1),border-color .2s,box-shadow .2s;}
+.twitch-thumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;opacity:.38;filter:saturate(.6);transition:opacity .25s,filter .25s;}
+.twitch-thumb-ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:38px;opacity:.5;}
+.twitch-sheen{position:absolute;inset:0;background:linear-gradient(155deg,rgba(255,255,255,.2) 0%,rgba(255,255,255,.04) 34%,rgba(255,255,255,0) 60%);pointer-events:none;transition:opacity .25s;}
+.twitch-rest{position:absolute;left:12px;right:12px;bottom:12px;line-height:1.25;font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:700;letter-spacing:.3px;color:rgba(255,255,255,.86);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 6px rgba(0,0,0,.6);transition:opacity .15s;}
+.twitch-sub{display:block;font-family:'DM Sans',sans-serif;font-size:10px;font-weight:600;letter-spacing:.2px;color:rgba(255,255,255,.6);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.twitch-card.on,.twitch-card.ctrl-focus:not(.off){width:392px;border-color:rgba(255,255,255,.42);box-shadow:0 18px 44px rgba(0,0,0,.55);backdrop-filter:none;}
+.twitch-card.on .twitch-thumb,.twitch-card.ctrl-focus:not(.off) .twitch-thumb{opacity:1;filter:none;}
+.twitch-card.on .twitch-sheen,.twitch-card.on .twitch-rest,.twitch-card.ctrl-focus:not(.off) .twitch-sheen,.twitch-card.ctrl-focus:not(.off) .twitch-rest{opacity:0;}
+.twitch-card:focus-visible{border-color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.7);}
+.twitch-card.off{cursor:default;}
+.twitch-card.off .twitch-thumb{opacity:.2;filter:grayscale(1);}
+.twitch-badge{position:absolute;top:12px;left:12px;display:flex;align-items:center;gap:6px;padding:4px 10px 4px 8px;border-radius:20px;background:rgba(0,0,0,.62);border:1px solid rgba(255,255,255,.18);color:#fff;font-size:10px;font-weight:800;letter-spacing:1.4px;opacity:0;transition:opacity .2s;z-index:2;}
+.twitch-badge-dot{width:7px;height:7px;border-radius:50%;background:#eb0400;box-shadow:0 0 6px #eb0400;}
+.twitch-ov{position:absolute;inset:0;display:flex;align-items:flex-end;gap:12px;padding:14px;background:linear-gradient(to top,rgba(0,0,0,.88) 0%,rgba(0,0,0,.35) 42%,rgba(0,0,0,0) 68%);opacity:0;pointer-events:none;transition:opacity .2s;z-index:3;}
+.twitch-card.on .twitch-badge,.twitch-card.on .twitch-ov,.twitch-card.ctrl-focus:not(.off) .twitch-badge,.twitch-card.ctrl-focus:not(.off) .twitch-ov{opacity:1;}
+.twitch-card.on .twitch-ov,.twitch-card.ctrl-focus:not(.off) .twitch-ov{transition-delay:.08s;}
+.twitch-card.on .twitch-tool,.twitch-card.ctrl-focus:not(.off) .twitch-tool{pointer-events:auto;}
+.twitch-info{flex:1;min-width:0;line-height:1.3;}
+.twitch-user{font-family:'Rajdhani',sans-serif;font-size:19px;font-weight:700;color:#fff;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.twitch-game{font-size:11px;color:rgba(255,255,255,.78);font-weight:600;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.twitch-viewers-row{font-size:11px;color:rgba(255,255,255,.62);font-weight:600;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.twitch-tools{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.twitch-tool{display:grid;place-items:center;width:36px;height:36px;padding:0;border-radius:50%;border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.12);color:#fff;cursor:pointer;transition:background .15s,transform .15s;}
+.twitch-tool.main{width:44px;height:44px;border:none;background:#fff;color:#0b0b0d;}
+.twitch-tool.main:hover{background:#fff;transform:scale(1.06);}
+.twitch-tool:focus-visible{outline:2px solid #fff;outline-offset:2px;}
+/* Live Streams page: rows that always fill the page. The open card takes room from its
+   neighbours instead of pushing them along, so nothing jumps to another row. */
+.twitch-wall{display:flex;flex-direction:column;gap:12px;}
+.twitch-wall-row{display:flex;gap:12px;}
+.twitch-wall-row .twitch-card{flex:1 1 0;width:auto;min-width:0;}
+.twitch-wall-row .twitch-card.on,.twitch-wall-row .twitch-card.ctrl-focus:not(.off){flex-grow:var(--grow,2.6);width:auto;}
+.twitch-wall-gap{flex:1 1 0;min-width:0;}
+.reduce-motion .twitch-card,.reduce-motion .twitch-thumb,.reduce-motion .twitch-tool{transition:none!important;}
+.no-blur .twitch-card{background:rgba(24,26,32,.7);}
 .twitch-empty{padding:0 40px;font-size:11px;color:var(--t3);}
 
 /* FRIENDS PANEL */
@@ -870,26 +895,8 @@ function ProfileSetup({ onComplete }) {
 }
 
 // ── Friends Panel ─────────────────────────────────────────────────────────────
-function FriendItem({ friend, onInvite }) {
-  return (
-    <div className="friend-item">
-      <div className="friend-avatar-wrap">
-        <img className="friend-avatar" src={friend.avatar} alt={friend.username}/>
-        <div className={`friend-status-dot ${friend.status}`}/>
-      </div>
-      <div className="friend-info">
-        <div className="friend-name">{friend.username}</div>
-        <div className="friend-activity">{friend.activity ? `Playing ${friend.activity}` : friend.status==="offline" ? "Offline" : "Online"}</div>
-      </div>
-      {friend.status!=="offline"&&<button className="friend-invite" onClick={()=>onInvite(friend)}>Invite</button>}
-    </div>
-  );
-}
-
 function FriendsPanel({ launching, toast, onClose, hidden }) {
   const [user,setUser]=useState(null);
-  const [friends,setFriends]=useState([]);
-  const [loading,setLoading]=useState(false);
   const [loggedIn,setLoggedIn]=useState(false);
   const [steamTab,setSteamTab]=useState("aura");
   const [steamId,setSteamId]=useState(()=>localStorage.getItem("aura_steam_id")||"");
@@ -899,36 +906,18 @@ function FriendsPanel({ launching, toast, onClose, hidden }) {
 
   useEffect(()=>{
     if(!window.electronAPI?.isElectron) return;
-    window.electronAPI.onDiscordAuthSuccess(async()=>{ await loadUser(); await loadFriends(); });
+    window.electronAPI.onDiscordAuthSuccess(async()=>{ await loadUser(); });
     return()=>window.electronAPI.removeDiscordAuthListener?.();
   },[]);
 
   const loadUser=async()=>{ const res=await window.electronAPI.discordGetUser(); if(res.success){setUser(res.user);setLoggedIn(true);} };
-  const loadFriends=async()=>{
-    setLoading(true);
-    if(window.electronAPI?.isElectron){
-      // Try RPC friends first (requires Discord desktop running)
-      try {
-        const rpcResult=await window.electronAPI.rpcGetFriends();
-        if(rpcResult.success&&rpcResult.friends.length>0){setFriends(rpcResult.friends);setLoading(false);return;}
-      } catch {}
-      // Fall back to OAuth friends
-      if(loggedIn){
-        const res=await window.electronAPI.discordGetFriends();
-        if(res.success) setFriends(res.friends);
-      }
-    }
-    setLoading(false);
-  };
   const handleLogin=async()=>{ if(!window.electronAPI?.isElectron){toast("Discord only works in the desktop app","err");return;} await window.electronAPI.discordLogin(); toast("Discord login opened in browser — sign in to continue"); };
-  const handleLogout=async()=>{ await window.electronAPI.discordLogout(); setUser(null);setFriends([]);setLoggedIn(false); toast("Disconnected from Discord"); };
-  const handleInvite=async(friend)=>{ if(!launching){toast("Launch a game first to invite friends","err");return;} const res=await window.electronAPI.discordInviteFriend(friend.id,launching.title); if(res.success) toast(`Invite sent to ${friend.username}!`); else toast(`Invite failed: ${res.error}`,"err"); };
+  const handleLogout=async()=>{ await window.electronAPI.discordLogout(); setUser(null);setLoggedIn(false); toast("Disconnected from Discord"); };
 
   return(
     <div className="fp" style={hidden?{display:"none"}:undefined}>
       <div className="fp-hdr" style={{justifyContent:"flex-end"}}>
         <div style={{display:"flex",alignItems:"center",gap:2}}>
-          {loggedIn&&steamTab==="discord"&&<button className="fp-refresh" onClick={loadFriends} title="Refresh"><Ic.Refresh/></button>}
           <button className="fp-refresh" onClick={onClose} title="Hide friends" aria-label="Hide friends panel"><Ic.X/></button>
         </div>
       </div>
@@ -947,7 +936,7 @@ function FriendsPanel({ launching, toast, onClose, hidden }) {
               <div className="fp-login">
                 <div className="fp-login-icon">💬</div>
                 <div className="fp-login-t">Connect Discord</div>
-                <div className="fp-login-s">See friends, their status, and invite them to games</div>
+                <div className="fp-login-s">Connect your Discord profile. Your Discord status shows the game you're playing in AURA.</div>
                 <button className="btn-p" onClick={handleLogin} style={{fontSize:11,padding:"7px 16px",gap:"6px"}}><Ic.Discord/> Login with Discord</button>
               </div>
             ):(
@@ -959,12 +948,8 @@ function FriendsPanel({ launching, toast, onClose, hidden }) {
                     <button className="btn-gh" onClick={handleLogout} style={{fontSize:10,padding:"4px 8px"}}>Logout</button>
                   </div>
                 )}
-                {loading?<div className="fp-empty">Loading friends...</div>:friends.length===0?<div className="fp-empty">No friends found</div>:(
-                  <>
-                    {friends.filter(f=>f.status!=="offline").length>0&&(<><div className="fp-section-label">Online — {friends.filter(f=>f.status!=="offline").length}</div>{friends.filter(f=>f.status!=="offline").map(f=><FriendItem key={f.id} friend={f} onInvite={handleInvite}/>)}</>)}
-                    {friends.filter(f=>f.status==="offline").length>0&&(<><div className="fp-section-label">Offline — {friends.filter(f=>f.status==="offline").length}</div>{friends.filter(f=>f.status==="offline").map(f=><FriendItem key={f.id} friend={f} onInvite={handleInvite}/>)}</>)}
-                  </>
-                )}
+                <div className="fp-empty" style={{lineHeight:1.6,color:"var(--t2)"}}>Your Discord status shows the game you're playing in AURA. Friends, messages and invites are in the AURA tab.</div>
+                <button className="btn-gh" style={{width:"100%",justifyContent:"center",fontSize:11,padding:"7px 10px"}} onClick={()=>window.electronAPI?.openExternal("https://discord.com/channels/@me")}>Open Discord</button>
               </>
             )}
           </>
@@ -1256,15 +1241,6 @@ function FriendActivityShelf() {
     if (!window.electronAPI?.isElectron) { setLoaded(true); return; }
     const fetch = async () => {
       const results = [];
-      // Discord RPC friends
-      try {
-        const rpc = await window.electronAPI.rpcGetFriends();
-        if (rpc.success) {
-          rpc.friends.filter(f => f.activity && f.status !== "offline").forEach(f => {
-            results.push({ id:`discord-${f.id}`, name:f.username, avatar:f.avatar, game:f.activity, source:"discord" });
-          });
-        }
-      } catch {}
       // Steam friends
       try {
         const steamId = localStorage.getItem("aura_steam_id");
@@ -1363,11 +1339,83 @@ function MadeForShelf({ games, username, onPlay, onSelect }) {
 }
 
 // ── Twitch Shelf ──────────────────────────────────────────────────────────────
+// One stream as a pane of glass (see the .twitch-card styles). `on` means it is the open one.
+// Added by aura-twitch-glass-setup.cjs.
+const watchingCount = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + "K" : String(n));
+// `detail` (the Live Streams page) adds what the stream is called.
+function StreamCard({ s, on, onLit, onWatch, detail = false }) {
+  const live = !s.offline;
+  const watch = () => { if (live && onWatch) onWatch(s); };
+  const watching = s.viewers > 0 ? watchingCount(s.viewers) + " watching" : "";
+  return (
+    <div className={"twitch-card" + (on && live ? " on" : "") + (live ? "" : " off")} role={live ? "button" : undefined} tabIndex={live ? 0 : -1}
+      aria-label={live ? "Watch " + s.user + (s.game ? ", playing " + s.game : "") : s.user + " is offline"}
+      onMouseEnter={()=>onLit(live ? s.id : null)} onFocus={()=>onLit(live ? s.id : null)} onClick={watch}
+      onKeyDown={e=>{ if(e.target===e.currentTarget&&(e.key==="Enter"||e.key===" ")){ e.preventDefault(); watch(); } }}>
+      {s.thumbnail ? <img src={s.thumbnail} alt="" className="twitch-thumb" draggable={false}/> : <div className="twitch-thumb-ph">📺</div>}
+      <div className="twitch-sheen"/>
+      <div className="twitch-rest">{s.user}{!live ? <span className="twitch-sub">Offline</span> : detail && s.title ? <span className="twitch-sub">{s.title}</span> : null}</div>
+      {live && <div className="twitch-badge"><div className="twitch-badge-dot"/>LIVE</div>}
+      {live && (
+        <div className="twitch-ov">
+          <div className="twitch-info">
+            <div className="twitch-user">{s.user}</div>
+            <div className="twitch-game">{detail && s.title ? s.title : s.game}</div>
+            <div className="twitch-viewers-row">{detail ? [s.title ? s.game : "", watching].filter(Boolean).join("  ·  ") : watching || s.title}</div>
+          </div>
+          <div className="twitch-tools">
+            <button type="button" className="twitch-tool main" tabIndex={on?0:-1} title="Watch" aria-label={"Watch " + s.user} onClick={e=>{e.stopPropagation();watch();}}>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5.2v13.6a.6.6 0 0 0 .92.5l10.6-6.8a.6.6 0 0 0 0-1L8.92 4.7A.6.6 0 0 0 8 5.2z"/></svg>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A page of streams: rows of glass that always fill the page. The one you point at opens, and
+// its neighbours make room, so nothing jumps to another row. Rows are cut to fit the space.
+function StreamWall({ streams, onWatch }) {
+  const box = useRef(null);
+  const [space, setSpace] = useState(0);
+  const [lit, setLit] = useState(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => { if (el.clientWidth > 0) setSpace(el.clientWidth); };
+    measure();
+    const watcher = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    watcher?.observe(el);
+    window.addEventListener("resize", measure);
+    return () => { watcher?.disconnect(); window.removeEventListener("resize", measure); };
+  }, []);
+  const GAP = 12, REST = 172, OPEN = 392;
+  const width = space || 1000;
+  const perRow = Math.max(3, Math.floor((width + GAP) / REST));
+  const room = width - GAP * (perRow - 1);
+  // How much more than a neighbour the open card takes, so it comes out close to the picture's shape
+  const grow = room > OPEN + 70 * (perRow - 1) ? (OPEN * (perRow - 1)) / (room - OPEN) : 2.4;
+  const rows = [];
+  for (let i = 0; i < streams.length; i += perRow) rows.push(streams.slice(i, i + perRow));
+  return (
+    <div className="twitch-wall" ref={box} style={{"--grow": grow.toFixed(3)}} onMouseLeave={()=>setLit(null)} onBlur={e=>{ if(!e.currentTarget.contains(e.relatedTarget)) setLit(null); }}>
+      {rows.map(row => (
+        <div className="twitch-wall-row" key={row[0].id}>
+          {row.map(s => <StreamCard key={s.id} s={s} on={lit === s.id} onLit={setLit} onWatch={onWatch} detail/>)}
+          {Array.from({ length: perRow - row.length }, (_, i) => <div className="twitch-wall-gap" key={"gap" + i}/>)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TwitchShelf({ games, onStreamClick }) {
   const [streams, setStreams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [customLogins, setCustomLogins] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
   const [showInput, setShowInput] = useState(false);
+  const [lit, setLit] = useState(null); // the stream you are pointing at: its card is open
   const rowRef = useRef(null);
 
   const scroll = (dir) => {
@@ -1432,19 +1480,8 @@ function TwitchShelf({ games, onStreamClick }) {
         : (
           <div style={{position:"relative"}}>
             <button onClick={()=>scroll(-1)} style={{position:"absolute",left:16,top:"50%",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,.7)",border:"1px solid rgba(255,255,255,.15)",color:"#fff",borderRadius:"50%",width:36,height:36,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:18,backdropFilter:"blur(6px)"}}>‹</button>
-            <div className="twitch-row" ref={rowRef}>
-              {streams.map(s => (
-                <div key={s.id} className="twitch-card" onClick={()=>onStreamClick&&onStreamClick(s)}>
-                  {s.thumbnail ? <img src={s.thumbnail} alt={s.user} className="twitch-thumb"/> : <div className="twitch-thumb-ph">📺</div>}
-                  <div className="twitch-badge"><div className="twitch-badge-dot"/>LIVE</div>
-                  <div className="twitch-ov">
-                    <div className="twitch-user">{s.user}</div>
-                    <div className="twitch-game">{s.game}</div>
-                    <div className="twitch-viewers-row"><div className="twitch-viewer-dot"/>{fmtViewers(s.viewers)} Viewers</div>
-                    <button className="twitch-watch-btn" onClick={e=>{e.stopPropagation();onStreamClick&&onStreamClick(s);}}>Watch Stream</button>
-                  </div>
-                </div>
-              ))}
+            <div className="twitch-row" ref={rowRef} onMouseLeave={()=>setLit(null)} onBlur={e=>{ if(!e.currentTarget.contains(e.relatedTarget)) setLit(null); }}>
+              {streams.map(s => <StreamCard key={s.id} s={s} on={lit === s.id} onLit={setLit} onWatch={st=>onStreamClick&&onStreamClick(st)}/>)}
             </div>
             <button onClick={()=>scroll(1)} style={{position:"absolute",right:16,top:"50%",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,.7)",border:"1px solid rgba(255,255,255,.15)",color:"#fff",borderRadius:"50%",width:36,height:36,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:18,backdropFilter:"blur(6px)"}}>›</button>
           </div>
@@ -1530,6 +1567,9 @@ function ProfileModal({ profile, onClose, onSave }) {
 // ── Streams View ──────────────────────────────────────────────────────────────
 function StreamsView({ games, initialStream, onClear, onStreamChange }) {
   const [activeStream, setActiveStream] = useState(initialStream||null);
+  // Keep in step with the rest of AURA: a stream picked on Home opens here, and closing the
+  // mini-player closes it here too (which is what shuts the Twitch player down).
+  useEffect(() => { setActiveStream(initialStream || null); }, [initialStream]);
 
   const updateStream = (s) => {
     setActiveStream(s);
@@ -1634,13 +1674,6 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
 
   const playerContainerRef = useRef(null);
   const chatContainerRef = useRef(null);
-  const [volume, setVolume] = useState(() => Math.round(SETTINGS.streamVolume * 100));
-  const [muted, setMuted] = useState(() => SETTINGS.streamVolume === 0);
-
-  const setStreamVolume = (vol, mut) => {
-    if (!window.electronAPI?.isElectron) return;
-    window.electronAPI.streamSetVolume?.({ volume: vol, muted: mut });
-  };
 
   // Open BrowserView when stream selected
   useEffect(() => {
@@ -1660,9 +1693,6 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
             channel: activeStream.userLogin || activeStream.user,
             bounds: { x: Math.round(pr.x), y: Math.round(pr.y), width: Math.round(pr.width), height: Math.round(pr.height) }
           });
-          // Apply the default volume once the Twitch player has loaded its video
-          const v = Math.round(SETTINGS.streamVolume * 100);
-          [2500, 6000].forEach(d => setTimeout(() => window.electronAPI.streamSetVolume?.({ volume: v, muted: v === 0 }), d));
         }
         if (chatContainerRef.current && chatOpen && !restored?.success) {
           await window.electronAPI.chatOpen({
@@ -1711,21 +1741,10 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
           <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:14,fontWeight:700,color:"var(--t1)",letterSpacing:.3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeStream.user}</div>
           <div style={{fontSize:10,color:"var(--t2)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeStream.title}</div>
         </div>
-        <div style={{fontSize:10,color:"#9147ff",fontWeight:700}}>{activeStream.game}</div>
+        <div style={{fontSize:10,color:"var(--t2)",fontWeight:700}}>{activeStream.game}</div>
         <div style={{fontSize:10,color:"var(--t3)"}}>👁 {fmtViewers(activeStream.viewers)}</div>
         <button onClick={()=>setFull(!fullRef.current)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>{isStreamFull?"⊠ Exit Full":"⛶ Full"}</button>
         <button onClick={()=>setChatOpen(o=>!o)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>{chatOpen?"Hide Chat":"Show Chat"}</button>
-        {/* Volume controls */}
-        <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-          <button onClick={()=>{const m=!muted;setMuted(m);setStreamVolume(volume,m);}} style={{background:"none",border:"none",color:"var(--t2)",cursor:"pointer",fontSize:14,padding:"0 2px"}}>
-            {muted || volume===0 ? "🔇" : volume < 50 ? "🔉" : "🔊"}
-          </button>
-          <input type="range" min={0} max={100} value={muted ? 0 : volume}
-            onChange={e=>{const v=parseInt(e.target.value);setVolume(v);setMuted(v===0);setStreamVolume(v,v===0);}}
-            style={{width:70,accentColor:"var(--ac)",cursor:"pointer"}}
-          />
-          <span style={{fontSize:10,color:"var(--t3)",minWidth:24}}>{muted?0:volume}%</span>
-        </div>
         <button onClick={()=>{setActiveStream(null);onStreamChange?.(null);onClear&&onClear();}} style={{background:"rgba(255,77,109,.1)",border:"1px solid rgba(255,77,109,.3)",color:"var(--danger)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>✕ Close</button>
       </div>
     </div>
@@ -1756,7 +1775,7 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
 
 
   return (
-    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:"var(--bg)",height:"100%"}}>
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:activeStream?"var(--bg)":"transparent",height:"100%"}}>
       {/* Full view: the only part of AURA the player doesn't cover. Always a way out. */}
       {isStreamFull && activeStream && window.electronAPI?.isElectron && (
         <div className="stream-full-bar" style={{position:"fixed",top:0,left:0,right:0,height:44,zIndex:5000,background:"#0e0e10",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,padding:"0 16px",boxSizing:"border-box"}}>
@@ -1811,27 +1830,7 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
                   {searchResults.channels.filter(c=>c.isLive).length} live · {searchResults.channels.filter(c=>!c.isLive).length} offline
                 </span>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12}}>
-                {searchResults.channels.map(c=>(
-                  <div key={c.id}
-                    onClick={()=>c.isLive&&updateStream({id:c.id,user:c.name,userLogin:c.login,title:c.title,game:c.game,viewers:0,thumbnail:c.thumbnail,url:`https://twitch.tv/${c.login}`})}
-                    style={{borderRadius:12,overflow:"hidden",cursor:c.isLive?"pointer":"default",background:"var(--card)",border:`1px solid ${c.isLive?"var(--border)":"rgba(255,255,255,.04)"}`,transition:"all .2s",opacity:c.isLive?1:0.5}}
-                    onMouseEnter={e=>{if(c.isLive){e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.borderColor="#9147ff55";}}}
-                    onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.borderColor=c.isLive?"var(--border)":"rgba(255,255,255,.04)";}}>
-                    <div style={{position:"relative",aspectRatio:"16/9",background:"#1a1a2e",overflow:"hidden"}}>
-                      {c.thumbnail&&<img src={c.thumbnail} alt={c.name} style={{width:"100%",height:"100%",objectFit:"cover",filter:c.isLive?"none":"grayscale(0.8)"}}/>}
-                      <div style={{position:"absolute",top:8,left:8,background:c.isLive?"linear-gradient(90deg,#eb0400,#9147ff)":"rgba(0,0,0,.6)",color:"#fff",fontSize:9,fontWeight:800,padding:"2px 8px",borderRadius:20,letterSpacing:1.5}}>
-                        {c.isLive?"LIVE":"OFFLINE"}
-                      </div>
-                    </div>
-                    <div style={{padding:"10px 12px"}}>
-                      <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:14,fontWeight:700,color:"var(--t1)"}}>{c.name}</div>
-                      <div style={{fontSize:10,color:"#9147ff",fontWeight:700,marginTop:2}}>{c.game||"—"}</div>
-                      <div style={{fontSize:10,color:"var(--t2)",marginTop:3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c.isLive?c.title:"Channel is offline"}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <StreamWall streams={searchResults.channels.map(c=>({id:c.id,user:c.name,userLogin:c.login,title:c.title,game:c.game,viewers:0,thumbnail:c.thumbnail,url:"https://twitch.tv/"+c.login,offline:!c.isLive}))} onWatch={updateStream}/>
             </div>
           )}
           {searchResults.games?.length > 0 && (
@@ -1853,25 +1852,7 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
           {searchResults.gameStreams?.length > 0 && (
             <div style={{marginBottom:28}}>
               <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:15,fontWeight:700,letterSpacing:1.5,color:"var(--t1)",marginBottom:12}}>STREAMS</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:14}}>
-                {searchResults.gameStreams.map(s=>(
-                  <div key={s.id} onClick={()=>updateStream(s)}
-                    style={{borderRadius:12,overflow:"hidden",cursor:"pointer",background:"var(--card)",border:"1px solid var(--border)",transition:"all .2s"}}
-                    onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.borderColor="#9147ff55";}}
-                    onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.borderColor="var(--border)";}}>
-                    <div style={{position:"relative",aspectRatio:"16/9",overflow:"hidden"}}>
-                      {s.thumbnail&&<img src={s.thumbnail} alt={s.user} style={{width:"100%",height:"100%",objectFit:"cover"}}/>}
-                      <div style={{position:"absolute",top:8,left:8,background:"linear-gradient(90deg,#eb0400,#9147ff)",color:"#fff",fontSize:9,fontWeight:800,padding:"2px 8px",borderRadius:20,letterSpacing:1.5}}>LIVE</div>
-                      <div style={{position:"absolute",top:8,right:8,background:"rgba(0,0,0,.75)",color:"#fff",fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:20}}>👁 {fmtViewers(s.viewers)}</div>
-                    </div>
-                    <div style={{padding:"10px 12px"}}>
-                      <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:14,fontWeight:700,color:"var(--t1)"}}>{s.user}</div>
-                      <div style={{fontSize:10,color:"#9147ff",fontWeight:700,marginTop:2}}>{s.game}</div>
-                      <div style={{fontSize:10,color:"var(--t2)",marginTop:3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.title}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <StreamWall streams={searchResults.gameStreams} onWatch={updateStream}/>
             </div>
           )}
           {!searching&&!searchResults.channels?.length&&!searchResults.games?.length&&!searchResults.gameStreams?.length&&(
@@ -1893,34 +1874,7 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
               <div style={{fontSize:11}}>Add streamer names above or launch AURA with your game library</div>
             </div>
           ) : (
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
-              {streams.map(s => (
-                <div key={s.id} onClick={()=>updateStream(s)} style={{borderRadius:12,overflow:"hidden",cursor:"pointer",background:"var(--card)",border:"1px solid var(--border)",transition:"transform .2s,box-shadow .2s",position:"relative"}}
-                  onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-4px)";e.currentTarget.style.boxShadow="0 16px 40px rgba(0,0,0,.6),0 0 0 1px #9147ff55";}}
-                  onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="none";}}>
-                  <div style={{position:"relative",aspectRatio:"16/9",overflow:"hidden"}}>
-                    {s.thumbnail
-                      ? <img src={s.thumbnail} alt={s.user} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
-                      : <div style={{width:"100%",height:"100%",background:"linear-gradient(135deg,#1a1a2e,#2d1b69)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36}}>📺</div>
-                    }
-                    <div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(0,0,0,.6) 0%,transparent 60%)"}}/>
-                    <div style={{position:"absolute",top:8,left:8,background:"linear-gradient(90deg,#eb0400,#9147ff)",color:"#fff",fontSize:9,fontWeight:800,padding:"3px 8px",borderRadius:20,letterSpacing:1.5,display:"flex",alignItems:"center",gap:4}}>
-                      <div style={{width:5,height:5,borderRadius:"50%",background:"#fff"}}/>LIVE
-                    </div>
-                    <div style={{position:"absolute",top:8,right:8,background:"rgba(0,0,0,.75)",color:"#fff",fontSize:9,fontWeight:700,padding:"3px 8px",borderRadius:20,backdropFilter:"blur(4px)"}}>👁 {fmtViewers(s.viewers)}</div>
-                    <div style={{position:"absolute",bottom:8,left:8,right:8,display:"flex",alignItems:"center",gap:8}}>
-                      <div style={{flex:1}}/>
-                      <div style={{background:"rgba(145,71,255,.9)",color:"#fff",borderRadius:8,padding:"6px 14px",fontSize:11,fontWeight:700,fontFamily:"Rajdhani,sans-serif",letterSpacing:1}}>▶ Watch</div>
-                    </div>
-                  </div>
-                  <div style={{padding:"12px 14px"}}>
-                    <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:15,fontWeight:700,color:"var(--t1)",letterSpacing:.3,marginBottom:3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.user}</div>
-                    <div style={{fontSize:11,color:"var(--t2)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",marginBottom:4}}>{s.title}</div>
-                    <div style={{fontSize:10,color:"#9147ff",fontWeight:700}}>{s.game}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <StreamWall streams={streams} onWatch={updateStream}/>
           )}
         </div>
       )}
@@ -2955,7 +2909,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
               <SetRange value={s.uiVolume} min={0} max={1} step={0.05} onChange={v=>set({uiVolume:v})} format={pct}/>
               <button className="btn-gh" style={{fontSize:11,padding:"5px 10px"}} onClick={()=>playSfx("notify")}>Test</button>
             </div></div>
-          <div className="sr"><div><div className="sr-l">Stream &amp; Trailer Volume</div><div className="sr-s">Starting volume for Twitch streams and game trailers</div></div>
+          <div className="sr"><div><div className="sr-l">Trailer Volume</div><div className="sr-s">Starting volume for game trailers. Streams use the Twitch player's own volume control.</div></div>
             <SetRange value={s.streamVolume} min={0} max={1} step={0.05} onChange={v=>set({streamVolume:v})} format={pct}/></div>
         </div>
       </div>
@@ -3171,59 +3125,67 @@ function useController({ view, goTo, navItems, heroGame, setHeroGame, modal, set
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
-function PipBox({ activeStream, onOpen, onClose, onMove }) {
-  const [pos, setPos] = useState({ x: window.innerWidth - 400, y: window.innerHeight - 250 });
-  const dragging = useRef(false);
-  const dragOffset = useRef({ x: 0, y: 0 });
+// The mini-player: shown while a stream is playing and you are on another page. The Twitch player is a separate
+// layer on top of AURA's page, so anything AURA draws underneath it can't be seen or clicked.
+// The bar with the buttons therefore sits above the player, never over it (Twitch's rules also
+// say nothing may cover the player), and the player is kept at Twitch's minimum size or larger.
+const PIP = { width: 400, height: 300, bar: 34, edge: 2, gap: 20 };
+let pipLastSpot = null; // where you last dragged it, until AURA closes
+function PipBox({ activeStream, zoom = 1, onOpen, onClose }) {
+  // At a smaller UI size one page pixel is less than one screen pixel, so the box grows to match
+  const scale = Math.min(1, Number(zoom) > 0 ? Number(zoom) : 1);
+  const width = Math.ceil(PIP.width / scale), height = Math.ceil(PIP.height / scale);
+  const boxW = width + PIP.edge * 2, boxH = height + PIP.bar + PIP.edge * 2;
+  const inside = (p) => ({
+    x: Math.max(0, Math.min(window.innerWidth - boxW, Math.round(p.x))),
+    y: Math.max(0, Math.min(window.innerHeight - boxH, Math.round(p.y))),
+  });
+  const [pos, setPos] = useState(() => inside(pipLastSpot || { x: window.innerWidth - boxW - PIP.gap, y: window.innerHeight - boxH - PIP.gap }));
+  const move = (next) => setPos((p) => { const n = inside(next || p); return n.x === p.x && n.y === p.y ? p : n; });
+  const holder = useRef(null);
+  const drag = useRef(null);
 
-  const onMouseDown = (e) => {
-    dragging.current = true;
-    dragOffset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
+  // Puts the Twitch player exactly over the black area under the bar
+  const place = () => {
+    const el = holder.current;
+    if (!el || !window.electronAPI?.streamPip) return;
+    const r = el.getBoundingClientRect();
+    window.electronAPI.streamPip({ x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) });
+  };
+  useEffect(() => { pipLastSpot = pos; place(); }, [pos.x, pos.y, width, height]);
+  useEffect(() => {
+    // Once more after the page has settled, and keep it inside the window when that changes size
+    const later = [200, 700].map((ms) => setTimeout(place, ms));
+    const onResize = () => move();
+    window.addEventListener("resize", onResize);
+    return () => { later.forEach(clearTimeout); window.removeEventListener("resize", onResize); };
+  }, [width, height]);
+
+  // Drag by the bar
+  const onDown = (e) => {
+    if (e.button !== 0 || e.target.closest("button")) return;
+    drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
     e.preventDefault();
   };
+  const onDrag = (e) => {
+    if (!drag.current) return;
+    if (e.buttons === 0) { drag.current = null; return; } // the button was let go somewhere we couldn't see
+    move({ x: e.clientX - drag.current.dx, y: e.clientY - drag.current.dy });
+  };
+  const onUp = () => { drag.current = null; };
 
-  useEffect(() => {
-    const onMouseMove = async (e) => {
-      if (!dragging.current) return;
-      const nx = Math.max(0, Math.min(window.innerWidth - 360, e.clientX - dragOffset.current.x));
-      const ny = Math.max(0, Math.min(window.innerHeight - 203, e.clientY - dragOffset.current.y));
-      setPos({ x: nx, y: ny });
-      const winPos = await window.electronAPI?.getWindowPos?.() || { x: 0, y: 0 };
-      onMove?.(Math.round(winPos.x + nx), Math.round(winPos.y + ny));
-    };
-    const onMouseUp = () => { dragging.current = false; };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, []);
-
-  // Notify parent of initial position with window offset
-  useEffect(() => {
-    (async () => {
-      const winPos = await window.electronAPI?.getWindowPos?.() || { x: 0, y: 0 };
-      onMove?.(Math.round(winPos.x + pos.x), Math.round(winPos.y + pos.y));
-    })();
-  }, []);
-
+  const button = { border: "none", color: "#fff", borderRadius: 6, height: 24, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "DM Sans,sans-serif", flexShrink: 0 };
   return (
-    <div style={{
-      position:"fixed", left:pos.x, top:pos.y, width:360, height:203,
-      borderRadius:12, overflow:"hidden", zIndex:800,
-      boxShadow:"0 8px 32px rgba(0,0,0,.8)",
-      border:"2px solid var(--ac)",
-      background:"#000",
-    }}>
-      <div onMouseDown={onMouseDown} style={{position:"absolute",top:0,left:0,right:0,padding:"6px 10px",background:"linear-gradient(to bottom,rgba(0,0,0,.8),transparent)",display:"flex",alignItems:"center",justifyContent:"space-between",zIndex:1,cursor:"grab"}}>
-        <span style={{fontSize:11,fontWeight:700,color:"#fff",fontFamily:"DM Sans,sans-serif"}}>⠿ {activeStream.user}</span>
-        <div style={{display:"flex",gap:6}}>
-          <button onClick={onOpen} style={{background:"var(--ac)",border:"none",color:"#fff",borderRadius:6,padding:"2px 8px",fontSize:10,cursor:"pointer",fontWeight:700}}>Open</button>
-          <button onClick={onClose} style={{background:"rgba(255,255,255,.15)",border:"none",color:"#fff",borderRadius:6,padding:"2px 8px",fontSize:10,cursor:"pointer"}}>✕</button>
-        </div>
+    <div className="pip-box" style={{position:"fixed",left:pos.x,top:pos.y,width:boxW,height:boxH,boxSizing:"border-box",zIndex:800,display:"flex",flexDirection:"column",border:PIP.edge+"px solid var(--ac)",borderRadius:"10px 10px 0 0",background:"#000",boxShadow:"0 8px 32px rgba(0,0,0,.8)"}}>
+      <div className="pip-bar" onPointerDown={onDown} onPointerMove={onDrag} onPointerUp={onUp} onPointerCancel={onUp} title="Drag to move"
+        style={{height:PIP.bar,flexShrink:0,display:"flex",alignItems:"center",gap:8,padding:"0 6px 0 10px",background:"#0e0e10",borderRadius:"8px 8px 0 0",cursor:"grab",userSelect:"none",touchAction:"none"}}>
+        <span aria-hidden="true" style={{color:"rgba(255,255,255,.5)",fontSize:12}}>⠿</span>
+        <span style={{flex:1,minWidth:0,fontSize:12,fontWeight:700,color:"#fff",fontFamily:"DM Sans,sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeStream.user}</span>
+        <button type="button" className="pip-open" onClick={onOpen} title="Back to Live Streams" style={{...button,background:"var(--ac)",padding:"0 10px"}}>Open</button>
+        <button type="button" className="pip-close" onClick={onClose} title="Close stream" aria-label="Close stream" style={{...button,background:"rgba(255,77,109,.18)",border:"1px solid rgba(255,77,109,.45)",color:"#ff7a92",width:28,fontSize:13}}>✕</button>
       </div>
-      <div id="pip-stream-container" style={{width:"100%",height:"100%"}}/>
+      <div id="pip-stream-container" ref={holder} style={{width,height,flexShrink:0,background:"#000"}}/>
     </div>
   );
 }
@@ -3363,27 +3325,6 @@ function AuraApp(){
     });
   }, []);
   const [activeStream, setActiveStream] = useState(null);
-// Move stream BrowserView to PiP when leaving streams view
-  useEffect(() => {
-    if (!activeStream || !window.electronAPI?.isElectron) return;
-    if (view === "streams") return;
-    setTimeout(async () => {
-      const pip = document.getElementById("pip-stream-container");
-      if (pip) {
-        const r = pip.getBoundingClientRect();
-        if (r.width > 0) {
-          // Get actual window position to offset correctly
-          const winPos = await window.electronAPI.getWindowPos?.() || { x: 0, y: 0 };
-          window.electronAPI.streamPip({
-            x: Math.round(winPos.x + r.x),
-            y: Math.round(winPos.y + r.y),
-            width: Math.round(r.width),
-            height: Math.round(r.height)
-          });
-        }
-      }
-    }, 150);
-  }, [view, activeStream]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Friends panel: open/closed, remembered between launches
   const [friendsOpen, setFriendsOpen] = useState(()=>localStorage.getItem("aura_friends_open")!=="0");
@@ -3799,7 +3740,7 @@ function AuraApp(){
             <PageBoundary name="streams"><StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)} onStreamChange={s=>setActiveStream(s)}/></PageBoundary>
           </div>
                     <div style={{display:view==="social"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden",minHeight:0}}>
-            <PageBoundary name="social"><SocialPage visible={view==="social"}/></PageBoundary>
+            <PageBoundary name="social"><SocialPage visible={view==="social"} onShow={()=>goTo("social")}/></PageBoundary>
           </div>
 
           {view==="customize"&&<PageBoundary name="customize"><Customize
@@ -3836,7 +3777,7 @@ function AuraApp(){
 
       {/* PiP stream player - shows when stream is active but not on streams view */}
       {activeStream && view !== "streams" && window.electronAPI?.isElectron && (
-        <PipBox activeStream={activeStream} onOpen={()=>goTo("streams")} onClose={()=>setActiveStream(null)} onMove={(x,y)=>window.electronAPI.streamPip({x,y,width:360,height:203})}/>
+        <PipBox activeStream={activeStream} zoom={settings.zoom} onOpen={()=>goTo("streams")} onClose={()=>{ window.electronAPI?.streamClose?.(); window.electronAPI?.chatClose?.(); setActiveStream(null); }}/>
       )}
 
       {quickPickerModal}

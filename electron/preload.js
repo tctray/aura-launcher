@@ -69,13 +69,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   discordLogin:         ()                     => ipcRenderer.invoke("discord-login"),
   discordLogout:        ()                     => ipcRenderer.invoke("discord-logout"),
   discordGetUser:       ()                     => ipcRenderer.invoke("discord-get-user"),
-  discordGetFriends:    ()                     => ipcRenderer.invoke("discord-get-friends"),
-  discordInviteFriend:  (friendId, gameName)   => ipcRenderer.invoke("discord-invite-friend", friendId, gameName),
   onDiscordAuthSuccess: (cb)                   => ipcRenderer.on("discord-auth-success", cb),
   removeDiscordAuthListener: ()                => ipcRenderer.removeAllListeners("discord-auth-success"),
-
-  // ── Discord RPC ──────────────────────────────────────────────────────────────
-  rpcGetFriends: () => ipcRenderer.invoke("rpc-get-friends"),
 
   // ── Trailers ─────────────────────────────────────────────────────────────────
   fetchTrailer: (title) => ipcRenderer.invoke("fetch-trailer", title),
@@ -124,7 +119,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   streamExitFull:  ()      => ipcRenderer.invoke("stream-exit-full"),
   // Esc was pressed inside the Twitch player while it filled the window
   onStreamExitFull:(cb)    => { const h = () => cb(); ipcRenderer.on("stream-exit-full", h); return () => ipcRenderer.removeListener("stream-exit-full", h); },
-  streamSetVolume:(opts)  => ipcRenderer.invoke("stream-set-volume", opts),
   streamRestore: (opts)  => ipcRenderer.invoke("stream-restore", opts),
   streamOpen:   (opts)   => ipcRenderer.invoke("stream-open", opts),
   streamResize: (bounds) => ipcRenderer.invoke("stream-resize", bounds),

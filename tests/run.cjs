@@ -22,6 +22,7 @@ const sqlDir = path.join(ROOT, "supabase");
 const steps = [];
 const add = (group, title, file, args = []) => steps.push({ group, title, file: path.join(__dirname, file), args });
 add("files", "Project files", "static.cjs");
+if (fs.existsSync(path.join(__dirname, "platform-rules.cjs"))) add("files", "Twitch and Discord rules", "platform-rules.cjs");
 if (fs.existsSync(errorlog)) add("files", "The error log", "errorlog.cjs", [errorlog]);
 const shareFile = path.join(ROOT, "electron", "share.js");
 if (fs.existsSync(shareFile) && fs.existsSync(path.join(__dirname, "share.cjs"))) add("files", "Sharing clips", "share.cjs", [shareFile]);
@@ -68,6 +69,9 @@ if (fs.existsSync(avatarFile) && fs.existsSync(path.join(__dirname, "avatars.cjs
 const securityFile = path.join(ROOT, "electron", "security.js");
 if (fs.existsSync(securityFile) && fs.existsSync(path.join(__dirname, "security.cjs"))) add("files", "Security: windows, links, games and clip files", "security.cjs", [securityFile]);
 add("window", "The window opens and every page loads", "window.cjs");
+if (fs.existsSync(path.join(__dirname, "twitch-glass.cjs"))) add("window", "Twitch streams as glass cards", "twitch-glass.cjs");
+if (fs.existsSync(path.join(__dirname, "video-popout.cjs"))) add("window", "Videos pop out of the Social browser", "video-popout.cjs");
+if (fs.existsSync(path.join(__dirname, "miniplayer.cjs"))) add("window", "The stream mini-player", "miniplayer.cjs");
 if (fs.existsSync(path.join(__dirname, "login.cjs"))) add("window", "Staying logged in when AURA restarts", "login.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed

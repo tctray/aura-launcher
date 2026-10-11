@@ -34,6 +34,35 @@ const SITES = [
   { id: "browser",   label: "Browser",   url: "about:blank" }, // starts on AURA's start page
 ];
 
+// ── Pop-out video (Browser tab) ───────────────────────────────────────────────
+// Added by aura-video-popout-setup.cjs.
+// When a video with sound is playing in the Browser tab and you go somewhere else in AURA, the
+// video pops out into the browser's own picture-in-picture window (the same one Chrome and Edge
+// have), so it keeps playing where you can see it. Coming back puts it back in the page.
+//
+// These three snippets are everything AURA runs in the page. They ask the browser to show the
+// video in its own window, to put it back, or where it is now. The page itself is left exactly
+// as it is: nothing is hidden, blocked, muted or changed, and ads play as they normally would.
+// A video that says it must not be popped out is left alone.
+const POPOUT_KEY = "aura_video_popout";
+const POP_OUT = `(async () => {
+  try {
+    if (!document.pictureInPictureEnabled) return "unsupported";
+    if (document.pictureInPictureElement) return "out";
+    const playing = [...document.querySelectorAll("video")].filter((v) => !v.paused && !v.ended && v.readyState > 2 && !v.muted && v.volume > 0 && !v.disablePictureInPicture);
+    playing.sort((a, b) => b.videoWidth * b.videoHeight - a.videoWidth * a.videoHeight);
+    if (!playing.length) return "none";
+    await playing[0].requestPictureInPicture();
+    return "out";
+  } catch (e) { return "failed"; }
+})()`;
+const POP_IN = `(async () => { try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); } catch (e) {} return "in"; })()`;
+// "out" = in its own window, "page" = playing in the page, "idle" = not playing
+const POP_WHERE = `(() => {
+  if (document.pictureInPictureElement) return "out";
+  return [...document.querySelectorAll("video")].some((v) => !v.paused && !v.ended && !v.muted && v.volume > 0) ? "page" : "idle";
+})()`;
+
 // Turn what's typed in the address bar into a URL (or a Google search)
 function toUrl(text) {
   const t = text.trim();
@@ -99,13 +128,14 @@ const icons = {
   star: <path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z" />,
   bookmarks: (<><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z" /></>),
   more: (<><circle cx="12" cy="5.5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="18.5" r="1" /></>),
+  popout: (<><rect x="3" y="5" width="18" height="14" rx="2" /><rect x="12.5" y="12" width="6" height="4.5" rx="1" fill="currentColor" stroke="none" /></>),
 };
 const Svg = ({ name, filled = false, size = 16 }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill={filled ? "currentColor" : "none"} stroke="currentColor"
        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{icons[name]}</svg>
 );
 
-export default function SocialPage({ visible = true }) {
+export default function SocialPage({ visible = true, onShow }) {
   const isElectron = !!window.electronAPI?.isElectron;
   const [active, setActive] = useState(() => {
     try { return localStorage.getItem("aura_social_tab") || "instagram"; } catch { return "instagram"; }
@@ -161,6 +191,49 @@ export default function SocialPage({ visible = true }) {
   const isBrowser = active === "browser";
   const showStart = isBrowser && (browserHome || !st.url || st.url === "about:blank");
   const reload = () => { try { wv?.reload(); } catch {} };
+
+  // Pop-out video (see POP_OUT at the top). "Showing" means the Browser tab's page is on screen.
+  const [popOut, setPopOut] = useState(() => { try { return localStorage.getItem(POPOUT_KEY) !== "0"; } catch { return true; } });
+  const [popped, setPopped] = useState(false);
+  const browserShowing = visible && isBrowser && !showStart;
+  const wasShowing = useRef(browserShowing);
+  const inPage = (code, asUser = false) => {
+    const view = views.current.browser;
+    try { return view ? Promise.resolve(view.executeJavaScript(code, asUser)).catch(() => "") : Promise.resolve(""); } catch { return Promise.resolve(""); }
+  };
+  useEffect(() => {
+    const before = wasShowing.current;
+    wasShowing.current = browserShowing;
+    if (before === browserShowing) return;
+    if (browserShowing) { setPopped(false); inPage(POP_IN); return; }
+    if (!popOut) return;
+    let sound = false;
+    try { sound = !!views.current.browser?.isCurrentlyAudible(); } catch {}
+    // Leaving the page counts as asking for it: browsers only open that window on a person's say-so
+    if (sound) inPage(POP_OUT, true).then((where) => {
+      if (where !== "out") return;
+      if (wasShowing.current) inPage(POP_IN); // you were already back before it opened
+      else setPopped(true);
+    });
+  }, [browserShowing]);
+  // While it's out, notice when it comes back. "Back to tab" on the small window means "show me
+  // the page", so AURA opens it. Closing the small window stops the video, and nothing else happens.
+  useEffect(() => {
+    if (!popped) return;
+    const timer = setInterval(() => {
+      inPage(POP_WHERE).then((where) => {
+        if (where === "out" || wasShowing.current) return;
+        setPopped(false);
+        if (where === "page") { setBrowserHome(false); choose("browser"); onShow?.(); }
+      });
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [popped]);
+  const togglePopOut = () => {
+    const next = !popOut;
+    setPopOut(next);
+    try { localStorage.setItem(POPOUT_KEY, next ? "1" : "0"); } catch {}
+  };
 
   // Bookmarks (Browser tab): the star saves the page you're on, the bar lists what you've saved
   const [bookmarks, setBookmarks] = useState(loadBookmarks);
@@ -252,6 +325,13 @@ export default function SocialPage({ visible = true }) {
         )}
         {isBrowser && (
           <button style={tool} onClick={goHome} title="Home" aria-label="Home"><Svg name="home" /></button>
+        )}
+        {isBrowser && (
+          <button className="popout-toggle" style={{ ...tool, color: popOut ? "var(--ac)" : "var(--t2)", background: popOut ? "var(--card)" : "transparent" }} onClick={togglePopOut} aria-pressed={popOut}
+                  title={popOut ? "On: a video playing here pops out into a small window when you go to another page. Click to turn off." : "Off: videos stay in the page when you go to another page. Click to pop them out into a small window."}
+                  aria-label="Pop videos out when you leave this page">
+            <Svg name="popout" />
+          </button>
         )}
         <button style={tool} onClick={reload} title="Reload" aria-label="Reload"><Svg name="reload" /></button>
         <button style={tool} onClick={openOutside} title="Open in your browser" aria-label="Open in your browser">

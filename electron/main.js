@@ -964,58 +964,8 @@ ipcMain.handle("discord-get-user", async () => {
   } catch(e) { return { success: false, error: e.message }; }
 });
 
-ipcMain.handle("discord-get-friends", async () => {
-  if (!discordToken) return { success: false, error: "Not logged in" };
-  try {
-    const res = await axios.get("https://discord.com/api/users/@me/relationships", {
-      headers: { Authorization: `Bearer ${discordToken}` },
-    });
-    const friends = res.data.filter(r => r.type === 1).map(r => ({
-      id:       r.id,
-      username: r.user.username,
-      avatar:   r.user.avatar
-        ? `https://cdn.discordapp.com/avatars/${r.user.id}/${r.user.avatar}.png`
-        : `https://cdn.discordapp.com/embed/avatars/0.png`,
-      status:   r.presence?.status || "offline",
-      activity: r.presence?.activities?.[0]?.name || null,
-    }));
-    return { success: true, friends };
-  } catch(e) { return { success: false, error: e.message }; }
-});
-
-ipcMain.handle("discord-invite-friend", async (_e, friendId, gameName) => {
-  if (!discordToken) return { success: false, error: "Not logged in" };
-  try {
-    const dm = await axios.post(
-      "https://discord.com/api/users/@me/channels",
-      { recipient_id: friendId },
-      { headers: { Authorization: `Bearer ${discordToken}`, "Content-Type": "application/json" } }
-    );
-    await axios.post(
-      `https://discord.com/api/channels/${dm.data.id}/messages`,
-      { content: `🎮 Hey! Join me in **${gameName}** on AURA Game Launcher!` },
-      { headers: { Authorization: `Bearer ${discordToken}`, "Content-Type": "application/json" } }
-    );
-    return { success: true };
-  } catch(e) { return { success: false, error: e.message }; }
-});
-
-// ── Discord RPC friends ───────────────────────────────────────────────────────
-ipcMain.handle("rpc-get-friends", async () => {
-  try {
-    const data    = await rpc.getRelationships();
-    const friends = data.relationships.filter(r => r.type === 1).map(r => ({
-      id:       r.user.id,
-      username: r.user.username,
-      avatar:   r.user.avatar
-        ? `https://cdn.discordapp.com/avatars/${r.user.id}/${r.user.avatar}.png`
-        : `https://cdn.discordapp.com/embed/avatars/0.png`,
-      status:   r.presence?.status || "offline",
-      activity: r.presence?.activities?.[0]?.name || null,
-    }));
-    return { success: true, friends };
-  } catch(e) { return { success: false, error: e.message }; }
-});
+// AURA doesn't read anyone's Discord friends list or send Discord messages for them. Both need
+// Discord's approval for this app, so friends and invites are AURA's own (see social.js).
 
 // ── YouTube trailer ───────────────────────────────────────────────────────────
 ipcMain.handle("fetch-trailer", async (_e, title) => auraServer("/api/trailer", { title }));
@@ -1552,25 +1502,8 @@ ipcMain.handle("stream-fullscreen", async () => {
 // The page asks for this before it puts the player back in its place
 ipcMain.handle("stream-exit-full", async () => ({ success: true, wasFull: leaveStreamFull() }));
 
-ipcMain.handle("stream-set-volume", async (_e, { volume, muted }) => {
-  if (!streamView) return { success: false };
-  try {
-    const vol = muted ? 0 : Math.min(1, Math.max(0, Number(volume) / 100 || 0));
-    // Execute JS in the Twitch player to set volume
-    await streamView.webContents.executeJavaScript(`
-      try {
-        const videos = document.querySelectorAll('video');
-        videos.forEach(v => {
-          v.volume = ${vol};
-          v.muted = ${!!muted};
-        });
-      } catch(e) {}
-    `);
-    return { success: true };
-  } catch(e) {
-    return { success: false, error: e.message };
-  }
-});
+// Volume is set with the Twitch player's own volume control. AURA runs nothing inside the player
+// to change it: Twitch's rules say the player must be left as it is.
 
 ipcMain.handle("stream-restore", async (_e, { bounds, chatBounds }) => {
   console.log("stream-restore called, streamView:", !!streamView);
@@ -1685,12 +1618,14 @@ async function captureScreenshot() {
   }
 }
 
+// The mini-player. Twitch asks that its player is never shown smaller than 400 x 300.
+const STREAM_MIN = { width: 400, height: 300 };
 ipcMain.handle("stream-pip", async (_e, bounds) => {
-  console.log("stream-pip called, bounds:", bounds, "chatView:", !!mainWin.chatView, "streamView:", !!streamView);
-  if (streamView) {
-    streamView.setBounds(zoomBounds(bounds));
+  if (streamView && bounds) {
+    const b = zoomBounds(bounds);
+    streamView.setBounds({ x: b.x, y: b.y, width: Math.max(STREAM_MIN.width, b.width), height: Math.max(STREAM_MIN.height, b.height) });
   }
-  // Hide chat in PiP mode
+  // Chat isn't shown in the mini-player
   if (mainWin.chatView) {
     mainWin.removeBrowserView(mainWin.chatView);
   }
