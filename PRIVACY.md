@@ -1,7 +1,7 @@
 <!-- Added by aura-messages-setup.cjs. The same words are shown inside AURA (src/components/privacy.jsx). -->
 # AURA privacy policy
 
-Last updated October 7, 2026
+Last updated October 11, 2026
 
 ## The short version
 
@@ -60,6 +60,7 @@ AURA uses these to do its job. Each sees your internet address, as any website d
 - Google and Cloudflare: when a voice call connects, their free public servers tell your PC its own internet address, so the two PCs can find each other. They learn nothing else about the call.
 - KLIPY: when you use GIF search, what you type goes through the AURA server to KLIPY to find GIFs, along with a scrambled ID that stands for you (not your name, email or AURA account). A GIF picked from the search is not copied into AURA: the message holds its address at KLIPY, and both people's AURA loads it from KLIPY when the chat is opened.
 - GitHub: AURA checks GitHub for new versions and downloads updates from it.
+- Web3Forms: if you send feedback from Settings, your message, your AURA username, the version of AURA you're using, and an email address if you choose to give one, are sent through Web3Forms, which delivers them to the developer by email. Nothing is sent unless you press Send.
 
 ## Deleting things
 

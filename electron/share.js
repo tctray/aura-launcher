@@ -4,8 +4,10 @@
 // Anyone with the link can watch the clip, so AURA only ever uploads a clip from your clip
 // folder, and only when you press Share.
 //
-// Clips over 200 MB, or any clip while Catbox itself won't take uploads, go to Litterbox (run by
-// the same people) instead, which keeps them for 3 days.
+// While Catbox itself won't take uploads, a clip goes to Litterbox (run by the same people)
+// instead, which keeps it for 3 days.
+// A clip over 200 MB isn't uploaded at all: AURA says to trim it shorter. (Bigger clips used to
+// go to Litterbox, where a large upload runs for minutes and then times out.)
 //
 // Added by aura-share-fix-setup.cjs. Wired up from the main file with one line:
 //   ipcMain.handle("share-clip", async (_e, filePath) => require("./share").shareClip(filePath, { clipFolder: getClipFolder() }));
@@ -61,6 +63,22 @@ function upload(target, filePath, size, { request = https.request, timeoutMs = T
   });
 }
 
+// What a site answered, as a few plain words, or "" if there are none worth showing. An error
+// page is mostly code (styles, scripts, markup); none of that is ever passed on.
+// Added by aura-share-message-setup.cjs.
+function plainWords(body) {
+  const text = String(body || "")
+    .replace(/<(style|script|svg|noscript)\b[\s\S]*?<\/\1\s*>/gi, " ")   // whole blocks of code
+    .replace(/<(style|script|svg|noscript)\b[\s\S]*$/i, " ")             // one that was cut off before it ended
+    .replace(/<[^>]*>/g, " ").replace(/<[^>]*$/, " ")
+    .replace(/&[a-z#0-9]+;/gi, " ").replace(/\s+/g, " ").trim();
+  // If anything that looks like code is left (CSS, JSON, half a tag), show none of it
+  return /[{}<>;]|--[\w-]+\s*:|:root\b|\bfunction\b|\bvar\(/i.test(text) ? "" : text.slice(0, 120);
+}
+const STATUS_WORDS = { 429: "Too Many Requests", 500: "Internal Server Error", 502: "Bad Gateway", 503: "Service Unavailable", 504: "Gateway Timeout", 520: "Unknown Error", 521: "Web Server Is Down", 522: "Connection Timed Out", 523: "Origin Is Unreachable", 524: "A Timeout Occurred" };
+// Their problem, not the clip's: the connection dropped, or the site answered that it is down or too busy
+const siteIsDown = (p) => p.lost || p.status === 429 || (p.status >= 500 && p.status <= 599);
+
 // What went wrong, in words a person can act on
 const lostConnection = (e) => /socket hang up|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|timed out/i.test(String(e?.code || "") + " " + String(e?.message || ""));
 
@@ -74,10 +92,10 @@ async function shareClip(filePath, { clipFolder, request, timeoutMs, maxBytes } 
     try { const st = fs.statSync(filePath); if (!st.isFile()) throw new Error(); size = st.size; }
     catch { return { success: false, error: "That clip isn't there any more. It may have been moved or deleted." }; }
     if (!size) return { success: false, error: "That clip is empty, so there's nothing to share." };
-    const biggest = maxBytes || LITTERBOX.max;
-    if (size > biggest) return { success: false, error: `This clip is ${sizeText(size)}. Clips up to ${sizeText(biggest)} can be shared; trim it in the clip editor first.` };
+    const biggest = Math.min(maxBytes || CATBOX.max, CATBOX.max);
+    if (size > biggest) return { success: false, tooBig: true, error: `This clip is ${sizeText(size)}, which is too big to share. Clips up to ${sizeText(biggest)} can be shared. Trim it shorter, then share the trimmed clip.` };
 
-    const targets = size <= Math.min(CATBOX.max, biggest) ? [CATBOX, LITTERBOX] : [LITTERBOX];
+    const targets = [CATBOX, LITTERBOX];
     const problems = [];
     for (const target of targets) {
       for (let attempt = 1; attempt <= 2; attempt++) {
@@ -94,12 +112,18 @@ async function shareClip(filePath, { clipFolder, request, timeoutMs, maxBytes } 
             : "Shared. Catbox wasn't taking uploads just now, so it went to Litterbox and the link works for 3 days.") : "";
           return { success: true, url: res.body, note };
         }
-        problems.push({ target, lost: false, text: (res.body || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) || "error " + res.status, status: res.status });
+        problems.push({ target, lost: false, text: plainWords(res.body) || "error " + res.status, status: res.status });
         break; // a clear "no" doesn't change by asking again
       }
     }
     const last = problems[problems.length - 1] || {};
     if (problems.every((p) => p.lost)) return { success: false, error: "Couldn't upload the clip: Catbox (the free site AURA shares clips through) isn't answering or closed the connection. Check your internet, or try again in a few minutes." };
+    if (problems.length && problems.every(siteIsDown)) {
+      const names = [...new Set(problems.map((p) => p.target.name))];
+      const who = names.length > 1 ? names.join(" and ") + " (the free sites AURA shares clips through) are" : names[0] + " (the free site AURA shares clips through) is";
+      const code = last.status ? " (error " + last.status + (STATUS_WORDS[last.status] ? ", " + STATUS_WORDS[last.status] : "") + ")" : "";
+      return { success: false, error: who + " having trouble right now" + code + ". Nothing is wrong with your clip or with AURA. Try again in a few minutes." };
+    }
     if (last.status === 412 || /size|too large|exceed/i.test(last.text || "")) return { success: false, error: `${last.target.name} says the clip is too big (${sizeText(size)}). Trim it in the clip editor and try again.` };
     return { success: false, error: `${(last.target || CATBOX).name} didn't accept the clip (${last.text}). Try again in a few minutes.` };
   } catch (e) {

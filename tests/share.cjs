@@ -77,7 +77,7 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   check("both hanging up: a plain message instead of 'socket hang up'", !r.success && /isn't answering or closed the connection/.test(r.error) && !/socket/.test(r.error), r);
   behave = { "catbox.moe": "html", "litterbox.catbox.moe": "html" };
   r = await share(clip);
-  check("an error page: its words, not its code", !r.success && /didn't accept the clip \(Internal Server Error\)/.test(r.error), r);
+  check("an error page from both sites: says they are having trouble, not its code", !r.success && /Catbox and Litterbox .* are having trouble right now \(error 500, Internal Server Error\)/.test(r.error) && !/[<>{}]/.test(r.error), r);
   behave = { "catbox.moe": "big", "litterbox.catbox.moe": "big" };
   r = await share(clip);
   check("too big for them: says to trim it", !r.success && /too big/.test(r.error) && /clip editor/.test(r.error), r);

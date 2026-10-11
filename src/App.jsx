@@ -11,6 +11,7 @@ import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
 import MessagesPage, { AuraFriendsTab, MessagesIcon, useAuraSocial } from "./components/messages";
 import { PrivacyButton } from "./components/privacy";
+import { FeedbackButton } from "./components/feedback";
 import { PageBoundary, AppBoundary, ErrorLogButton } from "./components/safety";
 
 const CATEGORIES = ["All","FPS","RPG","Strategy","Action","Adventure","Sports","Simulation","Indie","Other"];
@@ -2101,7 +2102,7 @@ function RecordingIndicator({ game, elapsed, onStop }) {
   );
 }
 
-function ClipsPage({ nowPlayingGame }) {
+function ClipsPage({ nowPlayingGame, toast }) {
   const [clips, setClips] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
   const [activeTab, setActiveTab] = useState("clips"); // "clips" | "screenshots"
@@ -2956,7 +2957,8 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
         <div className="ss-card">
           <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · <AppVersion/></div></div><UpdateButton/></div>
           <div className="sr"><div><div className="sr-l">Privacy</div><div className="sr-s">What AURA stores about you and who can see it</div></div><PrivacyButton/></div>
-          <div className="sr"><div><div className="sr-l">Error log</div><div className="sr-s">If something goes wrong, AURA notes it in a file on this PC. Nothing is sent anywhere.</div></div><ErrorLogButton/></div>
+          <div className="sr"><div><div className="sr-l">Feedback</div><div className="sr-s">Found a bug or have an idea? Tell the developer.</div></div><FeedbackButton/></div>
+          {import.meta.env.DEV && <div className="sr"><div><div className="sr-l">Error log</div><div className="sr-s">If something goes wrong, AURA notes it in a file on this PC. Nothing is sent anywhere. (This row only shows while developing.)</div></div><ErrorLogButton/></div>}
           <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>
@@ -3198,6 +3200,43 @@ function PipBox({ activeStream, zoom = 1, onOpen, onClose }) {
         <button type="button" className="pip-close" onClick={onClose} title="Close stream" aria-label="Close stream" style={{...button,background:"rgba(255,77,109,.18)",border:"1px solid rgba(255,77,109,.45)",color:"#ff7a92",width:28,fontSize:13}}>✕</button>
       </div>
       <div id="pip-stream-container" ref={holder} style={{width,height,flexShrink:0,background:"#000"}}/>
+    </div>
+  );
+}
+
+// ── Social page keeper ────────────────────────────────────────────────────────
+// Added by aura-browser-home-setup.cjs.
+// AURA has two layouts: Home, and the one with the sidebar. Switching between them rebuilds the
+// page, and the Social page used to be rebuilt with it: its sites reloaded, and a video that had
+// popped out was closed. So the Social page lives here, outside both layouts, and is laid over
+// the space the sidebar layout leaves for it (the element with id "social-slot"). On every other
+// page it is hidden, not removed.
+function SocialKeeper({ show, onShow }) {
+  const [box, setBox] = useState(null);
+  useEffect(() => {
+    if (!show) return;
+    const measure = () => {
+      const slot = document.getElementById("social-slot");
+      if (!slot) return;
+      const r = slot.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return;
+      const next = { left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
+      setBox((b) => (b && b.left === next.left && b.top === next.top && b.width === next.width && b.height === next.height ? b : next));
+    };
+    measure();
+    const slot = document.getElementById("social-slot");
+    const watcher = typeof ResizeObserver === "function" && slot ? new ResizeObserver(measure) : null;
+    watcher?.observe(slot);
+    window.addEventListener("resize", measure);
+    const timer = setInterval(measure, 400); // the space can move without changing size (a side panel opening)
+    return () => { watcher?.disconnect(); window.removeEventListener("resize", measure); clearInterval(timer); };
+  }, [show]);
+  const on = show && !!box;
+  return (
+    <div className="social-keeper" style={on
+      ? { position: "fixed", left: box.left, top: box.top, width: box.width, height: box.height, zIndex: 3, display: "flex", flexDirection: "column", overflow: "hidden" }
+      : { position: "fixed", left: 0, top: 0, width: box?.width || 1000, height: box?.height || 700, display: "none" }}>
+      <PageBoundary name="social"><SocialPage visible={show} onShow={onShow}/></PageBoundary>
     </div>
   );
 }
@@ -3572,6 +3611,7 @@ function AuraApp(){
     return(
       <>
         <style>{S}</style>
+        <SocialKeeper key="social-keeper" show={view==="social"} onShow={()=>goTo("social")}/>
         {bgImage&&<><div className="app-bg" style={{backgroundImage:`url(${bgImage})`}}/><div className="app-bg-overlay"/></>}
         {splash&&(<div className={`splash ${splashHide?"hide":""}`}><div className="splash-logo-img"><img src="./aura-logo.png" alt="AURA"/></div><div className="splash-sub">Developed By: Taurrean Traylor</div><div className="splash-bar"><div className="splash-fill"/></div></div>)}
         <div className="gm-app">
@@ -3653,6 +3693,7 @@ function AuraApp(){
   return(
     <>
       <style>{S}</style>
+      <SocialKeeper key="social-keeper" show={view==="social"} onShow={()=>goTo("social")}/>
       {bgImage&&<><div className="app-bg" style={{backgroundImage:`url(${bgImage})`}}/><div className="app-bg-overlay"/></>}
       {splash&&(<div className={`splash ${splashHide?"hide":""}`}><div className="splash-logo-img"><img src="./aura-logo.png" alt="AURA"/></div><div className="splash-sub">Developed By: Taurrean Traylor</div><div className="splash-bar"><div className="splash-fill"/></div></div>)}
       <div className="app">
@@ -3745,15 +3786,14 @@ function AuraApp(){
           {view==="performance"&&<PageBoundary name="performance"><div style={{flex:1,overflowY:"auto"}}><PerformancePage games={games} accent={accent||(theme==="custom"?customColors?.ac:THEMES[theme]?.ac)||"#FF5722"}/></div></PageBoundary>}
 
           <div style={{display:view==="clips"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
-            <PageBoundary name="clips"><ClipsPage nowPlayingGame={nowPlaying?.title}/></PageBoundary>
+            <PageBoundary name="clips"><ClipsPage nowPlayingGame={nowPlaying?.title} toast={toast}/></PageBoundary>
           </div>
 
           <div style={{display:view==="streams"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
             <PageBoundary name="streams"><StreamsView games={games} initialStream={activeStream} onClear={()=>setActiveStream(null)} onStreamChange={s=>setActiveStream(s)}/></PageBoundary>
           </div>
-                    <div style={{display:view==="social"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden",minHeight:0}}>
-            <PageBoundary name="social"><SocialPage visible={view==="social"} onShow={()=>goTo("social")}/></PageBoundary>
-          </div>
+          {/* The Social page itself lives in SocialKeeper, so going Home doesn't throw it away. This is the space it is laid over. */}
+          <div id="social-slot" style={{display:view==="social"?"flex":"none",flex:1,minHeight:0}}/>
 
           {view==="customize"&&<PageBoundary name="customize"><Customize
             theme={theme} onThemeChange={handleThemeChange}

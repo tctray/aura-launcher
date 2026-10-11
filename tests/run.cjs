@@ -26,6 +26,7 @@ if (fs.existsSync(path.join(__dirname, "platform-rules.cjs"))) add("files", "Twi
 if (fs.existsSync(errorlog)) add("files", "The error log", "errorlog.cjs", [errorlog]);
 const shareFile = path.join(ROOT, "electron", "share.js");
 if (fs.existsSync(shareFile) && fs.existsSync(path.join(__dirname, "share.cjs"))) add("files", "Sharing clips", "share.cjs", [shareFile]);
+if (fs.existsSync(shareFile) && fs.existsSync(path.join(__dirname, "share-errors.cjs"))) add("files", "Sharing clips: when the sharing sites are down", "share-errors.cjs", [shareFile]);
 const xboxFile = path.join(ROOT, "electron", "xbox.js");
 if (fs.existsSync(xboxFile) && fs.existsSync(path.join(__dirname, "xbox.cjs"))) add("files", "Xbox and Game Pass games", "xbox.cjs", [xboxFile]);
 if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safety.sql"))) {
@@ -69,6 +70,8 @@ if (fs.existsSync(avatarFile) && fs.existsSync(path.join(__dirname, "avatars.cjs
 const securityFile = path.join(ROOT, "electron", "security.js");
 if (fs.existsSync(securityFile) && fs.existsSync(path.join(__dirname, "security.cjs"))) add("files", "Security: windows, links, games and clip files", "security.cjs", [securityFile]);
 add("window", "The window opens and every page loads", "window.cjs");
+if (fs.existsSync(path.join(__dirname, "feedback.cjs"))) add("window", "The feedback form in Settings", "feedback.cjs");
+if (fs.existsSync(path.join(__dirname, "browser-home.cjs"))) add("window", "The Social browser: Home, homepage, where you were", "browser-home.cjs");
 if (fs.existsSync(path.join(__dirname, "update-notice.cjs"))) add("window", "The update notice", "update-notice.cjs");
 if (fs.existsSync(path.join(__dirname, "twitch-glass.cjs"))) add("window", "Twitch streams as glass cards", "twitch-glass.cjs");
 if (fs.existsSync(path.join(__dirname, "video-popout.cjs"))) add("window", "Videos pop out of the Social browser", "video-popout.cjs");

@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-const UPDATED = "October 7, 2026";
+const UPDATED = "October 11, 2026";
 const EMAIL = ""; // e.g. "privacy@example.com". Left empty, the policy points to the GitHub page below.
 const ISSUES = "https://github.com/tctray/aura-launcher/issues";
 
@@ -84,6 +84,7 @@ export const PRIVACY_SECTIONS = [
         "Google and Cloudflare: when a voice call connects, their free public servers tell your PC its own internet address, so the two PCs can find each other. They learn nothing else about the call.",
         "KLIPY: when you use GIF search, what you type goes through the AURA server to KLIPY to find GIFs, along with a scrambled ID that stands for you (not your name, email or AURA account). A GIF picked from the search is not copied into AURA: the message holds its address at KLIPY, and both people's AURA loads it from KLIPY when the chat is opened.",
         "GitHub: AURA checks GitHub for new versions and downloads updates from it.",
+        "Web3Forms: if you send feedback from Settings, your message, your AURA username, the version of AURA you're using, and an email address if you choose to give one, are sent through Web3Forms, which delivers them to the developer by email. Nothing is sent unless you press Send.",
       ],
     ],
   },
@@ -123,7 +124,7 @@ const CSS = `
 .pp-veil{position:fixed;inset:0;z-index:9500;display:flex;align-items:center;justify-content:center;padding:28px;background:rgba(4,4,8,.78);font-family:'DM Sans',sans-serif}
 .pp{position:relative;width:min(720px,100%);max-height:100%;display:flex;flex-direction:column;border-radius:16px;background:var(--panel,#1a1f26);border:1px solid var(--borderb,rgba(255,255,255,.14));box-shadow:0 30px 90px rgba(0,0,0,.6);color:var(--t1,#fff)}
 .pp-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 24px 14px;border-bottom:1px solid var(--border,rgba(255,255,255,.08));flex-shrink:0}
-.pp-head h1{margin:0;font-family:'Rajdhani',sans-serif;font-size:26px;font-weight:700;letter-spacing:.5px;line-height:1.1}
+.pp-head h1{margin:0;color:var(--t1,#fff);font-family:'Rajdhani',sans-serif;font-size:26px;font-weight:700;letter-spacing:.5px;line-height:1.1}
 .pp-date{margin-top:4px;font-size:12px;color:var(--t2,#8b8b9e)}
 .pp-x{width:34px;height:34px;flex-shrink:0;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:rgba(255,255,255,.06);border:1px solid var(--border,rgba(255,255,255,.12));color:var(--t1,#fff)}
 .pp-x:hover{background:rgba(255,255,255,.14)}

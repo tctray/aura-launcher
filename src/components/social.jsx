@@ -63,6 +63,17 @@ const POP_WHERE = `(() => {
   return [...document.querySelectorAll("video")].some((v) => !v.paused && !v.ended && !v.muted && v.volume > 0) ? "page" : "idle";
 })()`;
 
+// ── Homepage and "where you were" (Browser tab) ───────────────────────────────
+// Added by aura-browser-home-setup.cjs. Both are kept on this PC, in AURA's own storage.
+//   homepage:   the page the Home button opens. Right-click the Home button to choose it.
+//               With none chosen, Home shows AURA's start page.
+//   last page:  the page you were on, so the Browser tab opens there next time.
+// Only ordinary https pages are ever kept or reopened.
+const HOMEPAGE_KEY = "aura_browser_home";
+const LASTPAGE_KEY = "aura_browser_last";
+const HTTPS_PAGE = /^https:\/\/[^\s]{1,1990}$/i;
+const savedPage = (key) => { try { const v = localStorage.getItem(key) || ""; return HTTPS_PAGE.test(v) ? v : ""; } catch { return ""; } };
+
 // Turn what's typed in the address bar into a URL (or a Google search)
 function toUrl(text) {
   const t = text.trim();
@@ -161,8 +172,13 @@ export default function SocialPage({ visible = true, onShow }) {
   const back = () => { try { if (wv?.canGoBack()) wv.goBack(); } catch {} };
   const forward = () => { try { if (wv?.canGoForward()) wv.goForward(); } catch {} };
   // Browser tab start page
-  const [browserHome, setBrowserHome] = useState(true);
+  const [homepage, setHomepage] = useState(() => savedPage(HOMEPAGE_KEY));
+  const firstPage = useRef(savedPage(LASTPAGE_KEY) || savedPage(HOMEPAGE_KEY)); // what the Browser tab opens on ("" = the start page)
+  const [homeMenu, setHomeMenu] = useState(null);
+  const [browserHome, setBrowserHome] = useState(() => !firstPage.current);
   const browserUrl = states.browser?.url;
+  // Remember where you are, so the Browser tab opens here next time
+  useEffect(() => { if (HTTPS_PAGE.test(browserUrl || "")) { try { localStorage.setItem(LASTPAGE_KEY, browserUrl); } catch {} } }, [browserUrl]);
   useEffect(() => {
     if (browserUrl && browserUrl !== "about:blank") setBrowserHome(false);
   }, [browserUrl]);
@@ -171,10 +187,15 @@ export default function SocialPage({ visible = true, onShow }) {
     if (!view || !url) return;
     try { view.loadURL(url); } catch { view.src = url; }
     setBrowserHome(false);
+    if (HTTPS_PAGE.test(url)) { try { localStorage.setItem(LASTPAGE_KEY, url); } catch {} }
   };
 
   const goHome = () => {
-    if (active === "browser") { setBrowserHome(true); return; }
+    if (active === "browser") {
+      if (homepage) { openInBrowserTab(homepage); return; }
+      openStartPage();
+      return;
+    }
     try { wv?.loadURL(SITES.find((s) => s.id === active).url); } catch {}
   };
 
@@ -189,7 +210,7 @@ export default function SocialPage({ visible = true, onShow }) {
     e.target.querySelector("input")?.blur();
   };
   const isBrowser = active === "browser";
-  const showStart = isBrowser && (browserHome || !st.url || st.url === "about:blank");
+  const showStart = isBrowser && (browserHome || ((!st.url || st.url === "about:blank") && !firstPage.current));
   const reload = () => { try { wv?.reload(); } catch {} };
 
   // Pop-out video (see POP_OUT at the top). "Showing" means the Browser tab's page is on screen.
@@ -252,6 +273,25 @@ export default function SocialPage({ visible = true, onShow }) {
     changeBookmarks([...bookmarks, { id: "b" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), url: pageUrl, title: tidyTitle(st.title, pageUrl), icon: st.icon || "" }]);
   };
   useEffect(() => { if (!barNote) return; const t = setTimeout(() => setBarNote(""), 5000); return () => clearTimeout(t); }, [barNote]);
+
+  // Homepage (Browser tab): right-click the Home button to choose
+  const openStartPage = () => {
+    setBrowserHome(true);
+    try { localStorage.removeItem(LASTPAGE_KEY); } catch {} // you chose the start page, so that is where you are
+    setHomeMenu(null);
+  };
+  const chooseHomepage = (url) => {
+    const next = HTTPS_PAGE.test(url || "") ? url : "";
+    setHomepage(next);
+    try { if (next) localStorage.setItem(HOMEPAGE_KEY, next); else localStorage.removeItem(HOMEPAGE_KEY); } catch {}
+    setHomeMenu(null);
+  };
+  useEffect(() => {
+    if (!homeMenu) return;
+    const onKey = (e) => { if (e.key === "Escape") setHomeMenu(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [homeMenu]);
 
   const openOutside = () => {
     const url = st.url || SITES.find((s) => s.id === active)?.url;
@@ -324,7 +364,9 @@ export default function SocialPage({ visible = true, onShow }) {
           </button>
         )}
         {isBrowser && (
-          <button style={tool} onClick={goHome} title="Home" aria-label="Home"><Svg name="home" /></button>
+          <button className="home-btn" style={{ ...tool, color: homepage ? "var(--t1)" : "var(--t2)" }} onClick={goHome} aria-label="Home" aria-haspopup="menu"
+                  onContextMenu={(e) => { e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); setHomeMenu({ right: Math.max(8, window.innerWidth - r.right), top: r.bottom + 6 }); }}
+                  title={homepage ? "Home: " + siteName(homepage) + " (right-click to change)" : "Home (right-click to choose your homepage)"}><Svg name="home" /></button>
         )}
         {isBrowser && (
           <button className="popout-toggle" style={{ ...tool, color: popOut ? "var(--ac)" : "var(--t2)", background: popOut ? "var(--card)" : "transparent" }} onClick={togglePopOut} aria-pressed={popOut}
@@ -339,6 +381,16 @@ export default function SocialPage({ visible = true, onShow }) {
         </button>
       </div>
 
+      {homeMenu && (
+        <>
+          <div onClick={() => setHomeMenu(null)} onContextMenu={(e) => { e.preventDefault(); setHomeMenu(null); }} style={{ position: "fixed", inset: 0, zIndex: 9199 }} />
+          <div className="bmk-menu home-menu" role="menu" aria-label="Homepage" style={{ right: homeMenu.right, top: homeMenu.top }}>
+            <button role="menuitem" disabled={!HTTPS_PAGE.test(pageUrl)} onClick={() => chooseHomepage(pageUrl)}>Make this page my homepage</button>
+            {homepage && <button role="menuitem" onClick={() => chooseHomepage("")}>Use AURA's start page instead</button>}
+            <button role="menuitem" onClick={openStartPage}>Open the start page</button>
+          </div>
+        </>
+      )}
       <style>{BOOKMARK_CSS}</style>
       {isBrowser && barOpen && <BookmarkBar items={bookmarks} current={pageUrl} note={barNote} onOpen={openInBrowserTab} onChange={changeBookmarks} />}
 
@@ -348,7 +400,7 @@ export default function SocialPage({ visible = true, onShow }) {
       {/* Sites (kept alive once opened so switching tabs is instant) */}
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
         {SITES.filter((s) => opened.has(s.id)).map((s) => (
-          <SiteView key={s.id} site={s} active={s.id === active} onState={onState} register={register} />
+          <SiteView key={s.id} site={s.id === "browser" && firstPage.current ? { ...s, url: firstPage.current } : s} active={s.id === active} onState={onState} register={register} />
         ))}
         {showStart && <StartPage onGo={openInBrowserTab} bookmarks={bookmarks} />}
       </div>
@@ -428,6 +480,7 @@ function StartPage({ onGo, bookmarks = [] }) {
           </button>
         ))}
       </div>
+      <div style={{ fontSize: 12, color: "var(--t2)", fontFamily: "DM Sans, sans-serif" }}>Tip: right-click the Home button to choose your homepage.</div>
     </div>
   );
 }
