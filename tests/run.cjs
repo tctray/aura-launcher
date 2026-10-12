@@ -70,6 +70,7 @@ if (fs.existsSync(avatarFile) && fs.existsSync(path.join(__dirname, "avatars.cjs
 const securityFile = path.join(ROOT, "electron", "security.js");
 if (fs.existsSync(securityFile) && fs.existsSync(path.join(__dirname, "security.cjs"))) add("files", "Security: windows, links, games and clip files", "security.cjs", [securityFile]);
 add("window", "The window opens and every page loads", "window.cjs");
+if (fs.existsSync(path.join(__dirname, "friends-menu.cjs"))) add("window", "The friends panel and its menu button", "friends-menu.cjs");
 if (fs.existsSync(path.join(__dirname, "feedback.cjs"))) add("window", "The feedback form in Settings", "feedback.cjs");
 if (fs.existsSync(path.join(__dirname, "browser-home.cjs"))) add("window", "The Social browser: Home, homepage, where you were", "browser-home.cjs");
 if (fs.existsSync(path.join(__dirname, "update-notice.cjs"))) add("window", "The update notice", "update-notice.cjs");

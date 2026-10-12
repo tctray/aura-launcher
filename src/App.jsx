@@ -768,6 +768,17 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 
 /* FRIENDS PANEL */
 .fp{width:var(--fw);min-width:var(--fw);background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;}
+/* The friends panel folds down to a narrow strip that keeps only its menu button. Added by aura-friends-menu-setup.cjs. */
+.fp{transition:width .2s ease,min-width .2s ease;}
+.fp.shut{width:52px;min-width:52px;}
+.fp.shut .fp-hdr{justify-content:center;padding:16px 0 12px;border-bottom-color:transparent;}
+.fp.shut .fp-title,.fp.shut .fp-body{display:none;}
+.fp-toggle{background:var(--acd);border:1px solid var(--acg);color:var(--ac);cursor:pointer;padding:6px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;}
+.fp-toggle:hover{background:var(--ac);color:#fff;}
+.fp-toggle:focus-visible{outline:2px solid var(--ac);outline-offset:2px;}
+.reduce-motion .fp{transition:none!important;}
+/* The starter stylesheet draws a faint line down each side of the page. It showed through wherever a side panel was folded. */
+#root{border:0!important;}
 .fp-hdr{padding:16px 16px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
 .fp-title{font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:700;letter-spacing:1.5px;color:var(--t1)}
 .fp-body{flex:1;overflow-y:auto;padding:12px}
@@ -896,7 +907,7 @@ function ProfileSetup({ onComplete }) {
 }
 
 // ── Friends Panel ─────────────────────────────────────────────────────────────
-function FriendsPanel({ launching, toast, onClose, hidden }) {
+function FriendsPanel({ launching, toast, onToggle, hidden }) {
   const [user,setUser]=useState(null);
   const [loggedIn,setLoggedIn]=useState(false);
   const [steamTab,setSteamTab]=useState("aura");
@@ -916,11 +927,11 @@ function FriendsPanel({ launching, toast, onClose, hidden }) {
   const handleLogout=async()=>{ await window.electronAPI.discordLogout(); setUser(null);setLoggedIn(false); toast("Disconnected from Discord"); };
 
   return(
-    <div className="fp" style={hidden?{display:"none"}:undefined}>
-      <div className="fp-hdr" style={{justifyContent:"flex-end"}}>
-        <div style={{display:"flex",alignItems:"center",gap:2}}>
-          <button className="fp-refresh" onClick={onClose} title="Hide friends" aria-label="Hide friends panel"><Ic.X/></button>
-        </div>
+    <div className={"fp"+(hidden?" shut":"")}>
+      {/* The menu button folds the panel down to a narrow strip and opens it again. Folded, everything in it stays loaded. Added by aura-friends-menu-setup.cjs. */}
+      <div className="fp-hdr">
+        <div className="fp-title">FRIENDS</div>
+        <button className="fp-toggle" onClick={onToggle} title={hidden?"Show friends":"Hide friends"} aria-label={hidden?"Show friends":"Hide friends"} aria-expanded={!hidden}><Ic.Menu/></button>
       </div>
       <div className="fp-body">
         <div style={{display:"flex",borderBottom:"1px solid var(--border)",marginBottom:12}}>
@@ -3636,10 +3647,6 @@ function AuraApp(){
                 {it.badge?<div className="gm-rail-badge"/>:null}
               </div>
             ))}
-            <div className="gm-rail-item" onClick={()=>setFriendsOpen(o=>!o)} title={friendsOpen?"Hide friends":"Show friends"} style={{color:friendsOpen?"var(--ac)":undefined}}>
-              <Ic.Friends/>
-              {sidebarOpen&&<span className="gm-rail-item-label">Friends</span>}
-            </div>
             {/* Log out, at the bottom of the rail */}
             <div style={{marginTop:"auto",paddingTop:8,width:"100%",display:"flex",flexDirection:"column",alignItems:"center",flexShrink:0}}>
               <LogoutButton rail open={sidebarOpen}/>
@@ -3671,7 +3678,7 @@ function AuraApp(){
               )}
             </div>
           </div>
-          <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onClose={()=>setFriendsOpen(false)}/>
+          <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onToggle={()=>setFriendsOpen(o=>!o)}/>
         </div>
         {modal==="add"&&<Modal mode="add" onClose={()=>setModal(null)} onSave={doAdd}/>}
         {showProfileModal&&<ProfileModal profile={profile} onClose={()=>setShowProfileModal(false)} onSave={async(p)=>{const r=await account.saveProfile(p);if(!r.ok){toast(r.error,"err");return;}setProfile(r.profile);saveProfile(r.profile);setShowProfileModal(false);toast("Profile updated!");}}/>}
@@ -3723,10 +3730,6 @@ function AuraApp(){
                 {sidebarOpen&&it.badge?<span className="sb-badge">{it.badge}</span>:null}
               </div>
             ))}
-            <div className="sb-item" onClick={()=>setFriendsOpen(o=>!o)} title={friendsOpen?"Hide friends":"Show friends"} style={{color:friendsOpen?"var(--ac)":undefined}}>
-              <Ic.Friends/>
-              {sidebarOpen&&<span>Friends</span>}
-            </div>
           </div>
           <div className="sb-foot">
             {sidebarOpen&&<div className="sb-stat">
@@ -3817,7 +3820,7 @@ function AuraApp(){
           {view==="settings"&&<PageBoundary name="settings"><Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames(DEMO_GAMES);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers}/></PageBoundary>}
         </div>
 
-        <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onClose={()=>setFriendsOpen(false)}/>
+        <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onToggle={()=>setFriendsOpen(o=>!o)}/>
       </div>
 
       {modal==="add"&&<Modal mode="add" onClose={()=>setModal(null)} onSave={doAdd}/>}
