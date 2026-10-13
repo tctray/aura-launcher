@@ -667,6 +667,17 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .gm-mf-card-sub{font-size:10px;color:var(--t2);margin-top:2px;}
 .gm-mf-card-play{position:absolute;right:12px;width:32px;height:32px;border-radius:50%;background:var(--ac);border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;opacity:0;transition:all .15s;box-shadow:0 4px 12px var(--acg);}
 .gm-mf-card:hover .gm-mf-card-play{opacity:1;}
+/* FRIENDS PLAYING NOW (Home). Added by aura-friends-playing-setup.cjs. */
+.fa-card{flex-shrink:0;width:250px;text-align:left;height:64px;display:flex;align-items:center;gap:11px;padding:0 12px;border-radius:12px;background:rgba(0,0,0,.45);border:1px solid var(--border);backdrop-filter:blur(12px);}
+.fa-av{position:relative;width:40px;height:40px;flex-shrink:0;}
+.fa-av img,.fa-ph{width:40px;height:40px;border-radius:50%;object-fit:cover;display:block;background:var(--hover);}
+.fa-ph{display:flex;align-items:center;justify-content:center;font-family:'Rajdhani',sans-serif;font-size:17px;font-weight:700;color:var(--t2);}
+.fa-dot{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;border-radius:50%;background:#43b581;border:2px solid var(--panel);}
+.fa-info{flex:1;min-width:0;line-height:1.25;}
+.fa-name{font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:700;letter-spacing:.3px;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fa-game{margin-top:2px;font-size:11px;font-weight:600;color:var(--ac);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fa-verb{color:var(--t2);font-weight:500;}
+.no-blur .fa-card{background:var(--card);backdrop-filter:none;}
 
 /* CURRENTLY PLAYING BAR */
 .now-playing{position:fixed;bottom:0;left:0;right:0;height:72px;background:rgba(10,10,12,.92);backdrop-filter:blur(20px);border-top:1px solid var(--border);z-index:500;display:flex;align-items:center;padding:0 24px;gap:16px;animation:fadeUp .3s ease;}
@@ -1272,6 +1283,8 @@ function FriendActivityShelf() {
       setLoaded(true);
     };
     fetch();
+    const playingTimer = setInterval(fetch, 120000); // keep "Playing Now" current
+    return () => clearInterval(playingTimer);
   }, []);
 
   if (!loaded || !friends.length) return null;
@@ -1283,24 +1296,24 @@ function FriendActivityShelf() {
         <div className="gm-made-for-title">Playing Now</div>
       </div>
       <div className="gm-made-for-row">
-        {friends.map(f => (
-          <div key={f.id} className="gm-mf-card" style={{cursor:"default"}}>
-            {f.avatar
-              ? <img src={f.avatar} alt={f.name} className="gm-mf-card-img" style={{borderRadius:0}}/>
-              : <div style={{width:60,height:60,background:"var(--hover)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>👤</div>
-            }
-            <div className="gm-mf-card-info">
-              <div className="gm-mf-card-title">{f.name}</div>
-              <div className="gm-mf-card-sub" style={{color:"var(--ac)"}}>
-                <span style={{display:"inline-block",width:6,height:6,borderRadius:"50%",background:"#43b581",marginRight:4,verticalAlign:"middle"}}/>
-                {f.game}
+        {friends.map(f => {
+          const where = f.source === "discord" ? "Discord" : "Steam";
+          return (
+            <div key={f.id} className="fa-card" title={`${f.name} is playing ${f.game} (${where})`}>
+              <div className="fa-av">
+                {f.avatar
+                  ? <img src={f.avatar} alt="" onError={e => { e.currentTarget.style.display = "none"; e.currentTarget.nextSibling.style.display = "flex"; }}/>
+                  : null}
+                <div className="fa-ph" style={{display: f.avatar ? "none" : "flex"}}>{(String(f.name || "?").trim()[0] || "?").toUpperCase()}</div>
+                <span className="fa-dot" aria-label="Online"/>
+              </div>
+              <div className="fa-info">
+                <div className="fa-name">{f.name}</div>
+                <div className="fa-game"><span className="fa-verb">Playing </span>{f.game}</div>
               </div>
             </div>
-            <div style={{fontSize:9,color:"var(--t3)",flexShrink:0,paddingRight:4}}>
-              {f.source==="discord"?"DC":"ST"}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
