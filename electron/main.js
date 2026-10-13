@@ -113,6 +113,9 @@ const appSettings = {
   systemDevice: null,
   micVolume: 1,              // 0 – 2
   systemVolume: 1,           // 0 – 2
+  keepRunning: true,         // closing the window keeps AURA in the tray (Added by aura-tray-setup.cjs)
+  startWithWindows: false,   // open AURA in the tray when you sign in to Windows
+  trayTipShown: false,       // the "AURA is still running" tip has been shown once
 };
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 function loadAppSettings() {
@@ -224,6 +227,69 @@ let discordToken  = null;
 let authServer    = null;
 let mainWin       = null;
 
+// ── Running in the tray ───────────────────────────────────────────────────────
+// Added by aura-tray-setup.cjs.
+// Closing AURA's window hides it instead of quitting, so calls and messages still reach you
+// (Settings > "Keep AURA running when closed" turns this off). An AURA icon by the clock opens
+// it again or quits it. "Start AURA when Windows starts" opens it straight into the tray.
+// AURA really quits when you choose Quit AURA, press Restart now for an update, when Windows
+// shuts down, or when an update has downloaded (closing it then installs the update).
+const START_HIDDEN_ARG = "--hidden";
+let tray = null;
+let quitting = false;
+let updateReady = false;
+let startHidden = process.argv.includes(START_HIDDEN_ARG); // started by Windows at sign-in
+let barWasVisible = true; // the AURA Bar comes back with the window if it was showing when AURA was closed
+app.on("before-quit", () => { quitting = true; });
+autoUpdater.on("update-downloaded", () => { updateReady = true; });
+function showMain() {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  if (mainWin.isMinimized()) mainWin.restore();
+  mainWin.show();
+  mainWin.focus();
+}
+// Whenever the window comes back (tray icon, a notification, opening AURA again)
+function onMainShown() {
+  if (startHidden) { startHidden = false; applyWindowMode(appSettings.windowMode); }
+  if (barWasVisible && auraBar && !auraBar.isDestroyed() && !auraBar.isVisible()) auraBar.showInactive();
+}
+function hideToTray() {
+  barWasVisible = !!auraBar && !auraBar.isDestroyed() && auraBar.isVisible();
+  if (barWasVisible) auraBar.hide();
+  mainWin.hide();
+  if (appSettings.trayTipShown) return;
+  // The first time only: say where AURA went
+  appSettings.trayTipShown = true;
+  saveAppSettings();
+  try {
+    const { Notification } = require("electron");
+    if (!Notification.isSupported()) return;
+    const tip = new Notification({ title: "AURA is still running", body: "Calls and messages will still reach you. To quit, right-click the AURA icon by the clock and choose Quit AURA." });
+    tip.on("click", showMain);
+    tip.show();
+  } catch {}
+}
+function createTray() {
+  if (tray) return;
+  const { Tray, Menu, nativeImage } = require("electron");
+  let image = nativeImage.createFromPath(path.join(__dirname, app.isPackaged ? "../dist/icon.png" : "../public/icon.png"));
+  if (image.isEmpty()) image = nativeImage.createFromPath(path.join(__dirname, "../public/icon.png"));
+  if (!image.isEmpty()) image = image.resize({ width: 32, height: 32, quality: "best" });
+  try { tray = new Tray(image); } catch (e) { console.error("Tray icon unavailable:", e.message); tray = null; return; }
+  tray.setToolTip("AURA");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "Open AURA", click: showMain },
+    { type: "separator" },
+    { label: "Quit AURA", click: () => { quitting = true; app.quit(); } },
+  ]));
+  tray.on("click", showMain);
+}
+function applyStartWithWindows() {
+  if (process.platform !== "win32" || !app.isPackaged) return;
+  try { app.setLoginItemSettings({ openAtLogin: appSettings.startWithWindows === true, args: [START_HIDDEN_ARG] }); }
+  catch (e) { console.error("Start with Windows:", e.message); }
+}
+
 // ── Auto-updater ──────────────────────────────────────────────────────────────
 autoUpdater.autoDownload         = false;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -257,6 +323,7 @@ function createWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
+    show: !startHidden, // started by Windows at sign-in: stay in the tray until opened
     backgroundColor: "#222831",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -270,8 +337,9 @@ function createWindow() {
       sandbox: true,
     },
   });
-  applyWindowMode(appSettings.windowMode);
-  mainWin.once("ready-to-show", () => mainWin.show());
+  if (!startHidden) applyWindowMode(appSettings.windowMode); // started hidden: done when it's first shown
+  mainWin.once("ready-to-show", () => { if (!startHidden) mainWin.show(); });
+  mainWin.on("show", onMainShown);
   mainWin.webContents.on("did-finish-load", () => {
     mainWin?.webContents.setZoomFactor(appSettings.zoom || 1);
   });
@@ -280,6 +348,16 @@ function createWindow() {
     if (input.type === "keyDown" && input.key === "F11") mainWin.setFullScreen(!mainWin.isFullScreen());
   });
 
+  // Closing the window hides AURA in the tray (see "Running in the tray"). It really closes when
+  // AURA is quitting, when an update is waiting to install, or when "Keep AURA running" is off.
+  mainWin.on("close", (event) => {
+    if (quitting || updateReady || appSettings.keepRunning === false || !tray) return;
+    event.preventDefault();
+    hideToTray();
+  });
+  // Windows is shutting down, restarting or signing out: let AURA close
+  mainWin.on("query-session-end", () => { quitting = true; });
+  mainWin.on("session-end", () => { quitting = true; });
   // Closing AURA also closes the AURA Bar and fully quits the app
   mainWin.on("closed", () => {
     mainWin = null;
@@ -479,6 +557,7 @@ function createAuraBar() {
     transparent: true,
     alwaysOnTop: true,
     skipTaskbar: true,
+    show: !startHidden, // the AURA Bar waits for the window when AURA starts in the tray
     resizable: false,
     movable: true,
     hasShadow: true,
@@ -604,6 +683,8 @@ app.whenReady().then(() => {
   createWindow();
   createAuraBar();
   registerHotkeys();
+  createTray();
+  applyStartWithWindows();
 
   ipcMain.handle("download-update", async () => {
     // Auto-update only works in the installed app; in dev mode, open the release page
@@ -622,7 +703,7 @@ app.whenReady().then(() => {
       return { success: false, error: e.message, openedPage: true };
     }
   });
-  ipcMain.handle("install-update", () => autoUpdater.quitAndInstall(false, true));
+  ipcMain.handle("install-update", () => { quitting = true; autoUpdater.quitAndInstall(false, true); });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -823,13 +904,17 @@ ipcMain.on("open-clip-editor", () => openClipEditor(mainWin));
 ipcMain.handle("settings-sync", (_e, patch = {}) => {
   const prevMode = appSettings.windowMode;
   const prevZoom = appSettings.zoom;
+  const prevStart = appSettings.startWithWindows;
   for (const key of Object.keys(appSettings)) {
     if (patch[key] !== undefined) appSettings[key] = patch[key];
   }
   appSettings.zoom = Math.min(1.3, Math.max(0.8, Number(appSettings.zoom) || 1));
+  appSettings.keepRunning = appSettings.keepRunning !== false;
+  appSettings.startWithWindows = appSettings.startWithWindows === true;
   saveAppSettings();
   if (appSettings.windowMode !== prevMode) applyWindowMode(appSettings.windowMode);
   if (appSettings.zoom !== prevZoom) mainWin?.webContents.setZoomFactor(appSettings.zoom);
+  if (appSettings.startWithWindows !== prevStart) applyStartWithWindows();
   return { ...appSettings };
 });
 

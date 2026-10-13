@@ -104,6 +104,9 @@ const SETTINGS_DEFAULTS = {
   noBlur: false,
   homeBanner: true,       // the game slideshow at the top of Home
   windowMode: "maximized",// "maximized" | "fullscreen" | "windowed"
+  // Running in the background (Added by aura-tray-setup.cjs)
+  keepRunning: true,      // closing the window keeps AURA in the tray, so calls still reach you
+  startWithWindows: false,// open AURA in the tray when you sign in to Windows
   // Sound
   uiSounds: true,
   uiVolume: 0.5,          // 0 – 1
@@ -116,7 +119,7 @@ const SETTINGS_DEFAULTS = {
   recordSourceId: "",     // screen/window chosen for the AURA Bar and F9
   recordSourceName: "",
 };
-const MAIN_SETTING_KEYS = ["windowMode","zoom","micDevice","systemDevice","micVolume","systemVolume"];
+const MAIN_SETTING_KEYS = ["windowMode","zoom","micDevice","systemDevice","micVolume","systemVolume","keepRunning","startWithWindows"];
 const loadSettings = () => {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("aura_settings") || "{}"); } catch {}
@@ -2922,6 +2925,13 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
           <div className="sr"><div><div className="sr-l">Home Banner</div><div className="sr-s">The game slideshow at the top of Home. Turn it off to see your whole background</div></div><Tog k="homeBanner"/></div>
           <div className="sr"><div><div className="sr-l">Launch Animation</div><div className="sr-s">Show launch overlay when starting a game</div></div><Tog k="anim"/></div>
           <div className="sr"><div><div className="sr-l">Show Play Counts</div><div className="sr-s">Display playtime or session counts on each card</div></div><Tog k="counts"/></div>
+        </div>
+      </div>
+      <div className="ss">
+        <div className="ss-t">CALLS AND MESSAGES</div>
+        <div className="ss-card">
+          <div className="sr"><div><div className="sr-l">Keep AURA Running When Closed</div><div className="sr-s">Closing AURA keeps it running by the clock, so friends' calls and messages still reach you. To quit, right-click the AURA icon there</div></div><Tog k="keepRunning"/></div>
+          <div className="sr"><div><div className="sr-l">Start AURA When Windows Starts</div><div className="sr-s">Opens AURA quietly by the clock when you sign in, so you can get calls right away</div></div><Tog k="startWithWindows"/></div>
         </div>
       </div>
       <div className="ss">
