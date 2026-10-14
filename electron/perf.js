@@ -269,16 +269,22 @@ function summarize(samples) {
   };
 }
 
-function beginSession(exePath) {
+// programName: the program actually running, when it isn't the library's exe (a launcher's game)
+const fpsFor = new Map();
+function beginSession(exePath, programName) {
   sessions.set(exePath, []);
-  startFps(exePath);
+  const target = programName || path.basename(exePath);
+  fpsFor.set(exePath, target);
+  startFps(target);
   update();
 }
 
 function endSession(exePath) {
   const samples = sessions.get(exePath) || [];
   sessions.delete(exePath);
-  if (fps.exeName === path.basename(exePath)) stopFps();
+  const target = String(fpsFor.get(exePath) || path.basename(exePath)).toLowerCase();
+  fpsFor.delete(exePath);
+  if (fps.exeName && fps.exeName.toLowerCase() === target) stopFps();
   update();
   return summarize(samples);
 }

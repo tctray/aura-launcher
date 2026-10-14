@@ -107,7 +107,8 @@ const SETTINGS_DEFAULTS = {
   windowMode: "maximized",// "maximized" | "fullscreen" | "windowed"
   // Running in the background (Added by aura-tray-setup.cjs)
   keepRunning: true,      // closing the window keeps AURA in the tray, so calls still reach you
-  startWithWindows: false,// open AURA in the tray when you sign in to Windows
+  startWithWindows: false,
+  trackAllGames: true,    // Sessions count library games started outside AURA (Added by aura-sessions-setup.cjs)// open AURA in the tray when you sign in to Windows
   // Sound
   uiSounds: true,
   uiVolume: 0.5,          // 0 – 1
@@ -120,7 +121,7 @@ const SETTINGS_DEFAULTS = {
   recordSourceId: "",     // screen/window chosen for the AURA Bar and F9
   recordSourceName: "",
 };
-const MAIN_SETTING_KEYS = ["windowMode","zoom","micDevice","systemDevice","micVolume","systemVolume","keepRunning","startWithWindows"];
+const MAIN_SETTING_KEYS = ["windowMode","zoom","micDevice","systemDevice","micVolume","systemVolume","keepRunning","startWithWindows","trackAllGames"];
 const loadSettings = () => {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("aura_settings") || "{}"); } catch {}
@@ -2984,6 +2985,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
           <div className="sr"><div><div className="sr-l">Import Steam Games</div><div className="sr-s">Auto-import all installed Steam games</div></div><button className="btn-p" onClick={onImportSteam} style={{fontSize:11,padding:"6px 14px",display:"flex",alignItems:"center",gap:"5px"}}><Ic.Steam/> Import</button></div>
           <div className="sr"><div><div className="sr-l">Import Epic Games</div><div className="sr-s">Auto-import all installed Epic Games</div></div><button className="btn-p" onClick={onImportEpic} style={{fontSize:11,padding:"6px 14px"}}>Import</button></div>
           <div className="sr"><div><div className="sr-l">Import Xbox Game Pass</div><div className="sr-s">Auto-import all installed Xbox games</div></div><button className="btn-p" onClick={onImportXbox} style={{fontSize:11,padding:"6px 14px"}}>Import</button></div>
+          <div className="sr"><div><div className="sr-l">Count Games Started Outside AURA</div><div className="sr-s">Sessions and playtime include library games you start from Steam, Epic, Xbox or a shortcut. AURA checks which are running on this PC; nothing is sent anywhere</div></div><Tog k="trackAllGames"/></div>
           <div className="sr"><div><div className="sr-l">Games in Library</div><div className="sr-s">{games.length} titles stored locally</div></div><span style={{fontFamily:"Rajdhani,sans-serif",fontSize:22,fontWeight:700,color:"var(--ac)"}}>{games.length}</span></div>
           <div className="sr"><div><div className="sr-l">Reset to Defaults</div><div className="sr-s">Restore demo games</div></div><button className="btn-d" onClick={onReset} style={{fontSize:11,padding:"5px 12px"}}>Reset</button></div>
         </div>
@@ -3285,6 +3287,9 @@ function AuraApp(){
   const [games,setGames]=useState(()=>load());
   const gamesRef=useRef(games);
   useEffect(()=>{gamesRef.current=games;},[games]);
+  // Sessions also count library games started outside AURA (see electron/gamewatch.js)
+  const watchList=useMemo(()=>games.map(g=>g.exePath).filter(Boolean).join("\n"),[games]);
+  useEffect(()=>{ window.electronAPI?.watchGames?.(watchList?watchList.split("\n"):[]); },[watchList]);
   const [profile,setProfile]=useState(()=>loadProfile());
   const [theme,setTheme]=useState(()=>loadTheme());
   const [accent,setAccent]=useState(()=>loadAccent());
@@ -3451,7 +3456,7 @@ function AuraApp(){
     const off = window.electronAPI.onGameSessionEnded((_event,data)=>{
       addSession(gamesRef.current.find(g=>g.exePath===data.exePath), data);
       setNowPlaying(np=>np&&np.exePath===data.exePath?null:np);
-      setGames(gs=>gs.map(g=>{ if(g.exePath===data.exePath) return {...g,totalTime:(g.totalTime||0)+data.sessionMs,lastSessionMs:data.sessionMs}; return g; }));
+      setGames(gs=>gs.map(g=>{ if(g.exePath===data.exePath) return {...g,totalTime:(g.totalTime||0)+data.sessionMs,lastSessionMs:data.sessionMs,...(data.detected?{lastPlayed:Math.max(g.lastPlayed||0,data.endTime||Date.now())}:{})}; return g; }));
       setStats(prev=>{
         const totalMs=(prev.totalPlaytimeMs||0)+data.sessionMs;
         const updated={...prev,totalPlaytimeMs:totalMs,totalPlaytimeHours:totalMs/3600000};

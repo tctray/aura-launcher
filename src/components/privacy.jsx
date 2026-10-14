@@ -45,7 +45,7 @@ export const PRIVACY_SECTIONS = [
         "Sign-up details: your email address, username and password. The password is stored scrambled; nobody, including the developer, can read it.",
         "Your profile: username, bio and profile picture. Anyone signed in to AURA can see these, which is how friends find you by username. A profile picture you choose from your PC is stored with its own web address, so anyone who has that address can see it.",
         "Your library: game titles, favorites, how often and how long you've played, and when you last played.",
-        "Play sessions: the game, when it started and ended, and the game's file location on your PC.",
+        "Play sessions: the game, when it started and ended, and the game's file location on your PC. To notice a game you started outside AURA, AURA checks which programs are running on your PC and compares their names with your library. That check stays on your PC; only the sessions it finds are saved.",
         "Achievements, streaks, themes, settings, and your AURA background if it is a web address.",
         "Friends: the requests you send and receive, your friends, the people you block, and when you were last online. Only your friends see whether you're online.",
         "Messages: the text, pictures, GIFs and videos you send, the likes and dislikes you put on messages, a chat's shared background, and whether a message has been read.",

@@ -131,6 +131,7 @@ const appSettings = {
   keepRunning: true,         // closing the window keeps AURA in the tray (Added by aura-tray-setup.cjs)
   startWithWindows: false,   // open AURA in the tray when you sign in to Windows
   trayTipShown: false,
+  trackAllGames: true,       // sessions for library games started outside AURA too (Added by aura-sessions-setup.cjs)
   messageSound: "aura",       // the message sound picked in Settings ("windows" = Windows' own; Added by aura-ringtones-setup.cjs)       // the "AURA is still running" tip has been shown once
 };
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
@@ -794,6 +795,42 @@ async function waitForGameToClose(exePath, appearMs) {
   }
 }
 
+// ── Sessions: library games however they were started (see gamewatch.js) ─────
+// Added by aura-sessions-setup.cjs. AURA's Play button, Steam, Epic, Xbox or a shortcut: each
+// game in your library that runs gets a session, also games that need administrator rights.
+const gameWatchKit = require("./gamewatch");
+const gameWatch = gameWatchKit.createGameWatch({
+  list: () => (process.platform === "win32" ? gameWatchKit.listRunning(runQuiet) : Promise.resolve([])),
+  findAliases: (exePath) => (process.platform === "win32" ? gameWatchKit.listInFolder(runQuiet, path.dirname(exePath)) : Promise.resolve([])),
+  shouldWatchAll: () => appSettings.trackAllGames !== false,
+  aliasFile: path.join(app.getPath("userData"), "game-programs.json"),
+  onStart: (exePath, programName, { launched }) => {
+    perf.beginSession(exePath, programName);
+    currentGameName = path.basename(exePath, ".exe");
+    pushBarState();
+    console.log("Session started: " + path.basename(exePath) + (launched ? "" : " (started outside AURA)"));
+  },
+  onEnd: (exePath, { start, end, launched }) => {
+    const perfSummary = perf.endSession(exePath);
+    if (currentGameName === path.basename(exePath, ".exe")) currentGameName = null;
+    pushBarState();
+    console.log("Session ended: " + path.basename(exePath) + " (" + Math.round((end - start) / 1000) + "s)");
+    mainWin?.webContents.send("game-session-ended", { exePath, sessionMs: Math.max(0, end - start), startTime: start, endTime: end, perf: perfSummary, detected: !launched });
+    if (launched) rpc.setActivity({ details: "Browsing Game Library", state: "AURA Game Launcher", largeImageKey: "aura_logo", startTimestamp: new Date() }).catch(() => {});
+  },
+});
+// The games to look for: your library (the window sends it), remembered for next time
+const watchListFile = () => path.join(app.getPath("userData"), "watched-games.json");
+try { gameWatch.setLibrary(JSON.parse(fs.readFileSync(watchListFile(), "utf8"))); } catch {}
+ipcMain.handle("games:watch", (_e, list) => {
+  const paths = (Array.isArray(list) ? list : []).filter((p) => typeof p === "string" && p.length <= 1024 && /\.exe$/i.test(p)).slice(0, 2000);
+  gameWatch.setLibrary(paths);
+  try { fs.writeFileSync(watchListFile(), JSON.stringify(paths)); } catch {}
+  return { success: true, count: paths.length };
+});
+app.whenReady().then(() => gameWatch.start());
+app.on("before-quit", () => { try { gameWatch.finishAll(); } catch {} }); // a game still running keeps the time played so far
+
 // ── Launch Game ───────────────────────────────────────────────────────────────
 // Spawns the game so AURA can see when it closes, then logs the session
 // (playtime + performance summary) back to the app.
@@ -824,13 +861,12 @@ ipcMain.handle("launch-game", async (_e, exePath) => {
       console.log(`Couldn't track ${path.basename(exePath)} (may need admin), opening normally`);
       const err = await shell.openPath(exePath);
       if (err) return { success: false, error: err };
+      gameWatch.launched(exePath); // still gets a session: AURA watches for the game (see gamewatch.js)
       return { success: true };
     }
 
-    gameSessions.set(exePath, startTime);
-    perf.beginSession(exePath);
-    currentGameName = path.basename(exePath, ".exe");
-    pushBarState();
+    // AURA times the session from now, and watches for the game to appear and close (see gamewatch.js)
+    gameWatch.launched(exePath);
 
     rpc.setActivity({
       details: `Playing ${path.basename(exePath, ".exe")}`,
@@ -838,48 +874,6 @@ ipcMain.handle("launch-game", async (_e, exePath) => {
       largeImageKey: "aura_logo",
       startTimestamp: new Date(),
     }).catch(() => {});
-
-    // When the game closes: send the session + performance summary
-    const exeName = path.basename(exePath);
-    const finishSession = () => {
-      const endTime = Date.now();
-      const perfSummary = perf.endSession(exePath);
-      gameSessions.delete(exePath);
-      if (currentGameName === path.basename(exePath, ".exe")) currentGameName = null;
-      pushBarState();
-      console.log(`Session ended: ${exeName} (${Math.round((endTime - startTime) / 1000)}s)`);
-
-      mainWin?.webContents.send("game-session-ended", {
-        exePath,
-        sessionMs: endTime - startTime,
-        startTime,
-        endTime,
-        perf: perfSummary,
-      });
-
-      rpc.setActivity({
-        details: "Browsing Game Library",
-        state:   "AURA Game Launcher",
-        largeImageKey: "aura_logo",
-        startTimestamp: new Date(),
-      }).catch(() => {});
-    };
-
-    child.on("exit", async () => {
-      if (process.platform === "win32") {
-        const quick = Date.now() - startTime < 60000;
-        if (await isGameRunning(exePath)) {
-          // The launcher closed but the game is still going
-          console.log(`${exeName} handed off, watching the game until it closes...`);
-          await waitForGameToClose(exePath, 0);
-        } else if (quick) {
-          // Launchers like the EA app can take a while to start the real game
-          console.log(`${exeName} exited quickly, waiting up to 3 minutes for the game to start...`);
-          await waitForGameToClose(exePath, 180000);
-        }
-      }
-      finishSession();
-    });
 
     child.unref();
     return { success: true };
@@ -927,6 +921,7 @@ ipcMain.handle("settings-sync", (_e, patch = {}) => {
   appSettings.zoom = Math.min(1.3, Math.max(0.8, Number(appSettings.zoom) || 1));
   appSettings.keepRunning = appSettings.keepRunning !== false;
   appSettings.startWithWindows = appSettings.startWithWindows === true;
+  appSettings.trackAllGames = appSettings.trackAllGames !== false;
   appSettings.messageSound = typeof appSettings.messageSound === "string" ? appSettings.messageSound.slice(0, 20) : "aura";
   saveAppSettings();
   if (appSettings.windowMode !== prevMode) applyWindowMode(appSettings.windowMode);

@@ -72,6 +72,7 @@ const securityFile = path.join(ROOT, "electron", "security.js");
 if (fs.existsSync(securityFile) && fs.existsSync(path.join(__dirname, "security.cjs"))) add("files", "Security: windows, links, games and clip files", "security.cjs", [securityFile]);
 if (fs.existsSync(path.join(__dirname, "browser-tabs.cjs"))) add("files", "Browser tabs", "browser-tabs.cjs");
 if (fs.existsSync(path.join(__dirname, "ringtones.cjs"))) add("files", "Ringtones and message sounds", "ringtones.cjs");
+if (fs.existsSync(path.join(__dirname, "sessions.cjs"))) add("files", "Sessions: every library game, however it was started", "sessions.cjs", [path.join(ROOT, "electron", "gamewatch.js")]);
 add("window", "The window opens and every page loads", "window.cjs");
 if (fs.existsSync(path.join(__dirname, "friends-playing.cjs"))) add("window", "Home: Friends Playing Now", "friends-playing.cjs");
 if (fs.existsSync(path.join(__dirname, "tray-settings.cjs"))) add("window", "Settings: running in the background", "tray-settings.cjs");

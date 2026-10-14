@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // ── Game launching ──────────────────────────────────────────────────────────
   launchGame:          (exePath) => ipcRenderer.invoke("launch-game", exePath),
+  watchGames: (paths) => ipcRenderer.invoke("games:watch", paths), // the games Sessions looks for
   onGameSessionEnded: (cb) => {
     ipcRenderer.on("game-session-ended", cb);
     return () => ipcRenderer.removeListener("game-session-ended", cb);
