@@ -1,7 +1,7 @@
 {
   "name": "aura",
   "private": true,
-  "version": "1.18.1",
+  "version": "1.19.0",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -38,14 +38,14 @@
       "!node_modules/ffprobe-static/bin/{darwin,linux}/**",
       "!**/*.bak"
     ],
-   "publish": [
-     {
-       "provider": "github",
-       "owner": "tctray",
-       "repo": "aura-launcher",
-       "releaseType": "release"
-     }
-   ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "tctray",
+        "repo": "aura-launcher",
+        "releaseType": "release"
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "public/icon.png"
