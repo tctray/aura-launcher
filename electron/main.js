@@ -54,10 +54,25 @@ app.on("web-contents-created", (_e, contents) => {
   if (type === "webview") {
     // The Browser tab can go anywhere on the web; the social tabs stay on their own sites
     const isBrowserTab = contents.session === require("electron").session.fromPartition("persist:social-browser");
-    contents.setWindowOpenHandler(({ url }) => {
-      if ((isBrowserTab && /^https?:\/\//i.test(url)) || isSocialHost(url)) contents.loadURL(url);
+    contents.setWindowOpenHandler(({ url, disposition }) => {
+      if (isBrowserTab && /^https?:\/\//i.test(url)) {
+        // A link that opens a new tab or window opens as a new tab in AURA's Browser
+        const host = contents.hostWebContents;
+        if (host && !host.isDestroyed()) host.send("browser-open-tab", { url, background: disposition === "background-tab" });
+        else contents.loadURL(url);
+      } else if (isSocialHost(url)) contents.loadURL(url);
       else outside(url);
       return { action: "deny" };
+    });
+    // Ctrl+T, Ctrl+W, Ctrl+Tab and Ctrl+Shift+Tab pressed inside a Browser page work on AURA's tabs
+    if (isBrowserTab) contents.on("before-input-event", (e, input) => {
+      if (input.type !== "keyDown" || !(input.control || input.meta) || input.alt) return;
+      const key = String(input.key || "").toLowerCase();
+      const what = key === "t" ? "new" : key === "w" ? "close" : key === "tab" ? (input.shift ? "previous" : "next") : null;
+      if (!what) return;
+      e.preventDefault();
+      const host = contents.hostWebContents;
+      if (host && !host.isDestroyed()) host.send("browser-tab-key", what);
     });
     contents.on("will-navigate", (e, url) => {
       if (isBrowserTab ? !/^(https?:|about:blank)/i.test(url) : !isSocialHost(url)) { e.preventDefault(); outside(url); }

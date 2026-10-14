@@ -38,13 +38,14 @@
       "!node_modules/ffprobe-static/bin/{darwin,linux}/**",
       "!**/*.bak"
     ],
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "tctray",
-        "repo": "aura-launcher"
-      }
-    ],
+   "publish": [
+     {
+       "provider": "github",
+       "owner": "tctray",
+       "repo": "aura-launcher",
+       "releaseType": "release"
+     }
+   ],
     "win": {
       "target": "nsis",
       "icon": "public/icon.png"

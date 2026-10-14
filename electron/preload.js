@@ -119,6 +119,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   streamExitFull:  ()      => ipcRenderer.invoke("stream-exit-full"),
   // Esc was pressed inside the Twitch player while it filled the window
   onStreamExitFull:(cb)    => { const h = () => cb(); ipcRenderer.on("stream-exit-full", h); return () => ipcRenderer.removeListener("stream-exit-full", h); },
+  // Browser tabs: links that open a new tab, and Ctrl+T / Ctrl+W / Ctrl+Tab pressed inside a page
+  onBrowserOpenTab: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("browser-open-tab", h); return () => ipcRenderer.removeListener("browser-open-tab", h); },
+  onBrowserTabKey:  (cb) => { const h = (_e, k) => cb(k); ipcRenderer.on("browser-tab-key", h); return () => ipcRenderer.removeListener("browser-tab-key", h); },
   streamRestore: (opts)  => ipcRenderer.invoke("stream-restore", opts),
   streamOpen:   (opts)   => ipcRenderer.invoke("stream-open", opts),
   streamResize: (bounds) => ipcRenderer.invoke("stream-resize", bounds),

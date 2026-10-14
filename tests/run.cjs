@@ -70,6 +70,7 @@ const avatarFile = path.join(ROOT, "electron", "avatar.js");
 if (fs.existsSync(avatarFile) && fs.existsSync(path.join(__dirname, "avatars.cjs")) && fs.existsSync(path.join(sqlDir, "aura-avatars.sql"))) add("messages", "Profile pictures", "avatars.cjs", [avatarFile]);
 const securityFile = path.join(ROOT, "electron", "security.js");
 if (fs.existsSync(securityFile) && fs.existsSync(path.join(__dirname, "security.cjs"))) add("files", "Security: windows, links, games and clip files", "security.cjs", [securityFile]);
+if (fs.existsSync(path.join(__dirname, "browser-tabs.cjs"))) add("files", "Browser tabs", "browser-tabs.cjs");
 add("window", "The window opens and every page loads", "window.cjs");
 if (fs.existsSync(path.join(__dirname, "friends-playing.cjs"))) add("window", "Home: Friends Playing Now", "friends-playing.cjs");
 if (fs.existsSync(path.join(__dirname, "tray-settings.cjs"))) add("window", "Settings: running in the background", "tray-settings.cjs");

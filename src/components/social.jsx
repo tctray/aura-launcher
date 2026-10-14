@@ -89,6 +89,36 @@ const UA = typeof navigator !== "undefined"
   ? navigator.userAgent.replace(/\s(?!Chrome\/|Safari\/|AppleWebKit\/|Mozilla\/)[A-Za-z][\w.-]*\/[\w.-]+/g, "")
   : undefined;
 
+// ── Browser tabs ──────────────────────────────────────────────────────────────
+// Added by aura-browser-tabs-setup.cjs.
+// The Browser has tabs, like Chrome or Edge: + (or Ctrl+T) for a new tab, the x (or Ctrl+W, or a
+// middle-click) to close one, Ctrl+Tab and Ctrl+Shift+Tab to switch. A link that opens a new tab
+// or window opens as a tab here. The open tabs are kept on this PC, in AURA's own storage, and come
+// back next time (only ordinary https pages are kept; a tab on the start page stays one).
+// All tabs share one set of sign-ins, as tabs in a browser do.
+const TABS_KEY = "aura_browser_tabs";
+const MAX_TABS = 10;
+const BROWSER_PARTITION = "persist:social-browser";
+const newTabId = () => "tab-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const blankTab = (url = "") => ({ id: newTabId(), url: url || "about:blank", start: !url, title: "", icon: "" });
+const safeIcon = (v) => (typeof v === "string" && /^https:\/\//i.test(v) && v.length <= 2000 ? v : "");
+function loadTabs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TABS_KEY) || "null");
+    if (saved && Array.isArray(saved.tabs) && saved.tabs.length) {
+      const tabs = saved.tabs.slice(0, MAX_TABS).map((t) => {
+        const url = HTTPS_PAGE.test((t && t.url) || "") ? t.url : "";
+        return { ...blankTab(url), title: url && typeof t.title === "string" ? t.title.slice(0, 80) : "", icon: url ? safeIcon(t.icon) : "" };
+      });
+      const at = Math.min(Math.max(0, Math.floor(Number(saved.active)) || 0), tabs.length - 1);
+      return { tabs, active: tabs[at].id };
+    }
+  } catch {}
+  // The first time: one tab, where the Browser was last (or the homepage, or the start page)
+  const tab = blankTab(savedPage(LASTPAGE_KEY) || savedPage(HOMEPAGE_KEY));
+  return { tabs: [tab], active: tab.id };
+}
+
 function SiteView({ site, active, onState, register }) {
   const ref = useRef(null);
 
@@ -101,24 +131,29 @@ function SiteView({ site, active, onState, register }) {
     };
     const start = () => onState(site.id, { loading: true });
     const stop = () => { onState(site.id, { loading: false }); update(); };
-    // The page's name and little icon, used when it is bookmarked
+    // The page's name and little icon, used for its tab and when it is bookmarked
     const moved = () => { onState(site.id, { icon: "" }); update(); }; // a new page: the old icon no longer applies
     const named = (e) => onState(site.id, { title: e.title || "" });
     const pictured = (e) => onState(site.id, { icon: (Array.isArray(e.favicons) ? e.favicons : []).find((u) => /^https:\/\//i.test(u)) || "" });
+    // A plain http page (some links open one) starts once the tab is ready: tabs open on https pages only
+    let later = /^http:\/\//i.test(site.url || "") ? site.url : "";
+    const ready = () => { if (later) { const u = later; later = ""; try { wv.loadURL(u); } catch {} } update(); };
     const events = [
-      ["dom-ready", update], ["did-navigate", moved], ["did-navigate-in-page", update],
+      ["dom-ready", ready], ["did-navigate", moved], ["did-navigate-in-page", update],
       ["did-start-loading", start], ["did-stop-loading", stop],
       ["page-title-updated", named], ["page-favicon-updated", pictured],
     ];
     events.forEach(([e, f]) => wv.addEventListener(e, f));
-    return () => events.forEach(([e, f]) => wv.removeEventListener(e, f));
+    // The blank page can be ready before this runs; then start the real page now
+    if (later) { try { wv.getURL(); ready(); } catch {} }
+    return () => { events.forEach(([e, f]) => wv.removeEventListener(e, f)); register(site.id, null); };
   }, []);
 
   return (
     <webview
       ref={ref}
-      src={site.url}
-      partition={`persist:social-${site.id}`}
+      src={/^http:\/\//i.test(site.url || "") ? "about:blank" : site.url}
+      partition={site.partition || `persist:social-${site.id}`}
       useragent={UA}
       allowpopups="true"
       style={{
@@ -140,6 +175,8 @@ const icons = {
   bookmarks: (<><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z" /></>),
   more: (<><circle cx="12" cy="5.5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="18.5" r="1" /></>),
   popout: (<><rect x="3" y="5" width="18" height="14" rx="2" /><rect x="12.5" y="12" width="6" height="4.5" rx="1" fill="currentColor" stroke="none" /></>),
+  plus: (<><path d="M12 5v14" /><path d="M5 12h14" /></>),
+  close: (<><path d="M6 6l12 12" /><path d="M18 6L6 18" /></>),
 };
 const Svg = ({ name, filled = false, size = 16 }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill={filled ? "currentColor" : "none"} stroke="currentColor"
@@ -155,43 +192,150 @@ export default function SocialPage({ visible = true, onShow }) {
   const [states, setStates] = useState({});
   const views = useRef({});
 
-  // Only load a site the first time its tab is actually shown
+  // Browser tabs: { tabs: [{ id, url (what it first opened), start (showing the start page), title, icon }], active }
+  const [browser, setBrowser] = useState(loadTabs);
+  const browserRef = useRef(browser);
+  browserRef.current = browser;
+  const tabs = browser.tabs;
+  const tabId = browser.active;
+  const tab = tabs.find((t) => t.id === tabId) || tabs[0];
+  const isBrowser = active === "browser";
+  const key = isBrowser ? tabId : active; // the page the toolbar is working on
+
+  // Only load a page the first time it is actually shown
   useEffect(() => {
-    if (visible) setOpened((s) => (s.has(active) ? s : new Set(s).add(active)));
-  }, [visible, active]);
+    if (visible) setOpened((s) => (s.has(key) ? s : new Set(s).add(key)));
+  }, [visible, key]);
 
   const choose = (id) => {
     setActive(id);
     try { localStorage.setItem("aura_social_tab", id); } catch {}
   };
   const onState = useCallback((id, patch) => setStates((s) => ({ ...s, [id]: { ...s[id], ...patch } })), []);
-  const register = useCallback((id, wv) => { views.current[id] = wv; }, []);
+  const register = useCallback((id, wv) => { if (wv) views.current[id] = wv; else delete views.current[id]; }, []);
+  const setTab = (id, patch) => setBrowser((b) => ({ ...b, tabs: b.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) }));
 
-  const st = states[active] || {};
-  const wv = views.current[active];
+  const st = states[key] || {};
+  const wv = views.current[key];
   const back = () => { try { if (wv?.canGoBack()) wv.goBack(); } catch {} };
   const forward = () => { try { if (wv?.canGoForward()) wv.goForward(); } catch {} };
-  // Browser tab start page
   const [homepage, setHomepage] = useState(() => savedPage(HOMEPAGE_KEY));
-  const firstPage = useRef(savedPage(LASTPAGE_KEY) || savedPage(HOMEPAGE_KEY)); // what the Browser tab opens on ("" = the start page)
   const [homeMenu, setHomeMenu] = useState(null);
-  const [browserHome, setBrowserHome] = useState(() => !firstPage.current);
-  const browserUrl = states.browser?.url;
-  // Remember where you are, so the Browser tab opens here next time
-  useEffect(() => { if (HTTPS_PAGE.test(browserUrl || "")) { try { localStorage.setItem(LASTPAGE_KEY, browserUrl); } catch {} } }, [browserUrl]);
+  const showStart = isBrowser && !!tab?.start;
+
+  // A tab that goes to a new page is no longer on the start page
+  const seenUrl = useRef({});
   useEffect(() => {
-    if (browserUrl && browserUrl !== "about:blank") setBrowserHome(false);
-  }, [browserUrl]);
+    const moved = [];
+    for (const t of tabs) {
+      const u = states[t.id]?.url;
+      if (u && u !== seenUrl.current[t.id]) { seenUrl.current[t.id] = u; if (u !== "about:blank") moved.push(t.id); }
+    }
+    if (moved.some((id) => tabs.find((t) => t.id === id)?.start)) {
+      setBrowser((b) => ({ ...b, tabs: b.tabs.map((t) => (moved.includes(t.id) && t.start ? { ...t, start: false } : t)) }));
+    }
+  }, [states]);
+  // Remember the open tabs, and where the one you're on is
+  const activeUrl = states[tabId]?.url;
+  useEffect(() => { if (HTTPS_PAGE.test(activeUrl || "") && !tab?.start) { try { localStorage.setItem(LASTPAGE_KEY, activeUrl); } catch {} } }, [activeUrl]);
+  useEffect(() => {
+    const list = tabs.map((t) => {
+      if (t.start) return { url: "" };
+      const s = states[t.id] || {};
+      const url = HTTPS_PAGE.test(s.url || "") ? s.url : HTTPS_PAGE.test(t.url) ? t.url : "";
+      return url ? { url, title: tidyTitle(s.title || t.title, url), icon: safeIcon(s.icon || t.icon) } : { url: "" };
+    });
+    try { localStorage.setItem(TABS_KEY, JSON.stringify({ tabs: list, active: Math.max(0, tabs.findIndex((t) => t.id === tabId)) })); } catch {}
+  }, [browser, states]);
+
+  // A short note under the tabs ("You can have up to 10 tabs...")
+  const [tabNote, setTabNote] = useState("");
+  useEffect(() => { if (!tabNote) return; const t = setTimeout(() => setTabNote(""), 5000); return () => clearTimeout(t); }, [tabNote]);
+
+  // Open a page in the tab you're on
   const openInBrowserTab = (url) => {
-    const view = views.current.browser;
-    if (!view || !url) return;
-    try { view.loadURL(url); } catch { view.src = url; }
-    setBrowserHome(false);
+    if (!url) return;
+    const id = browserRef.current.active;
+    const view = views.current[id];
+    if (view) { try { view.loadURL(url); } catch { view.src = url; } setTab(id, { start: false }); }
+    else { setTab(id, { url, start: false }); setOpened((s) => new Set(s).add(id)); }
     if (HTTPS_PAGE.test(url)) { try { localStorage.setItem(LASTPAGE_KEY, url); } catch {} }
   };
+  // Open a new tab next to the one you're on: on the start page, or on a page
+  const openNewTab = (url = "", { background = false, fromLink = false } = {}) => {
+    const b = browserRef.current;
+    if (b.tabs.length >= MAX_TABS) {
+      setTabNote(`You can have up to ${MAX_TABS} tabs. Close one to open another.`);
+      if (url && !background) openInBrowserTab(url); // a link still opens, in this tab
+      return;
+    }
+    const t = blankTab(url);
+    const next = [...b.tabs];
+    if (fromLink) {
+      // Like Chrome: a tab opened from a link goes next to its page, after others opened from it
+      const at = b.tabs.findIndex((x) => x.id === b.active);
+      next.splice(at + 1 + b.tabs.slice(at + 1).filter((x) => x.opener === b.active).length, 0, { ...t, opener: b.active });
+    } else next.push(t); // + and Ctrl+T add a tab at the end
+    setBrowser({ tabs: next, active: background ? b.active : t.id });
+    if (url) setOpened((s) => new Set(s).add(t.id)); // pages in new tabs start loading straight away
+    if (!background) choose("browser");
+  };
+  const selectTab = (id) => { setBrowser((b) => (b.tabs.some((t) => t.id === id) ? { ...b, active: id } : b)); };
+  const closeTab = (id) => {
+    const b = browserRef.current;
+    const at = b.tabs.findIndex((t) => t.id === id);
+    if (at < 0) return;
+    if (b.tabs.length === 1) {
+      const t = blankTab(); // closing the last tab leaves a fresh start page
+      setBrowser({ tabs: [t], active: t.id });
+      try { localStorage.removeItem(LASTPAGE_KEY); } catch {}
+    } else {
+      const rest = b.tabs.filter((t) => t.id !== id);
+      const closing = b.tabs[at];
+      const back = closing.opener && rest.find((t) => t.id === closing.opener);
+      const nextActive = b.active !== id ? b.active : (back || rest[at] || rest[at - 1]).id;
+      setBrowser({ tabs: rest.map((t) => (t.opener === id ? { ...t, opener: undefined } : t)), active: nextActive });
+    }
+    delete views.current[id];
+    delete seenUrl.current[id];
+    setStates((s) => { if (!s[id]) return s; const n = { ...s }; delete n[id]; return n; });
+    setOpened((s) => { if (!s.has(id)) return s; const n = new Set(s); n.delete(id); return n; });
+    if (popTab.current === id) { popTab.current = null; setPopped(false); }
+  };
+  const cycleTab = (by) => {
+    const b = browserRef.current;
+    const at = b.tabs.findIndex((t) => t.id === b.active);
+    selectTab(b.tabs[(at + by + b.tabs.length) % b.tabs.length].id);
+  };
+  // Ctrl+T, Ctrl+W, Ctrl+Tab and Ctrl+Shift+Tab: from AURA's toolbar, or from inside a page
+  const tabKey = (what) => {
+    if (!visibleRef.current || activeRef.current !== "browser") return false;
+    if (what === "new") openNewTab();
+    else if (what === "close") closeTab(browserRef.current.active);
+    else if (what === "next") cycleTab(1);
+    else if (what === "previous") cycleTab(-1);
+    else return false;
+    return true;
+  };
+  const visibleRef = useRef(visible); visibleRef.current = visible;
+  const activeRef = useRef(active); activeRef.current = active;
+  const actions = useRef({});
+  actions.current = { openNewTab, tabKey };
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const k = String(e.key).toLowerCase();
+      const what = k === "t" ? "new" : k === "w" ? "close" : k === "tab" ? (e.shiftKey ? "previous" : "next") : null;
+      if (what && actions.current.tabKey(what)) { e.preventDefault(); e.stopPropagation(); }
+    };
+    window.addEventListener("keydown", onKey, true);
+    const offOpen = window.electronAPI?.onBrowserOpenTab?.((d) => { if (d && isWebAddress(d.url)) actions.current.openNewTab(d.url, { background: !!d.background, fromLink: true }); });
+    const offKey = window.electronAPI?.onBrowserTabKey?.((what) => actions.current.tabKey(what));
+    return () => { window.removeEventListener("keydown", onKey, true); if (typeof offOpen === "function") offOpen(); if (typeof offKey === "function") offKey(); };
+  }, []);
 
   const goHome = () => {
-    if (active === "browser") {
+    if (isBrowser) {
       if (homepage) { openInBrowserTab(homepage); return; }
       openStartPage();
       return;
@@ -199,9 +343,9 @@ export default function SocialPage({ visible = true, onShow }) {
     try { wv?.loadURL(SITES.find((s) => s.id === active).url); } catch {}
   };
 
-  // Address bar (Browser tab)
+  // Address bar (Browser)
   const [addr, setAddr] = useState(null); // null = show the page's URL
-  useEffect(() => { setAddr(null); }, [active, st.url]);
+  useEffect(() => { setAddr(null); }, [key, st.url, showStart]);
   const go = (e) => {
     e.preventDefault();
     const url = toUrl(addr ?? (showStart ? "" : st.url) ?? "");
@@ -209,32 +353,40 @@ export default function SocialPage({ visible = true, onShow }) {
     setAddr(null);
     e.target.querySelector("input")?.blur();
   };
-  const isBrowser = active === "browser";
-  const showStart = isBrowser && (browserHome || ((!st.url || st.url === "about:blank") && !firstPage.current));
-  const reload = () => { try { wv?.reload(); } catch {} };
+  const reload = () => { try { if (!showStart) wv?.reload(); } catch {} };
 
-  // Pop-out video (see POP_OUT at the top). "Showing" means the Browser tab's page is on screen.
+  // Pop-out video (see POP_OUT at the top). "Showing" means a Browser tab's page is on screen.
   const [popOut, setPopOut] = useState(() => { try { return localStorage.getItem(POPOUT_KEY) !== "0"; } catch { return true; } });
   const [popped, setPopped] = useState(false);
   const browserShowing = visible && isBrowser && !showStart;
+  const shownTab = useRef(null); // the tab whose page was on screen last
+  const popTab = useRef(null);   // the tab whose video is popped out
+  if (browserShowing) shownTab.current = tabId;
   const wasShowing = useRef(browserShowing);
-  const inPage = (code, asUser = false) => {
-    const view = views.current.browser;
+  const inPage = (code, asUser = false, id = popTab.current || shownTab.current) => {
+    const view = id ? views.current[id] : null;
     try { return view ? Promise.resolve(view.executeJavaScript(code, asUser)).catch(() => "") : Promise.resolve(""); } catch { return Promise.resolve(""); }
   };
   useEffect(() => {
     const before = wasShowing.current;
     wasShowing.current = browserShowing;
     if (before === browserShowing) return;
-    if (browserShowing) { setPopped(false); inPage(POP_IN); return; }
+    if (browserShowing) {
+      setPopped(false);
+      if (popTab.current) inPage(POP_IN, false, popTab.current);
+      popTab.current = null;
+      return;
+    }
     if (!popOut) return;
+    const id = shownTab.current;
     let sound = false;
-    try { sound = !!views.current.browser?.isCurrentlyAudible(); } catch {}
+    try { sound = !!(id && views.current[id]?.isCurrentlyAudible()); } catch {}
     // Leaving the page counts as asking for it: browsers only open that window on a person's say-so
-    if (sound) inPage(POP_OUT, true).then((where) => {
+    if (sound) inPage(POP_OUT, true, id).then((where) => {
       if (where !== "out") return;
-      if (wasShowing.current) inPage(POP_IN); // you were already back before it opened
-      else setPopped(true);
+      if (wasShowing.current) { inPage(POP_IN, false, id); return; } // you were already back before it opened
+      popTab.current = id;
+      setPopped(true);
     });
   }, [browserShowing]);
   // While it's out, notice when it comes back. "Back to tab" on the small window means "show me
@@ -242,10 +394,12 @@ export default function SocialPage({ visible = true, onShow }) {
   useEffect(() => {
     if (!popped) return;
     const timer = setInterval(() => {
-      inPage(POP_WHERE).then((where) => {
+      const id = popTab.current;
+      inPage(POP_WHERE, false, id).then((where) => {
         if (where === "out" || wasShowing.current) return;
         setPopped(false);
-        if (where === "page") { setBrowserHome(false); choose("browser"); onShow?.(); }
+        popTab.current = null;
+        if (where === "page" && id) { selectTab(id); setTab(id, { start: false }); choose("browser"); onShow?.(); }
       });
     }, 1500);
     return () => clearInterval(timer);
@@ -256,7 +410,7 @@ export default function SocialPage({ visible = true, onShow }) {
     try { localStorage.setItem(POPOUT_KEY, next ? "1" : "0"); } catch {}
   };
 
-  // Bookmarks (Browser tab): the star saves the page you're on, the bar lists what you've saved
+  // Bookmarks (Browser): the star saves the page you're on, the bar lists what you've saved
   const [bookmarks, setBookmarks] = useState(loadBookmarks);
   const [barOpen, setBarOpen] = useState(() => { try { return localStorage.getItem(BOOKMARKS_BAR_KEY) !== "0"; } catch { return true; } });
   const [barNote, setBarNote] = useState("");
@@ -274,9 +428,9 @@ export default function SocialPage({ visible = true, onShow }) {
   };
   useEffect(() => { if (!barNote) return; const t = setTimeout(() => setBarNote(""), 5000); return () => clearTimeout(t); }, [barNote]);
 
-  // Homepage (Browser tab): right-click the Home button to choose
+  // Homepage (Browser): right-click the Home button to choose
   const openStartPage = () => {
-    setBrowserHome(true);
+    setTab(browserRef.current.active, { start: true });
     try { localStorage.removeItem(LASTPAGE_KEY); } catch {} // you chose the start page, so that is where you are
     setHomeMenu(null);
   };
@@ -294,8 +448,8 @@ export default function SocialPage({ visible = true, onShow }) {
   }, [homeMenu]);
 
   const openOutside = () => {
-    const url = st.url || SITES.find((s) => s.id === active)?.url;
-    window.electronAPI?.openExternal?.(url);
+    const url = showStart ? "" : st.url || SITES.find((s) => s.id === active)?.url;
+    if (url && url !== "about:blank") window.electronAPI?.openExternal?.(url);
   };
 
   if (!isElectron) {
@@ -327,10 +481,10 @@ export default function SocialPage({ visible = true, onShow }) {
             );
           })}
         </div>
-        <button style={{ ...tool, opacity: st.canGoBack ? 1 : 0.4 }} onClick={back} disabled={!st.canGoBack}
+        <button style={{ ...tool, opacity: st.canGoBack && !showStart ? 1 : 0.4 }} onClick={back} disabled={!st.canGoBack || showStart}
                 title="Back" aria-label="Back"><Svg name="back" /></button>
         {isBrowser && (
-          <button style={{ ...tool, opacity: st.canGoForward ? 1 : 0.4 }} onClick={forward} disabled={!st.canGoForward}
+          <button style={{ ...tool, opacity: st.canGoForward && !showStart ? 1 : 0.4 }} onClick={forward} disabled={!st.canGoForward || showStart}
                   title="Forward" aria-label="Forward"><Svg name="forward" /></button>
         )}
         {isBrowser ? (
@@ -391,19 +545,86 @@ export default function SocialPage({ visible = true, onShow }) {
           </div>
         </>
       )}
-      <style>{BOOKMARK_CSS}</style>
-      {isBrowser && barOpen && <BookmarkBar items={bookmarks} current={pageUrl} note={barNote} onOpen={openInBrowserTab} onChange={changeBookmarks} />}
+      <style>{BOOKMARK_CSS + TABS_CSS}</style>
+      {isBrowser && (
+        <TabStrip tabs={tabs} active={tabId} states={states} note={tabNote}
+                  onSelect={selectTab} onClose={closeTab} onNew={() => openNewTab()} />
+      )}
+      {isBrowser && barOpen && <BookmarkBar items={bookmarks} current={pageUrl} note={barNote} onOpen={openInBrowserTab} onOpenNew={(url) => openNewTab(url, { background: true })} onChange={changeBookmarks} />}
 
       {/* Loading line */}
-      <div style={{ height: 2, flexShrink: 0, background: st.loading ? "var(--ac)" : "transparent", transition: "background .2s" }} />
+      <div style={{ height: 2, flexShrink: 0, background: st.loading && !showStart ? "var(--ac)" : "transparent", transition: "background .2s" }} />
 
-      {/* Sites (kept alive once opened so switching tabs is instant) */}
+      {/* Pages (kept alive once opened so switching is instant) */}
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-        {SITES.filter((s) => opened.has(s.id)).map((s) => (
-          <SiteView key={s.id} site={s.id === "browser" && firstPage.current ? { ...s, url: firstPage.current } : s} active={s.id === active} onState={onState} register={register} />
+        {SITES.filter((s) => s.id !== "browser" && opened.has(s.id)).map((s) => (
+          <SiteView key={s.id} site={s} active={s.id === active} onState={onState} register={register} />
         ))}
-        {showStart && <StartPage onGo={openInBrowserTab} bookmarks={bookmarks} />}
+        {tabs.filter((t) => opened.has(t.id)).map((t) => (
+          <SiteView key={t.id} site={{ id: t.id, url: t.url, partition: BROWSER_PARTITION }} active={isBrowser && t.id === tabId && !t.start} onState={onState} register={register} />
+        ))}
+        {showStart && <StartPage key={tabId} onGo={openInBrowserTab} bookmarks={bookmarks} />}
       </div>
+    </div>
+  );
+}
+
+// ── Tab strip (Browser) ───────────────────────────────────────────────────────
+const TABS_CSS = `
+.btab-strip{position:relative;display:flex;align-items:center;gap:4px;padding:6px 12px 0;min-height:40px;background:var(--panel);border-bottom:1px solid var(--border);flex-shrink:0;font-family:'DM Sans',sans-serif}
+.btab{position:relative;display:flex;align-items:center;flex:0 1 200px;min-width:0;overflow:hidden;height:34px;border-radius:9px 9px 0 0;color:var(--t2)}
+.btab:hover{background:color-mix(in srgb,var(--card) 55%,transparent);color:var(--t1)}
+.btab.on{background:var(--card);color:var(--t1);box-shadow:inset 0 2px 0 var(--ac)}
+.btab-go{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:100%;padding:0 4px 0 11px;border:0;background:transparent;color:inherit;font:600 12.5px 'DM Sans',sans-serif;cursor:pointer;text-align:left;border-radius:9px 0 0 0}
+.btab-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btab-x{display:grid;place-items:center;flex-shrink:0;width:22px;height:22px;margin-right:6px;border:0;border-radius:6px;background:transparent;color:var(--t2);cursor:pointer;opacity:0}
+.btab:hover .btab-x,.btab.on .btab-x,.btab:focus-within .btab-x{opacity:1}
+.btab-x:hover{background:var(--border);color:var(--t1)}
+.btab-new{display:grid;place-items:center;flex-shrink:0;width:30px;height:30px;margin:0 0 2px 2px;border:0;border-radius:8px;background:transparent;color:var(--t2);cursor:pointer}
+.btab-new:hover:not(:disabled){background:var(--card);color:var(--t1)}
+.btab-new:disabled{opacity:.35;cursor:default}
+.btab-go:focus-visible,.btab-x:focus-visible,.btab-new:focus-visible{outline:2px solid var(--ac);outline-offset:-2px}
+.btab-spin{width:14px;height:14px;flex-shrink:0;border-radius:50%;border:2px solid var(--border);border-top-color:var(--ac);animation:btab-spin .8s linear infinite}
+.btab-new-ico{width:16px;height:16px;flex-shrink:0;border-radius:5px;background:linear-gradient(135deg,var(--ac),var(--ac2))}
+.btab-note{position:absolute;right:12px;top:calc(100% + 6px);z-index:30;padding:8px 12px;border-radius:8px;background:var(--panel);border:1px solid var(--border);box-shadow:0 10px 30px rgba(0,0,0,.45);font-size:12.5px;color:var(--t1);white-space:nowrap}
+@keyframes btab-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.btab-spin{animation:none}}
+`;
+
+function TabStrip({ tabs, active, states, note, onSelect, onClose, onNew }) {
+  const full = tabs.length >= MAX_TABS;
+  return (
+    <div className="btab-strip">
+      <div role="tablist" aria-label="Browser tabs" style={{ display: "contents" }}>
+        {tabs.map((t) => {
+          const s = states[t.id] || {};
+          const url = t.start ? "" : (s.url && s.url !== "about:blank" ? s.url : t.url !== "about:blank" ? t.url : "");
+          const named = s.title && s.title !== "about:blank" ? s.title : t.title;
+          const title = t.start ? "New tab" : tidyTitle(named, url || "New tab");
+          const on = t.id === active;
+          return (
+            <div key={t.id} className={`btab ${on ? "on" : ""}`}
+                 onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+                 onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onClose(t.id); } }}>
+              <button type="button" role="tab" aria-selected={on} className="btab-go" onClick={() => onSelect(t.id)}
+                      title={url ? title + "\n" + url : title}>
+                {s.loading && !t.start ? <span className="btab-spin" aria-hidden="true" />
+                  : t.start ? <span className="btab-new-ico" aria-hidden="true" />
+                  : <BookmarkIcon item={{ icon: s.icon || t.icon || "", url: url || "https://new" }} />}
+                <span className="btab-name">{title}</span>
+              </button>
+              <button type="button" className="btab-x" onClick={() => onClose(t.id)} aria-label={`Close ${title}`} title="Close tab (Ctrl+W)">
+                <Svg name="close" size={13} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <button type="button" className="btab-new" onClick={onNew} disabled={full} aria-label="New tab"
+              title={full ? `You can have up to ${MAX_TABS} tabs. Close one to open another.` : "New tab (Ctrl+T)"}>
+        <Svg name="plus" size={16} />
+      </button>
+      {note && <span className="btab-note" role="status">{note}</span>}
     </div>
   );
 }
@@ -524,7 +745,7 @@ function BookmarkIcon({ item }) {
   return <span className="bmk-ico" aria-hidden="true">{(siteName(item.url)[0] || "?").toUpperCase()}</span>;
 }
 
-function BookmarkBar({ items, current, note, onOpen, onChange }) {
+function BookmarkBar({ items, current, note, onOpen, onOpenNew, onChange }) {
   const [menu, setMenu] = useState(null);       // { id, x, y, renaming }
   const [name, setName] = useState("");
   const box = useRef(null);
@@ -565,7 +786,9 @@ function BookmarkBar({ items, current, note, onOpen, onChange }) {
     <div className="bmk-bar" role="toolbar" aria-label="Bookmarks">
       {items.map((b) => (
         <div key={b.id} className={`bmk-chip ${sameAddress(b.url, current) ? "here" : ""} ${menu?.id === b.id ? "on" : ""}`} onContextMenu={(e) => openMenu(e, b)}>
-          <button type="button" className="bmk-go" onClick={() => onOpen(b.url)} title={b.title + "\n" + b.url}>
+          <button type="button" className="bmk-go" onClick={() => onOpen(b.url)} title={b.title + "\n" + b.url}
+                  onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+                  onAuxClick={(e) => { if (e.button === 1 && onOpenNew) { e.preventDefault(); onOpenNew(b.url); } }}>
             <BookmarkIcon item={b} /><span className="bmk-name">{b.title}</span>
           </button>
           <button type="button" className="bmk-more" onClick={(e) => openMenu(e, b)} aria-label={`Options for ${b.title}`} aria-haspopup="menu" title="Rename, move or remove"><Svg name="more" size={14} /></button>
