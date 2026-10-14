@@ -16,6 +16,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
+import { ringtone, soundPrefs } from "./sounds"; // your ringtone (Settings > Calls and messages)
 
 const RING_OUT_MS = 30000;    // a call you make rings this long before "didn't answer"
 const RING_IN_MS = 50000;     // a call ringing for you is given up on after this, if nothing ends it first
@@ -127,7 +128,7 @@ function rest() {
 const tones = {
   timer: null, playing: [],
   // One note: frequencies sounded together, starting `at` seconds from now
-  note(freqs, at, length, loud) {
+  note(freqs, at, length, loud, wave = "sine") {
     const ctx = sound();
     if (!ctx) return;
     const t = ctx.currentTime + at;
@@ -139,7 +140,7 @@ const tones = {
     gain.connect(ctx.destination);
     for (const f of freqs) {
       const osc = ctx.createOscillator();
-      osc.type = "sine"; osc.frequency.value = f;
+      osc.type = wave; osc.frequency.value = f;
       osc.connect(gain); osc.start(t); osc.stop(t + length + 0.02);
       tones.playing.push(osc);
       osc.onended = () => { tones.playing = tones.playing.filter((o) => o !== osc); };
@@ -149,10 +150,17 @@ const tones = {
   // What you hear while your call rings at the other end
   ringback() { tones.loop(() => tones.note([440, 480], 0, 1.8, 0.035), 5200); },
   // A call coming in
-  ring() { tones.loop(() => { [659.3, 784, 987.8].forEach((f, i) => { tones.note([f], i * 0.16, 0.2, 0.09); tones.note([f], 0.72 + i * 0.16, 0.2, 0.09); }); }, 2600); },
+  // Your ringtone from Settings (see sounds.jsx), or AURA's own
+  ring() {
+    const v = ringtone.volume();
+    const own = () => { if (v > 0) tones.loop(() => { [659.3, 784, 987.8].forEach((f, i) => { tones.note([f], i * 0.16, 0.2, 0.09 * v); tones.note([f], 0.72 + i * 0.16, 0.2, 0.09 * v); }); }, 2600); };
+    if (soundPrefs().ring === "aura") { own(); return; }
+    ringtone.start({ loop: tones.loop, note: tones.note, speaker: prefs.speaker || "", onFail: own });
+  },
   connected() { tones.stop(); try { tones.note([523.3], 0, 0.11, 0.07); tones.note([784], 0.11, 0.16, 0.07); } catch {} },
   ended() { tones.stop(); try { tones.note([392], 0, 0.12, 0.06); tones.note([261.6], 0.12, 0.2, 0.06); } catch {} },
   stop() {
+    ringtone.stop();
     clearInterval(tones.timer); tones.timer = null;
     for (const osc of tones.playing) { try { osc.onended = null; osc.stop(); } catch {} }
     tones.playing = [];

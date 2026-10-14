@@ -87,7 +87,7 @@ function sniff(b) {
 }
 const megabytes = (n) => (n / (1024 * 1024)).toFixed(n < 10 * 1024 * 1024 ? 1 : 0) + " MB";
 
-function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
+function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSound }) {
   const sb = () => cloud.internals.client();
   const currentUser = () => cloud.internals.currentUser();
 
@@ -794,7 +794,8 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server }) {
   function show(title, body, conversationId) {
     try {
       if (!Notification.isSupported()) return;
-      const n = new Notification({ title, body, silent: false });
+      // AURA plays your message sound itself; Windows adds its own only if you chose it
+      const n = new Notification({ title, body, silent: typeof messageSound === "function" ? messageSound() !== "windows" : false });
       n.on("click", () => {
         const win = getWindow();
         if (!win || win.isDestroyed()) return;

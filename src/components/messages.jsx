@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { PrivacyButton } from "./privacy";
+import { chime } from "./sounds"; // your message sound (Settings > Calls and messages)
 import { CallButton, IconPhone, MISSED_CALL, callActions, callHooks, callsAvailable, mountCallLayer, useCall } from "./calls";
 
 // ── Talking to the main process ───────────────────────────────────────────────
@@ -437,6 +438,7 @@ function onMessage(message) {
   if (conversation) touchConversation(message, !mine && !isLooking(message.conversationId));
   if (mine) return;
   if (isLooking(message.conversationId)) { actions.markReadNow(message.conversationId); return; }
+  if (message.content !== MISSED_CALL) chime(); // the call already rang for a missed call
   // In-app notice, at most one per conversation every few seconds. If AURA isn't the window in
   // front, the main process shows a Windows notification instead.
   if (!document.hasFocus()) return;

@@ -11,6 +11,7 @@ import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
 import MessagesPage, { AuraFriendsTab, MessagesIcon, useAuraSocial } from "./components/messages";
 import { PrivacyButton } from "./components/privacy";
+import { CallSoundSettings } from "./components/sounds";
 import { FeedbackButton } from "./components/feedback";
 import { PageBoundary, AppBoundary, ErrorLogButton } from "./components/safety";
 
@@ -2945,6 +2946,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
         <div className="ss-card">
           <div className="sr"><div><div className="sr-l">Keep AURA Running When Closed</div><div className="sr-s">Closing AURA keeps it running by the clock, so friends' calls and messages still reach you. To quit, right-click the AURA icon there</div></div><Tog k="keepRunning"/></div>
           <div className="sr"><div><div className="sr-l">Start AURA When Windows Starts</div><div className="sr-s">Opens AURA quietly by the clock when you sign in, so you can get calls right away</div></div><Tog k="startWithWindows"/></div>
+          <CallSoundSettings/>
         </div>
       </div>
       <div className="ss">

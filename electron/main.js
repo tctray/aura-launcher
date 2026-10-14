@@ -130,7 +130,8 @@ const appSettings = {
   systemVolume: 1,           // 0 – 2
   keepRunning: true,         // closing the window keeps AURA in the tray (Added by aura-tray-setup.cjs)
   startWithWindows: false,   // open AURA in the tray when you sign in to Windows
-  trayTipShown: false,       // the "AURA is still running" tip has been shown once
+  trayTipShown: false,
+  messageSound: "aura",       // the message sound picked in Settings ("windows" = Windows' own; Added by aura-ringtones-setup.cjs)       // the "AURA is still running" tip has been shown once
 };
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 function loadAppSettings() {
@@ -520,7 +521,7 @@ ipcMain.handle("sessions:save", cloudHandler(auraCloud.saveMySessions));
 ipcMain.handle("sessions:delete", cloudHandler(auraCloud.deleteMySessions));
 
 // AURA friends and messages. The work happens in social.js
-require("./social").register({ ipcMain, cloudHandler, cloud: auraCloud, getWindow: () => mainWin, server: (route, body) => auraServer(route, body) });
+require("./social").register({ ipcMain, cloudHandler, cloud: auraCloud, getWindow: () => mainWin, server: (route, body) => auraServer(route, body), messageSound: () => appSettings.messageSound });
 
 
 
@@ -926,6 +927,7 @@ ipcMain.handle("settings-sync", (_e, patch = {}) => {
   appSettings.zoom = Math.min(1.3, Math.max(0.8, Number(appSettings.zoom) || 1));
   appSettings.keepRunning = appSettings.keepRunning !== false;
   appSettings.startWithWindows = appSettings.startWithWindows === true;
+  appSettings.messageSound = typeof appSettings.messageSound === "string" ? appSettings.messageSound.slice(0, 20) : "aura";
   saveAppSettings();
   if (appSettings.windowMode !== prevMode) applyWindowMode(appSettings.windowMode);
   if (appSettings.zoom !== prevZoom) mainWin?.webContents.setZoomFactor(appSettings.zoom);
