@@ -873,11 +873,14 @@ function ScreenPicker({ onClose }) {
   );
 }
 
-// ── Screen share: their screen, in a corner or filling the window (Added by aura-screen-share-setup.cjs) ──
+// ── Screen share: their screen, in a corner or full screen (Added by aura-screen-share-setup.cjs, screen-share v2) ──
+// Full screen fills your whole monitor. Esc, the button or double-click goes back to the corner.
 function ScreenView() {
   const call = useCall();
+  const box = useRef(null);
   const video = useRef(null);
   const [mode, setMode] = useState("dock"); // dock | full | hidden
+  const [idle, setIdle] = useState(false);  // full screen, mouse still: the top strip fades away
   const showing = !!call && !!call.peerSharing && (call.phase === "live" || call.phase === "reconnecting");
   const stream = showing ? rtc?.remoteVideo || null : null;
   useEffect(() => { if (showing) setMode("dock"); }, [showing]);
@@ -887,25 +890,45 @@ function ScreenView() {
     if (v.srcObject !== stream) v.srcObject = stream;
     if (stream) v.play().catch(() => {});
   }, [stream, mode, call?.screenRev]);
+  // Leaving full screen however it happens (Esc, F11, Windows) puts it back in the corner
   useEffect(() => {
-    if (mode !== "full") return;
-    const esc = (e) => { if (e.key === "Escape") setMode("dock"); };
+    const changed = () => { if (!document.fullscreenElement) setMode((m) => (m === "full" ? "dock" : m)); };
+    document.addEventListener("fullscreenchange", changed);
+    return () => document.removeEventListener("fullscreenchange", changed);
+  }, []);
+  // Their share stopped or the call ended while it was full screen: AURA's window goes back to normal
+  useEffect(() => { if (!showing && document.fullscreenElement?.classList?.contains("cx-screen")) document.exitFullscreen().catch(() => {}); }, [showing]);
+  const goFull = () => {
+    setMode("full");
+    const el = box.current;
+    // If the whole screen can't be used, it still fills AURA's window
+    try { el?.requestFullscreen?.({ navigationUI: "hide" })?.catch?.(() => {}); } catch {}
+  };
+  const leaveFull = () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); setMode("dock"); };
+  useEffect(() => {
+    if (mode !== "full") { setIdle(false); return; }
+    let timer = null;
+    const wake = () => { setIdle(false); clearTimeout(timer); timer = setTimeout(() => setIdle(true), 2500); };
+    const esc = (e) => { if (e.key === "Escape") leaveFull(); };
+    wake();
+    window.addEventListener("mousemove", wake);
     window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
+    return () => { clearTimeout(timer); window.removeEventListener("mousemove", wake); window.removeEventListener("keydown", esc); };
   }, [mode]);
   if (!showing) return null;
   const name = call.peer.username;
   if (mode === "hidden") return (
     <button type="button" className="cx-screen-pill" onClick={() => setMode("dock")} aria-label={`Show ${name}'s screen`}><IconScreen /> {name} is sharing their screen <b>Show</b></button>
   );
+  const full = mode === "full";
   return (
-    <div className={`cx-screen ${mode}`} role="region" aria-label={`${name}'s screen`}>
+    <div ref={box} className={`cx-screen ${mode} ${idle ? "idle" : ""}`} role="region" aria-label={`${name}'s screen`}>
       <div className="cx-screen-top">
-        <span className="cx-screen-name"><span className="cx-screen-dot" />{name}'s screen</span>
-        <button type="button" onClick={() => setMode(mode === "full" ? "dock" : "full")} title={mode === "full" ? "Back to the corner (Esc)" : "Fill the window"} aria-label={mode === "full" ? "Back to the corner" : "Fill the window"}>{mode === "full" ? <IconShrink /> : <IconExpand />}</button>
-        {mode !== "full" && <button type="button" onClick={() => setMode("hidden")} title="Hide" aria-label={`Hide ${name}'s screen`}>×</button>}
+        <span className="cx-screen-name"><span className="cx-screen-dot" />{name}'s screen{full && <span className="cx-screen-hint">Press Esc to exit full screen</span>}</span>
+        <button type="button" onClick={full ? leaveFull : goFull} title={full ? "Exit full screen (Esc)" : "Full screen"} aria-label={full ? "Exit full screen" : "Full screen"}>{full ? <IconShrink /> : <IconExpand />}</button>
+        {!full && <button type="button" onClick={() => setMode("hidden")} title="Hide" aria-label={`Hide ${name}'s screen`}>×</button>}
       </div>
-      <video ref={video} autoPlay playsInline muted onDoubleClick={() => setMode(mode === "full" ? "dock" : "full")} />
+      <video ref={video} autoPlay playsInline muted onDoubleClick={full ? leaveFull : goFull} />
     </div>
   );
 }
@@ -1156,6 +1179,14 @@ const CSS = `
 .cx-screen-pill{position:fixed;right:16px;bottom:16px;z-index:9550;display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;border-radius:999px;border:1px solid var(--borderb,rgba(255,255,255,.18));background:var(--panel,#1a1f26);color:var(--t1,#fff);font:500 12.5px 'DM Sans',sans-serif;cursor:pointer;box-shadow:0 10px 30px rgba(0,0,0,.5)}
 .cx-screen-pill b{color:#3ddc84;font-weight:600}
 .cx-screen-top button:focus-visible,.cx-screen-pill:focus-visible,.cx-src:focus-visible{outline:2px solid var(--ac2,var(--ac,#ff8a65));outline-offset:2px}
+/* Full screen fills the monitor (screen-share v2) */
+.cx-screen:fullscreen{inset:0;width:100vw;height:100vh;max-width:none;border-radius:0;border:none;box-shadow:none}
+.cx-screen:fullscreen video,.cx-screen.full video{flex:1;aspect-ratio:auto;height:0;min-height:0}
+.cx-screen:fullscreen .cx-screen-top{padding-top:6px}
+.cx-screen.full .cx-screen-top{transition:opacity .25s}
+.cx-screen.full.idle .cx-screen-top{opacity:0}
+.cx-screen.full.idle{cursor:none}
+.cx-screen-hint{font-weight:400;color:var(--t2,#9aa0aa);margin-left:6px}
 .reduce-motion .cx-bar,.reduce-motion .cx-bar.ringing.in,.reduce-motion .cx-bar.moved{animation:none}
 @media (prefers-reduced-motion:reduce){.cx-bar,.cx-bar.ringing.in,.cx-bar.moved{animation:none}}
 `;
