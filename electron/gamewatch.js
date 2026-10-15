@@ -41,6 +41,25 @@ function folderOf(exePath) {
   return dir;
 }
 
+// The game's own programs, read from its folder on disk. For games protected by anti-cheat
+// (Arc Raiders, The Finals, Fortnite...), Windows hides where the running program lives, so it
+// can't be learned from what's running. Unreal games keep it in <Project>\Binaries\Win64.
+const NOT_GAME_DIRS = /^(engine|installers?|redist|_?commonredist|easyanticheat|battleye|directx|dotnet|vcredist|support|prereq.*|tools?|launcher|__installer)$/i;
+async function programsOnDisk(dir, readdir = (d) => fs.promises.readdir(d, { withFileTypes: true })) {
+  const out = [];
+  let top = [];
+  try { top = await readdir(dir); } catch { return out; }
+  const projects = top.filter((e) => e && e.isDirectory() && !NOT_GAME_DIRS.test(e.name)).slice(0, 30);
+  for (const p of projects) {
+    for (const plat of ["Win64", "WinGDK"]) {
+      let files = [];
+      try { files = await readdir(path.join(dir, p.name, "Binaries", plat)); } catch { continue; }
+      for (const f of files) if (f && f.isFile() && /\.exe$/i.test(f.name)) out.push(f.name);
+    }
+  }
+  return out.slice(0, 20);
+}
+
 function createGameWatch({
   list,                         // async () => array of running program names (e.g. "MaddenNFL27.exe")
   onStart = () => {},           // (exePath, programName, { launched })
@@ -59,6 +78,8 @@ function createGameWatch({
   handoverMs = 90 * 1000,       // how long a starting game may vanish while it restarts or hands over
   aliasAfterMs = 15000,         // when to look in its folder for the real program
   aliasFile = null,             // where learned program names are kept
+  onDisk = programsOnDisk,      // async (folder) => program names the game keeps in its folder
+  diskPerCheck = 4,             // how many games' folders to read per check (so AURA stays quick)
 } = {}) {
   const library = new Map();    // lower-case path -> path as given
   const aliases = new Map();    // lower-case path -> Set of lower-case program names
@@ -68,6 +89,7 @@ function createGameWatch({
   let running = false;
   let checking = false;
   let lastFolderLook = -Infinity;
+  const diskRead = new Set();   // games whose folder has been read on disk this run
 
   try {
     if (aliasFile && fs.existsSync(aliasFile)) {
@@ -105,7 +127,9 @@ function createGameWatch({
   }
 
   // Learn the real program of each library game from where running programs live
-  function learnFromFolders(procs) {
+  // Library games with a folder of their own. A folder that holds (or sits above) another game's
+  // folder stands for neither.
+  function ownFolders() {
     const all = shouldWatchAll();
     const games = [];
     for (const [k, exePath] of library) {
@@ -113,13 +137,26 @@ function createGameWatch({
       const dir = folderOf(exePath);
       if (dir) games.push({ k, exePath, dir });
     }
-    // A folder that holds (or sits above) another game's folder stands for neither
     const shared = new Set();
     for (const a of games) for (const b of games) {
       if (a !== b && (a.dir === b.dir || b.dir.startsWith(a.dir + "\\"))) { shared.add(a.k); shared.add(b.k); }
     }
-    for (const g of games) {
-      if (shared.has(g.k)) continue;
+    return games.filter((g) => !shared.has(g.k));
+  }
+  // Read a few games' folders on disk for their real program (games AURA is starting go first)
+  async function learnFromDisk() {
+    if (!onDisk) return;
+    const games = ownFolders().filter((g) => !diskRead.has(g.k));
+    games.sort((a, b) => Number(pending.has(b.k) || sessions.has(b.k)) - Number(pending.has(a.k) || sessions.has(a.k)));
+    for (const g of games.slice(0, diskPerCheck)) {
+      diskRead.add(g.k);
+      let names = [];
+      try { names = (await onDisk(g.dir)) || []; } catch { names = []; }
+      for (const n of names) addAlias(g.exePath, n);
+    }
+  }
+  function learnFromFolders(procs) {
+    for (const g of ownFolders()) {
       const own = nameOf(g.exePath);
       for (const p of procs) {
         const n = String(p && p.name || "");
@@ -174,6 +211,7 @@ function createGameWatch({
         try { procs = await listWithPaths(); } catch { procs = null; }
         if (Array.isArray(procs)) learnFromFolders(procs);
       }
+      await learnFromDisk();
       const found = match(names);
       // Started
       for (const [k, name] of found) {
@@ -264,4 +302,4 @@ function listWithLocations(run) {
   });
 }
 
-module.exports = { createGameWatch, parseTasklist, listRunning, listInFolder, listWithLocations, folderOf, GENERIC, HELPERS };
+module.exports = { createGameWatch, parseTasklist, listRunning, listInFolder, listWithLocations, folderOf, programsOnDisk, GENERIC, HELPERS };

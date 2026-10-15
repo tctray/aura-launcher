@@ -6,7 +6,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const ROOT = path.join(__dirname, "..");
-const { createGameWatch, parseTasklist, GENERIC, folderOf } = require(path.resolve(process.argv[2] || path.join(ROOT, "electron", "gamewatch.js")));
+const { createGameWatch, parseTasklist, GENERIC, folderOf, programsOnDisk } = require(path.resolve(process.argv[2] || path.join(ROOT, "electron", "gamewatch.js")));
 let failed = 0;
 const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok    " : "  FAIL  ") + name + (ok ? "" : "  " + JSON.stringify(extra))); };
 
@@ -140,6 +140,39 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   await step(fw, 31000);
   check("two games in the same folder: a third program there counts for neither", events.length === 0);
   check("broad folders (a drive, Program Files, a Steam library, Desktop) never stand for a game", folderOf("C:\\Games\\x.exe") === null && folderOf("D:\\steamapps\\common\\x.exe") === null && folderOf("C:\\Users\\me\\Desktop\\x.exe") === null && folderOf(THPS) !== null);
+
+  console.log("3c. Games protected by anti-cheat, where Windows hides where the game runs from (Arc Raiders)");
+  events.length = 0;
+  const looked = [];
+  const disk = { "d:\\steamlibrary\\steamapps\\common\\arc raiders": ["PioneerGame.exe", "CrashReportClient.exe", "EasyAntiCheat_EOS_Setup.exe"] };
+  const pw = make({ listWithPaths: async () => [], onDisk: async (d) => { looked.push(d); return disk[d] || []; }, aliasFile: path.join(dir, "protected.json") });
+  pw.setLibrary([ARC, MADDEN]);
+  running = ["ArcRaiders.exe"];
+  await step(pw, 1000);
+  check("the game's folder is read for its own programs", looked.includes("d:\\steamlibrary\\steamapps\\common\\arc raiders"), looked);
+  check("Arc Raiders' launcher starting counts as the game starting", events.length === 1 && events[0][1] === ARC, events);
+  running = ["PioneerGame.exe", "EasyAntiCheat_EOS.exe"];
+  for (let i = 0; i < 50; i++) await step(pw, 5000); // a few minutes of play
+  check("when the launcher hands over to PioneerGame.exe, it's the same session, still going", events.length === 1, events);
+  running = [];
+  for (let i = 0; i < 3; i++) await step(pw, 5000);
+  check("closing the game ends it, with the time played", events.length === 2 && events[1][0] === "end" && events[1][2] >= 250000, events);
+  events.length = 0;
+  running = ["PioneerGame.exe"];
+  await step(pw, 20000);
+  check("next time, the game started straight from Steam is recognised right away", events.length === 1 && events[0][1] === ARC && /pioneergame/i.test(events[0][2]), events);
+  check("crash reporters and anti-cheat in the folder aren't taken for the game", !JSON.stringify(pw.snapshot().aliases).match(/crash|easyanticheat/i), pw.snapshot().aliases);
+  running = []; for (let i = 0; i < 25; i++) await step(pw, 5000);
+  check("each folder is read once, not on every check", looked.filter((d) => /arc raiders/.test(d)).length === 1, looked);
+  // Reading a real folder laid out like an Unreal game
+  const game = fs.mkdtempSync(path.join(os.tmpdir(), "aura-arc-"));
+  const put = (rel) => { const f = path.join(game, ...rel.split("/")); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, ""); };
+  put("ArcRaiders.exe"); put("PioneerGame/Binaries/Win64/PioneerGame.exe"); put("Engine/Binaries/Win64/CrashReportClient.exe");
+  put("Installers/Install_EasyAntiCheat.exe"); put("PioneerGame/Content/readme.txt");
+  const found = typeof programsOnDisk === "function" ? await programsOnDisk(game) : null;
+  check("in a real game folder: PioneerGame.exe is found, the engine's and installers' programs aren't", JSON.stringify(found) === JSON.stringify(["PioneerGame.exe"]), found);
+  check("a folder that isn't there finds nothing (and doesn't fail)", typeof programsOnDisk === "function" && (await programsOnDisk(path.join(game, "missing"))).length === 0);
+  fs.rmSync(game, { recursive: true, force: true });
 
   console.log("4. What isn't counted");
   events.length = 0;
