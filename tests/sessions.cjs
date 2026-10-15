@@ -42,13 +42,13 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   await step(w, 20000);
   check("a game started from Steam is noticed", events.length === 1 && events[0][0] === "start" && events[0][1] === APEX && events[0][3] === false, events);
   check("names are matched whatever their capitals", (running = ["R5APEX_DX12.EXE"], (await step(w, 5000)), events.length === 1));
-  for (let i = 0; i < 12; i++) await step(w, 5000); // an hour, give or take
+  for (let i = 0; i < 40; i++) await step(w, 5000); // a few minutes in
   running = ["explorer.exe"];
   await step(w, 5000);
   check("one check without it isn't the end (a hiccup)", events.length === 1);
   await step(w, 5000);
   check("gone twice: the session ends", events.length === 2 && events[1][0] === "end" && events[1][1] === APEX, events);
-  check("timed to the last moment it was seen", events[1][2] === 5000 * 13, events[1]);
+  check("timed to the last moment it was seen", events[1][2] === 5000 * 41, events[1]);
 
   console.log("2. Games AURA started (also ones that need administrator rights)");
   events.length = 0;
@@ -58,12 +58,41 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   running = ["Madden27.exe"];
   await step(w, 30000);
   check("seen: the session starts, timed from the moment you pressed Play", events.length === 1 && events[0][3] === true && events[0][2] === "Madden27.exe");
+  for (let i = 0; i < 36; i++) await step(w, 5000);
   running = []; await step(w, 5000); await step(w, 5000);
-  check("and ends when it closes", events.length === 2 && events[1][2] === 32000, events);
+  check("and ends when it closes", events.length === 2 && events[1][2] === 32000 + 36 * 5000, events);
   events.length = 0;
   w.launched(ARC);
   for (let i = 0; i < 40; i++) await step(w, 5000);
   check("a game that never appears gives up after 3 minutes, with no fake session", events.length === 0 && w.snapshot().pending.length === 0, w.snapshot());
+
+  console.log("2b. Games that close and start again as they load (Steam, EA app, anti-cheat)");
+  events.length = 0;
+  w.launched(MADDEN);
+  running = ["Madden27.exe"]; await step(w, 3000);
+  check("the game appears: the timer starts", events.length === 1 && events[0][0] === "start");
+  running = []; for (let i = 0; i < 8; i++) await step(w, 5000);
+  check("it closes and takes 40 seconds to come back: the session keeps going (no timer reset)", events.length === 1, events);
+  running = ["Madden27.exe"]; await step(w, 5000);
+  for (let i = 0; i < 40; i++) await step(w, 5000);
+  check("still one session once it's back", events.length === 1);
+  running = []; for (let i = 0; i < 3; i++) await step(w, 5000);
+  check("a game that has been running a while ends quickly when closed", events.length === 2 && events[1][0] === "end", events);
+  events.length = 0;
+  w.launched(APEX);
+  running = ["r5apex_dx12.exe"]; await step(w, 3000);
+  running = []; for (let i = 0; i < 19; i++) await step(w, 5000);
+  check("a game quit right after starting ends once it's been gone 90 seconds", events.length === 2 && events[1][0] === "end", events);
+  events.length = 0;
+  const handover = make({ findAliases: async (exe) => (exe === ARC ? ["PioneerGame.exe"] : []), aliasFile: path.join(dir, "handover.json") });
+  handover.setLibrary([ARC]);
+  handover.launched(ARC);
+  running = ["ArcRaiders.exe"]; await step(handover, 2000);
+  running = ["PioneerGame.exe"]; await step(handover, 5000); await step(handover, 5000);
+  for (let i = 0; i < 40; i++) await step(handover, 5000);
+  check("a launcher that hands over to its game: one session, following the game", events.length === 1 && events[0][1] === ARC, events);
+  running = []; for (let i = 0; i < 3; i++) await step(handover, 5000);
+  check("which ends when the game closes", events.length === 2 && events[1][2] >= 150000, events);
 
   console.log("3. Launchers that start a differently named game");
   events.length = 0;
@@ -77,7 +106,7 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   check("AURA learns the game's real program from its folder (skipping crash reporters and anti-cheat)", JSON.stringify(w.snapshot().aliases[ARC.toLowerCase()]) === JSON.stringify(["pioneergame.exe"]), w.snapshot().aliases);
   await step(w, 5000);
   check("and the session starts", events.length === 1 && events[0][1] === ARC && events[0][2] === "PioneerGame.exe", events);
-  running = []; await step(w, 5000); await step(w, 5000);
+  running = []; for (let i = 0; i < 20; i++) await step(w, 5000);
   events.length = 0;
   const again = make();
   again.setLibrary([ARC]);

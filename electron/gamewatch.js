@@ -5,8 +5,11 @@
 // Every few seconds it asks Windows for the names of the programs that are running (tasklist, on
 // this PC only; nothing is sent anywhere) and matches them to the games in your library. A game
 // that's seen starts a session; a game that's gone for two checks in a row ends it, timed to
-// the last moment it was seen. Games AURA started itself are watched for up to 3 minutes while
-// their launcher hands over, and games that need administrator rights are seen like any other.
+// the last moment it was seen. In a game's first 3 minutes it may vanish for up to 90 seconds
+// without ending: many games start, close and start again (Steam, the EA app and anti-cheat do
+// this), and AURA looks in the game's folder for the program it hands over to. Games AURA started
+// are watched for up to 3 minutes before they appear, and games that need administrator rights
+// are seen like any other.
 "use strict";
 const path = require("path");
 const fs = require("fs");
@@ -36,7 +39,8 @@ function createGameWatch({
   idleMs = 20000,               // how often to look when nothing is running
   busyMs = 5000,                // how often while a game runs or is starting
   missesToEnd = 2,
-  launchWaitMs = 3 * 60 * 1000, // how long a game AURA started may take to appear
+  launchWaitMs = 3 * 60 * 1000, // how long a game AURA started may take to appear, and how long a new game counts as "starting"
+  handoverMs = 90 * 1000,       // how long a starting game may vanish while it restarts or hands over
   aliasAfterMs = 15000,         // when to look in its folder for the real program
   aliasFile = null,             // where learned program names are kept
 } = {}) {
@@ -122,15 +126,21 @@ function createGameWatch({
         const p = pending.get(k);
         pending.delete(k);
         const exePath = library.get(k) || (p && p.exePath) || k;
-        const session = { exePath, start: p ? p.at : t, lastSeen: t, misses: 0, launched: !!p, name };
+        const session = { exePath, start: p ? p.at : t, lastSeen: t, misses: 0, launched: !!p, name, looks: 0, lastLook: 0 };
         sessions.set(k, session);
-        try { onStart(exePath, name, { launched: session.launched }); } catch {}
+        try { onStart(exePath, name, { launched: session.launched, start: session.start }); } catch {}
       }
-      // Ended
+      // Ended (or, in its first minutes, restarting / handing over to another program)
       for (const [k, s] of [...sessions]) {
-        if (found.has(k)) continue;
+        if (found.has(k)) { s.misses = 0; continue; }
         s.misses++;
-        if (s.misses < missesToEnd) continue;
+        const starting = s.lastSeen - s.start < launchWaitMs;
+        if (starting && findAliases && s.looks < 6 && t - s.lastLook >= 15000) {
+          s.looks++; s.lastLook = t;
+          try { for (const n of (await findAliases(s.exePath)) || []) addAlias(s.exePath, n); } catch {}
+        }
+        const gone = starting ? t - s.lastSeen >= handoverMs : s.misses >= missesToEnd;
+        if (!gone) continue;
         sessions.delete(k);
         try { onEnd(s.exePath, { start: s.start, end: s.lastSeen, launched: s.launched }); } catch {}
       }

@@ -804,11 +804,12 @@ const gameWatch = gameWatchKit.createGameWatch({
   findAliases: (exePath) => (process.platform === "win32" ? gameWatchKit.listInFolder(runQuiet, path.dirname(exePath)) : Promise.resolve([])),
   shouldWatchAll: () => appSettings.trackAllGames !== false,
   aliasFile: path.join(app.getPath("userData"), "game-programs.json"),
-  onStart: (exePath, programName, { launched }) => {
+  onStart: (exePath, programName, { launched, start }) => {
     perf.beginSession(exePath, programName);
     currentGameName = path.basename(exePath, ".exe");
     pushBarState();
     console.log("Session started: " + path.basename(exePath) + (launched ? "" : " (started outside AURA)"));
+    mainWin?.webContents.send("game-session-started", { exePath, startTime: start, launched }); // the Now Playing timer
   },
   onEnd: (exePath, { start, end, launched }) => {
     const perfSummary = perf.endSession(exePath);

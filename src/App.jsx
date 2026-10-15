@@ -1232,7 +1232,7 @@ function GMBanner({ games, onPlay, onFav, onSelect }) {
 
 // ── Now Playing Bar ───────────────────────────────────────────────────────────
 function NowPlayingBar({ game, onClose }) {
-  const [secs, setSecs] = useState(0);
+  const [secs, setSecs] = useState(() => (game.startedAt ? Math.max(0, Math.floor((Date.now() - game.startedAt) / 1000)) : 0));
   useEffect(() => {
     const t = setInterval(() => setSecs(s => s + 1), 1000);
     return () => clearInterval(t);
@@ -3453,6 +3453,11 @@ function AuraApp(){
 
   useEffect(()=>{
     if(!window.electronAPI?.isElectron) return;
+    // A session started (from AURA, Steam, a shortcut...): show Now Playing, timed from its start
+    const offStart = window.electronAPI.onGameSessionStarted?.((data)=>{
+      const g=gamesRef.current.find(x=>x.exePath===data?.exePath);
+      if(g) setNowPlaying(np=>np&&np.exePath!==g.exePath?np:{...g,startedAt:data.startTime||Date.now()});
+    });
     const off = window.electronAPI.onGameSessionEnded((_event,data)=>{
       addSession(gamesRef.current.find(g=>g.exePath===data.exePath), data);
       setNowPlaying(np=>np&&np.exePath===data.exePath?null:np);
@@ -3463,7 +3468,7 @@ function AuraApp(){
         saveStats(updated);checkAchievements(updated,unlockedAch);return updated;
       });
     });
-    return off;
+    return ()=>{ off?.(); offStart?.(); };
   },[checkAchievements, unlockedAch]);
 
   const handleThemeChange = useCallback((key) => {
