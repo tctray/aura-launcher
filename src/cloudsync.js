@@ -12,6 +12,7 @@
  *   useCloudProfile({ ... });
  */
 import { useEffect, useRef, useState } from "react";
+import { cleanFavs } from "./components/twitchfavs"; // Added by aura-twitch-favorites-setup.cjs
 
 const GAMES_KEY = "aura_games";
 const OWNER_KEY = "aura_games_owner";                     // whose numbers are in aura_games right now
@@ -352,6 +353,8 @@ const pickSettings = (raw) => {
     cardSize: ["sm", "md", "lg"].includes(s.cardSize) ? s.cardSize : "md",
     reduceMotion: !!s.reduceMotion, noBlur: !!s.noBlur, uiSounds: !!s.uiSounds,
     uiVolume: unit(s.uiVolume, 0.5), streamVolume: unit(s.streamVolume, 0.8),
+    // Twitch favorites travel too. Left out when not known (an older AURA), so they're never emptied by mistake.
+    ...(Array.isArray(s.twitchFavs) ? { twitchFavs: cleanFavs(s.twitchFavs) } : {}),
   };
 };
 
@@ -509,7 +512,8 @@ export function useCloudProfile(props) {
           savedThemes: Array.isArray(t.savedThemes) ? t.savedThemes : [],
           bgImage: typeof t.bgImage === "string" ? t.bgImage : "",
         });
-        takeSettings(isObj(mine.settings) ? mine.settings : SYNCED_SETTINGS);
+        // Someone else's favorites don't carry over to this account
+        takeSettings({ twitchFavs: [], ...(isObj(mine.settings) ? mine.settings : SYNCED_SETTINGS) });
         writeJSON(sessSyncedKey(uid), []);
         writeSessions(Array.isArray(mine.sessions) ? mine.sessions.filter(validSession) : []);
         removeItem(acctKey(uid));

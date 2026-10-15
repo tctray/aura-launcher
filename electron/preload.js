@@ -66,6 +66,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // ── Twitch live streams ──────────────────────────────────────────────────────
   searchTwitch:       (opts) => ipcRenderer.invoke("search-twitch", opts),
   fetchTwitchStreams: (opts) => ipcRenderer.invoke("fetch-twitch-streams", opts),
+  // Twitch favorites (Added by aura-twitch-favorites-setup.cjs)
+  twitchLiveNotice:   (info) => ipcRenderer.invoke("twitch-live-notice", info),
+  onTwitchOpenStream: (cb) => { const h = (_e, login) => cb(login); ipcRenderer.on("twitch-open-stream", h); return () => ipcRenderer.removeListener("twitch-open-stream", h); },
 
   // ── Discord OAuth ───────────────────────────────────────────────────────────
   discordLogin:         ()                     => ipcRenderer.invoke("discord-login"),

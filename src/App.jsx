@@ -9,6 +9,7 @@ import { addSession } from "./sessionstore";
 import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
+import { FavStar, FavEditor, cleanFavs, toggleFav, isFav, loginOf, migrateFavs, liveFor, useFavLive, useFavWatch, renameFavs, favLiveStream, refreshFavLive } from "./components/twitchfavs"; // Twitch favorites
 import MessagesPage, { AuraFriendsTab, MessagesIcon, useAuraSocial } from "./components/messages";
 import { PrivacyButton } from "./components/privacy";
 import { CallSoundSettings } from "./components/sounds";
@@ -113,6 +114,8 @@ const SETTINGS_DEFAULTS = {
   uiSounds: true,
   uiVolume: 0.5,          // 0 – 1
   streamVolume: 0.8,      // 0 – 1, streams and trailers
+  twitchFavs: null,       // your favorite streamers [{ login, name, pic }] (Added by aura-twitch-favorites-setup.cjs)
+  twitchLiveAlerts: true, // a notice when a favorite goes live
   // Recording
   micDevice: "",
   systemDevice: "",
@@ -130,6 +133,13 @@ const loadSettings = () => {
   return { ...SETTINGS_DEFAULTS, ...saved };
 };
 let SETTINGS = loadSettings();
+// Streamers typed into "+ Streamers" before favorites existed become favorites (Added by aura-twitch-favorites-setup.cjs)
+if (!Array.isArray(SETTINGS.twitchFavs)) {
+  let typed = "";
+  try { typed = localStorage.getItem("aura_twitch_logins") || ""; } catch {}
+  SETTINGS = { ...SETTINGS, twitchFavs: migrateFavs(typed) };
+  try { localStorage.setItem("aura_settings", JSON.stringify(SETTINGS)); } catch {}
+}
 const settingsListeners = new Set();
 const syncSettingsToMain = (patch) => {
   const forMain = {};
@@ -1377,6 +1387,8 @@ function StreamCard({ s, on, onLit, onWatch, detail = false }) {
   const live = !s.offline;
   const watch = () => { if (live && onWatch) onWatch(s); };
   const watching = s.viewers > 0 ? watchingCount(s.viewers) + " watching" : "";
+  const favs = useSettings().twitchFavs; // the star (Added by aura-twitch-favorites-setup.cjs)
+  const canStar = !!loginOf(s), starred = isFav(favs, s);
   return (
     <div className={"twitch-card" + (on && live ? " on" : "") + (live ? "" : " off")} role={live ? "button" : undefined} tabIndex={live ? 0 : -1}
       aria-label={live ? "Watch " + s.user + (s.game ? ", playing " + s.game : "") : s.user + " is offline"}
@@ -1384,6 +1396,7 @@ function StreamCard({ s, on, onLit, onWatch, detail = false }) {
       onKeyDown={e=>{ if(e.target===e.currentTarget&&(e.key==="Enter"||e.key===" ")){ e.preventDefault(); watch(); } }}>
       {s.thumbnail ? <img src={s.thumbnail} alt="" className="twitch-thumb" draggable={false}/> : <div className="twitch-thumb-ph">📺</div>}
       <div className="twitch-sheen"/>
+      {canStar && <FavStar on={starred} name={s.user} onToggle={()=>updateSettings({ twitchFavs: toggleFav(SETTINGS.twitchFavs, s) })}/>}
       <div className="twitch-rest">{s.user}{!live ? <span className="twitch-sub">Offline</span> : detail && s.title ? <span className="twitch-sub">{s.title}</span> : null}</div>
       {live && <div className="twitch-badge"><div className="twitch-badge-dot"/>LIVE</div>}
       {live && (
@@ -1391,7 +1404,7 @@ function StreamCard({ s, on, onLit, onWatch, detail = false }) {
           <div className="twitch-info">
             <div className="twitch-user">{s.user}</div>
             <div className="twitch-game">{detail && s.title ? s.title : s.game}</div>
-            <div className="twitch-viewers-row">{detail ? [s.title ? s.game : "", watching].filter(Boolean).join("  ·  ") : watching || s.title}</div>
+            <div className="twitch-viewers-row">{detail ? [s.title ? s.game : "", watching, s.liveFor].filter(Boolean).join("  ·  ") : watching || s.title}</div>
           </div>
           <div className="twitch-tools">
             <button type="button" className="twitch-tool main" tabIndex={on?0:-1} title="Watch" aria-label={"Watch " + s.user} onClick={e=>{e.stopPropagation();watch();}}>
@@ -1440,10 +1453,42 @@ function StreamWall({ streams, onWatch }) {
   );
 }
 
+// ── Twitch favorites on Live Streams (Added by aura-twitch-favorites-setup.cjs) ──
+// Live favorites first (most watched first), then the rest greyed out as Offline.
+function FavoritesRow({ onWatch }) {
+  const st = useSettings();
+  const favs = cleanFavs(st.twitchFavs);
+  const { live, checked } = useFavLive();
+  if (!favs.length) return (
+    <div className="fav-empty">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/></svg>
+      Star a streamer to keep them here. AURA tells you when they go live.
+    </div>
+  );
+  const items = favs.map(f => {
+    const s = live.get(f.login);
+    if (s) return { ...s, id: "fav-" + f.login, userLogin: f.login, pic: f.pic, liveFor: liveFor(s.startedAt || s.started_at) };
+    return { id: "fav-" + f.login, user: f.name, userLogin: f.login, title: "", game: "", viewers: 0, thumbnail: f.pic || "", pic: f.pic, url: "https://twitch.tv/" + f.login, offline: true };
+  });
+  items.sort((a, b) => (a.offline ? 1 : 0) - (b.offline ? 1 : 0) || (b.viewers || 0) - (a.viewers || 0));
+  const n = items.filter(x => !x.offline).length;
+  return (
+    <section className="fav-row" aria-label="Your favorite streamers">
+      <div className="fav-hdr">
+        <h2 className="fav-title">FAVORITES</h2>
+        <span className="fav-count">{!checked ? "Checking who's live…" : n ? n + " live now" : "No one live right now"}</span>
+        <label className="fav-alerts"><input type="checkbox" checked={st.twitchLiveAlerts !== false} onChange={e=>updateSettings({ twitchLiveAlerts: e.target.checked })}/>Tell me when they go live</label>
+      </div>
+      <StreamWall streams={items} onWatch={onWatch}/>
+    </section>
+  );
+}
+
 function TwitchShelf({ games, onStreamClick }) {
   const [streams, setStreams] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [customLogins, setCustomLogins] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
+  const favList = cleanFavs(useSettings().twitchFavs); // your favorites (Added by aura-twitch-favorites-setup.cjs)
+  const customLogins = favList.map(f => f.login).join(",");
   const [showInput, setShowInput] = useState(false);
   const [lit, setLit] = useState(null); // the stream you are pointing at: its card is open
   const rowRef = useRef(null);
@@ -1469,7 +1514,7 @@ function TwitchShelf({ games, onStreamClick }) {
     const userLogins = customLogins.split(",").map(s => s.trim()).filter(Boolean);
     try {
       const res = await window.electronAPI.fetchTwitchStreams({ gameNames, userLogins });
-      if (res.success) setStreams(res.streams);
+      if (res.success) { const mine = new Set(userLogins); setStreams([...res.streams].sort((x, y) => (mine.has(loginOf(y)) ? 1 : 0) - (mine.has(loginOf(x)) ? 1 : 0))); }
       else setStreams([]);
     } catch { setStreams([]); }
     setLoading(false);
@@ -1495,16 +1540,11 @@ function TwitchShelf({ games, onStreamClick }) {
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
           <button onClick={fetchStreams} style={{background:"transparent",border:"none",color:"var(--t3)",cursor:"pointer",fontSize:11}}>↻ Refresh</button>
           <button onClick={()=>setShowInput(s=>!s)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"3px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>
-            {showInput?"Done":"+ Streamers"}
+            {showInput?"Done":"★ Favorites"}
           </button>
         </div>
       </div>
-      {showInput&&(
-        <div style={{padding:"0 40px",marginBottom:12}}>
-          <input className="fi" value={customLogins} onChange={e=>{setCustomLogins(e.target.value);localStorage.setItem("aura_twitch_logins",e.target.value);}} placeholder="Enter Twitch usernames, comma separated (e.g. shroud, pokimane)" style={{fontSize:11}}/>
-          <div style={{fontSize:10,color:"var(--t3)",marginTop:5}}>Also shows streams for games in your library automatically.</div>
-        </div>
-      )}
+      {showInput&&<FavEditor favs={favList} onChange={list=>updateSettings({ twitchFavs: list })}/>}
       {streams.length === 0
         ? <div className="twitch-empty">No live streams found. Add streamer names above to follow specific channels.</div>
         : (
@@ -1607,7 +1647,8 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
   };
   const [streams, setStreams] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [customLogins, setCustomLogins] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
+  const customLogins = ""; // favorites have their own row now (Added by aura-twitch-favorites-setup.cjs)
+  const favSet = new Set(cleanFavs(useSettings().twitchFavs).map(f => f.login));
   const [inputVal, setInputVal] = useState(() => localStorage.getItem("aura_twitch_logins") || "");
   const [chatOpen, setChatOpen] = useState(true);
   const [isStreamFull, setIsStreamFull] = useState(false);
@@ -1838,7 +1879,7 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
           />
           {searchQuery&&<button onClick={()=>{setSearchQuery("");setSearchResults(null);}} style={{background:"none",border:"none",color:"var(--t3)",cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>×</button>}
         </div>
-        <button className="btn-p" style={{fontSize:11,padding:"7px 14px",flexShrink:0}} onClick={()=>searchQuery.trim()?doSearch(searchQuery):(fetchStreams(),setSearchResults(null))}>
+        <button className="btn-p" style={{fontSize:11,padding:"7px 14px",flexShrink:0}} onClick={()=>searchQuery.trim()?doSearch(searchQuery):(fetchStreams(),refreshFavLive(),setSearchResults(null))}>
           {searchQuery.trim()?"Search":"↻"}
         </button>
       </div>
@@ -1860,7 +1901,7 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
                   {searchResults.channels.filter(c=>c.isLive).length} live · {searchResults.channels.filter(c=>!c.isLive).length} offline
                 </span>
               </div>
-              <StreamWall streams={searchResults.channels.map(c=>({id:c.id,user:c.name,userLogin:c.login,title:c.title,game:c.game,viewers:0,thumbnail:c.thumbnail,url:"https://twitch.tv/"+c.login,offline:!c.isLive}))} onWatch={updateStream}/>
+              <StreamWall streams={searchResults.channels.map(c=>({id:c.id,user:c.name,userLogin:c.login,title:c.title,game:c.game,viewers:0,thumbnail:c.thumbnail,url:"https://twitch.tv/"+c.login,offline:!c.isLive,pic:c.thumbnail}))} onWatch={updateStream}/>
             </div>
           )}
           {searchResults.games?.length > 0 && (
@@ -1895,16 +1936,17 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
         </div>
       ) : (
         <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
+          <FavoritesRow onWatch={updateStream}/>
           {loading ? (
             <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:200,color:"var(--t3)",fontSize:12}}>Loading streams…</div>
           ) : streams.length === 0 ? (
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:200,gap:10,color:"var(--t3)"}}>
               <div style={{fontSize:36}}>📺</div>
               <div style={{fontSize:14,fontWeight:600,color:"var(--t2)"}}>No live streams found</div>
-              <div style={{fontSize:11}}>Add streamer names above or launch AURA with your game library</div>
+              <div style={{fontSize:11}}>Search for a streamer above and star them, or add games to your library</div>
             </div>
           ) : (
-            <StreamWall streams={streams} onWatch={updateStream}/>
+            <StreamWall streams={streams.filter(s => !favSet.has(loginOf(s)))} onWatch={updateStream}/>
           )}
         </div>
       )}
@@ -3483,6 +3525,22 @@ function AuraApp(){
   // Favorites and playtime follow the signed-in account (see cloudsync.js)
   useCloudGames(games,setGames,toast);
   useCloudProfile({unlockedAch,setUnlockedAch,stats,setStats,theme,setTheme,accent,setAccent,customColors,setCustomColors,savedThemes,setSavedThemes,bgImage,setBgImage,settings,updateSettings,games,toast});
+  // Twitch favorites: a notice when one goes live (Added by aura-twitch-favorites-setup.cjs)
+  // In front: a notice inside AURA. Hidden or behind other windows: a Windows notification.
+  useFavWatch({ favs: settings.twitchFavs, alerts: settings.twitchLiveAlerts !== false, onLive: (s) => {
+    const front = document.visibilityState === "visible" && document.hasFocus();
+    if (front) toast(s.user + " is live on Twitch" + (s.game ? ": " + s.game : ""));
+    else window.electronAPI?.twitchLiveNotice?.({ login: loginOf(s), name: s.user, game: s.game, title: s.title });
+  }, onSeen: (found) => { const next = renameFavs(SETTINGS.twitchFavs, found); if (next) updateSettings({ twitchFavs: next }); } });
+  // Clicking that Windows notification opens the stream
+  useEffect(() => {
+    const off = window.electronAPI?.onTwitchOpenStream?.((login) => {
+      if (typeof login !== "string" || !/^[a-z0-9_]{1,25}$/.test(login)) return;
+      const s = favLiveStream(login) || { id: "fav-" + login, user: login, userLogin: login, title: "", game: "", viewers: 0, url: "https://twitch.tv/" + login };
+      setActiveStream(s); setView("streams"); setHeroGame(null); setSrch("");
+    });
+    return () => { if (typeof off === "function") off(); };
+  }, []);
   // AURA friends and messages (see components/messages)
   const social=useAuraSocial({view,toast,goTo:(id)=>goTo(id)});
 

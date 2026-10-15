@@ -1033,6 +1033,34 @@ ipcMain.handle("fetch-twitch-streams", async (_e, opts = {}) =>
 ipcMain.handle("search-twitch", async (_e, opts = {}) =>
   auraServer("/api/twitch/search", { query: opts?.query, type: opts?.type }));
 
+// ── Twitch favorites: a Windows notification when one goes live (Added by aura-twitch-favorites-setup.cjs) ──
+// Clicking it brings AURA back and opens that stream.
+const liveNotices = new Set(); // held on to, so a click still works a while later
+ipcMain.handle("twitch-live-notice", (_e, info = {}) => {
+  const login = String(info?.login || "").toLowerCase();
+  if (!/^[a-z0-9_]{1,25}$/.test(login) || !mainWin || mainWin.isDestroyed()) return { success: false };
+  const text = (v, n) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, n) : "");
+  const name = text(info?.name, 40) || login;
+  const body = [text(info?.game, 60), text(info?.title, 140)].filter(Boolean).join(": ") || "Click to watch in AURA.";
+  try {
+    const { Notification } = require("electron");
+    if (!Notification.isSupported()) return { success: false };
+    const n = new Notification({ title: name + " is live on Twitch", body });
+    liveNotices.add(n);
+    if (liveNotices.size > 10) liveNotices.delete(liveNotices.values().next().value);
+    n.on("click", () => {
+      liveNotices.delete(n);
+      if (!mainWin || mainWin.isDestroyed()) return;
+      if (mainWin.isMinimized()) mainWin.restore();
+      mainWin.show(); mainWin.focus();
+      mainWin.webContents.send("twitch-open-stream", login);
+    });
+    n.on("close", () => liveNotices.delete(n));
+    n.show();
+    return { success: true };
+  } catch { return { success: false }; }
+});
+
 
 ipcMain.handle("steam-get-profile", async (_e, steamId) => auraServer("/api/steam/profile", { steamId: String(steamId || "").trim() }));
 
