@@ -802,6 +802,7 @@ const gameWatchKit = require("./gamewatch");
 const gameWatch = gameWatchKit.createGameWatch({
   list: () => (process.platform === "win32" ? gameWatchKit.listRunning(runQuiet) : Promise.resolve([])),
   findAliases: (exePath) => (process.platform === "win32" ? gameWatchKit.listInFolder(runQuiet, path.dirname(exePath)) : Promise.resolve([])),
+  listWithPaths: () => (process.platform === "win32" ? gameWatchKit.listWithLocations(runQuiet) : Promise.resolve(null)), // where programs live (see gamewatch.js)
   shouldWatchAll: () => appSettings.trackAllGames !== false,
   aliasFile: path.join(app.getPath("userData"), "game-programs.json"),
   onStart: (exePath, programName, { launched, start }) => {

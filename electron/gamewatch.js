@@ -10,6 +10,11 @@
 // this), and AURA looks in the game's folder for the program it hands over to. Games AURA started
 // are watched for up to 3 minutes before they appear, and games that need administrator rights
 // are seen like any other.
+// Many games are started by a small program that opens the real one somewhere else in the game's
+// folder (Unreal games run "<name>-Win64-Shipping.exe" from Binaries\Win64, for example). So every
+// half minute or so AURA also looks at where running programs live, and a program running from
+// inside a game's own folder counts as that game. The name it finds is remembered on this PC, so
+// after that the quick check by name is enough.
 "use strict";
 const path = require("path");
 const fs = require("fs");
@@ -21,17 +26,28 @@ const GENERIC = new Set([
   "client.exe", "app.exe", "main.exe", "bootstrapper.exe", "run.exe", "win64.exe", "shipping.exe",
 ]);
 // Helpers that run beside games: never taken as the game itself
-const HELPERS = /^(unins.*|.*crash.*|.*report.*|easyanticheat.*|eac.*|battleye.*|be.*service.*|start_protected_game|.*redist.*|vc_?redist.*|dxsetup|ue4prereq.*|cefprocess|.*webhelper.*|.*overlay.*|.*updater.*|.*launcher.*helper.*|steamservice|steam|epicgameslauncher|eadesktop|eabackgroundservice|origin|gamebar.*|xboxpcapp.*)\.exe$/i;
+const HELPERS = /^(unins.*|.*crash.*|unrealcef.*|.*cefsub.*|.*cef.*process.*|crashpad.*|.*report.*|easyanticheat.*|eac.*|battleye.*|be.*service.*|start_protected_game|.*redist.*|vc_?redist.*|dxsetup|ue4prereq.*|cefprocess|.*webhelper.*|.*overlay.*|.*updater.*|.*launcher.*helper.*|steamservice|steam|epicgameslauncher|eadesktop|eabackgroundservice|origin|gamebar.*|xboxpcapp.*)\.exe$/i;
 
 const nameOf = (p) => path.win32.basename(String(p || "")).toLowerCase(); // works for C:\ paths on any PC
 const keyOf = (p) => String(p || "").toLowerCase();
 const validExe = (p) => typeof p === "string" && p.length > 4 && p.length <= 1024 && /\.exe$/i.test(p) && !p.includes("\0");
+// A game's own folder, when it is specific enough to stand for that game (not a drive, Program
+// Files, a Steam or Xbox library folder, or the user's folder)
+const BROAD = /^[a-z]:\\(?:|program files(?: \(x86\))?|windows(?:\\.*)?|users(?:\\[^\\]+)?(?:\\desktop|\\documents|\\downloads)?|programdata|games|xboxgames|steamlibrary|epic games|windowsapps|program files\\windowsapps)$|\\steamapps(?:\\common)?$|\\steam$|\\epic games$|\\ea games$|\\origin games$|\\xboxgames$|\\windowsapps$/i;
+function folderOf(exePath) {
+  if (!validExe(exePath) || !/^[a-z]:\\/i.test(exePath)) return null;
+  const dir = path.win32.dirname(exePath).toLowerCase().replace(/\\+$/, "");
+  if (dir.split("\\").length < 3 || BROAD.test(dir)) return null;
+  return dir;
+}
 
 function createGameWatch({
   list,                         // async () => array of running program names (e.g. "MaddenNFL27.exe")
   onStart = () => {},           // (exePath, programName, { launched })
   onEnd = () => {},             // (exePath, { start, end, launched })
   findAliases = null,           // async (exePath) => program names running from the game's folder
+  listWithPaths = null,         // async () => [{ name, path }] of running programs (where they live), or null if it failed
+  folderEveryMs = 30000,        // how often to look at where programs live (15 s while a game is starting)
   shouldWatchAll = () => true,  // false: only games AURA started
   now = Date.now,
   setTimer = setTimeout,
@@ -51,6 +67,7 @@ function createGameWatch({
   let timer = null;
   let running = false;
   let checking = false;
+  let lastFolderLook = -Infinity;
 
   try {
     if (aliasFile && fs.existsSync(aliasFile)) {
@@ -87,6 +104,35 @@ function createGameWatch({
     schedule(0);
   }
 
+  // Learn the real program of each library game from where running programs live
+  function learnFromFolders(procs) {
+    const all = shouldWatchAll();
+    const games = [];
+    for (const [k, exePath] of library) {
+      if (!all && !pending.has(k) && !sessions.has(k)) continue;
+      const dir = folderOf(exePath);
+      if (dir) games.push({ k, exePath, dir });
+    }
+    // A folder that holds (or sits above) another game's folder stands for neither
+    const shared = new Set();
+    for (const a of games) for (const b of games) {
+      if (a !== b && (a.dir === b.dir || b.dir.startsWith(a.dir + "\\"))) { shared.add(a.k); shared.add(b.k); }
+    }
+    for (const g of games) {
+      if (shared.has(g.k)) continue;
+      const own = nameOf(g.exePath);
+      for (const p of procs) {
+        const n = String(p && p.name || "");
+        const where = String(p && p.path || "").toLowerCase();
+        if (!/\.exe$/i.test(n) || !where.startsWith(g.dir + "\\")) continue;
+        if (n.toLowerCase() === own || HELPERS.test(n)) continue;
+        addAlias(g.exePath, n);
+      }
+    }
+  }
+  // Unreal games: "THPS.exe" starts "THPS-Win64-Shipping.exe" (or -WinGDK- on Game Pass)
+  const unrealOf = (own) => { const base = own.replace(/\.exe$/i, ""); return [base + "-win64-shipping.exe", base + "-wingdk-shipping.exe", base + "-win64-test.exe"]; };
+
   // Which library games are running, given the running program names
   function match(names) {
     const runningNames = new Map(); // lower case -> as Windows wrote it
@@ -104,6 +150,8 @@ function createGameWatch({
       // A name shared by two games in the library, or a generic one, counts only for a game AURA started
       const trustOwn = wanted || (all && !GENERIC.has(own) && counts.get(own) === 1);
       if (trustOwn && runningNames.has(own)) { found.set(k, runningNames.get(own)); continue; }
+      const ue = (all || wanted) ? unrealOf(own).find((n) => runningNames.has(n)) : null;
+      if (ue) { found.set(k, runningNames.get(ue)); continue; }
       if (!all && !wanted) continue;
       for (const a of aliases.get(k) || []) if (runningNames.has(a)) { found.set(k, runningNames.get(a)); break; }
     }
@@ -118,6 +166,14 @@ function createGameWatch({
       try { names = (await list()) || []; } catch { names = null; }
       if (names === null) return; // couldn't look this time: change nothing
       const t = now();
+      // Every half minute (sooner while a game is starting): programs running from inside a game's folder
+      const starting = pending.size > 0 || [...sessions.values()].some((s) => s.lastSeen - s.start < launchWaitMs && s.misses > 0);
+      if (listWithPaths && t - lastFolderLook >= (starting ? 15000 : folderEveryMs)) {
+        lastFolderLook = t;
+        let procs = null;
+        try { procs = await listWithPaths(); } catch { procs = null; }
+        if (Array.isArray(procs)) learnFromFolders(procs);
+      }
       const found = match(names);
       // Started
       for (const [k, name] of found) {
@@ -147,8 +203,9 @@ function createGameWatch({
       // Still waiting for a game AURA started
       for (const [k, p] of [...pending]) {
         if (t - p.at > launchWaitMs) { pending.delete(k); continue; }
-        if (!p.looked && findAliases && t - p.at >= aliasAfterMs) {
-          p.looked = true;
+        p.looks = p.looks || 0;
+        if (findAliases && p.looks < 6 && t - p.at >= aliasAfterMs * (p.looks + 1)) {
+          p.looks++; p.looked = true;
           try { for (const n of (await findAliases(p.exePath)) || []) addAlias(p.exePath, n); } catch {}
         }
       }
@@ -198,4 +255,13 @@ function listInFolder(run, dir) {
     .then((out) => String(out || "").split(/\r?\n/).map((s) => s.trim()).filter((s) => /\.exe$/i.test(s)));
 }
 
-module.exports = { createGameWatch, parseTasklist, listRunning, listInFolder, GENERIC, HELPERS };
+// Every running program with where it lives (one query; programs running as administrator have no location)
+function listWithLocations(run) {
+  const script = "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { $_.Name + '|' + $_.ExecutablePath }";
+  return run("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]).then((out) => {
+    const rows = String(out || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf("|"); return i > 0 ? { name: l.slice(0, i), path: l.slice(i + 1) } : null; }).filter(Boolean);
+    return rows.length ? rows : null;
+  });
+}
+
+module.exports = { createGameWatch, parseTasklist, listRunning, listInFolder, listWithLocations, folderOf, GENERIC, HELPERS };

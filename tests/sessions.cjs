@@ -6,7 +6,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const ROOT = path.join(__dirname, "..");
-const { createGameWatch, parseTasklist, GENERIC } = require(path.resolve(process.argv[2] || path.join(ROOT, "electron", "gamewatch.js")));
+const { createGameWatch, parseTasklist, GENERIC, folderOf } = require(path.resolve(process.argv[2] || path.join(ROOT, "electron", "gamewatch.js")));
 let failed = 0;
 const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok    " : "  FAIL  ") + name + (ok ? "" : "  " + JSON.stringify(extra))); };
 
@@ -113,6 +113,33 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   running = ["PioneerGame.exe"];
   await step(again, 1000);
   check("next time, even started from Steam, it's recognised (remembered on this PC)", events.length === 1 && events[0][1] === ARC && events[0][3] === false, events);
+
+  console.log("3b. Games whose real program lives elsewhere in their folder (Tony Hawk, other Unreal games)");
+  events.length = 0;
+  const THPS = "D:\\SteamLibrary\\steamapps\\common\\THPS34\\THPS34.exe";
+  let procs = [];
+  const fw = make({ listWithPaths: async () => procs, aliasFile: path.join(dir, "folders.json") });
+  fw.setLibrary([THPS, MADDEN]);
+  running = ["THPS34-Win64-Shipping.exe"];
+  procs = [{ name: "THPS34-Win64-Shipping.exe", path: "D:\\SteamLibrary\\steamapps\\common\\THPS34\\THPS34\\Binaries\\Win64\\THPS34-Win64-Shipping.exe" }];
+  await step(fw, 1000);
+  check("an Unreal game started from Steam is recognised by its -Win64-Shipping program", events.length === 1 && events[0][1] === THPS && events[0][3] === false, events);
+  running = []; procs = []; for (let i = 0; i < 20; i++) await step(fw, 5000);
+  events.length = 0;
+  const ODD = "C:\\Games\\Studio\\Odd Game\\OddGame.exe";
+  fw.setLibrary([ODD]);
+  running = ["Engine-Main.exe"];
+  procs = [{ name: "Engine-Main.exe", path: "C:\\Games\\Studio\\Odd Game\\bin\\Engine-Main.exe" }, { name: "UnrealCEFSubProcess.exe", path: "C:\\Games\\Studio\\Odd Game\\bin\\UnrealCEFSubProcess.exe" }];
+  await step(fw, 31000);
+  check("any program running from inside a game's folder counts as that game", events.length === 1 && events[0][1] === ODD && events[0][2] === "Engine-Main.exe", events);
+  check("helpers in the folder (browser helpers, crash reporters) aren't taken for the game", !JSON.stringify(fw.snapshot().aliases).includes("unrealcef"), fw.snapshot().aliases);
+  running = []; procs = []; for (let i = 0; i < 20; i++) await step(fw, 5000);
+  events.length = 0;
+  fw.setLibrary(["C:\\Games\\Shared\\a.exe", "C:\\Games\\Shared\\b.exe"]);
+  procs = [{ name: "other.exe", path: "C:\\Games\\Shared\\other.exe" }]; running = ["other.exe"];
+  await step(fw, 31000);
+  check("two games in the same folder: a third program there counts for neither", events.length === 0);
+  check("broad folders (a drive, Program Files, a Steam library, Desktop) never stand for a game", folderOf("C:\\Games\\x.exe") === null && folderOf("D:\\steamapps\\common\\x.exe") === null && folderOf("C:\\Users\\me\\Desktop\\x.exe") === null && folderOf(THPS) !== null);
 
   console.log("4. What isn't counted");
   events.length = 0;
