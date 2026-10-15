@@ -85,6 +85,8 @@ if (fs.existsSync(path.join(__dirname, "video-popout.cjs"))) add("window", "Vide
 if (fs.existsSync(path.join(__dirname, "miniplayer.cjs"))) add("window", "The stream mini-player", "miniplayer.cjs");
 if (fs.existsSync(path.join(__dirname, "login.cjs"))) add("window", "Staying logged in when AURA restarts", "login.cjs");
 if (fs.existsSync(path.join(__dirname, "twitch-favorites.cjs"))) add("window", "Twitch favorites and live notices", "twitch-favorites.cjs");
+if (fs.existsSync(path.join(__dirname, "achievements.cjs"))) add("window", "Achievements count everything", "achievements.cjs");
+if (fs.existsSync(path.join(__dirname, "screen-share.cjs"))) add("window", "Screen share in voice calls", "screen-share.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;

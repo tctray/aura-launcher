@@ -28,6 +28,10 @@ const NOTE_MS = 2600;         // how long "Call ended" and the like stay on scre
 const PREFS_KEY = "aura_call_prefs";
 const MAX_VOLUME = 3; // their volume can go up to 300%
 const FALLBACK_SERVERS = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] }];
+// Screen share (Added by aura-screen-share-setup.cjs): up to 1080p at 30 frames a second. On a slow connection the
+// picture gets softer or slower by itself rather than stopping.
+const SCREEN_MAX_BITRATE = 4000000;
+const SCREEN_VIDEO = { frameRate: { ideal: 30, max: 30 }, width: { max: 1920 }, height: { max: 1080 } };
 // What a missed call leaves in the conversation (written by Supabase, see aura-messages-voice.sql)
 export const MISSED_CALL = "📞 Missed voice call";
 
@@ -57,7 +61,7 @@ const toast = (text, kind) => callHooks.toast?.(text, kind);
 
 let session = 0;   // goes up whenever a call starts or ends, so late answers to old questions are ignored
 let rtc = null;    // the working parts of the call in progress
-const newRtc = () => ({ pc: null, dc: null, mic: null, audio: null, config: null, queue: Promise.resolve(), seen: new Set(), polled: 0, early: [], pendingIce: [], outIce: [], restarts: 0, wasLive: false, accepting: false, saidBye: false, timers: {} });
+const newRtc = () => ({ pc: null, dc: null, mic: null, audio: null, screen: null, remoteVideo: null, config: null, queue: Promise.resolve(), seen: new Set(), polled: 0, early: [], pendingIce: [], outIce: [], restarts: 0, wasLive: false, accepting: false, saidBye: false, timers: {} });
 
 // ── Your microphone, speakers and volume ──────────────────────────────────────
 function loadPrefs() {
@@ -221,6 +225,7 @@ function cleanup() {
   const close = () => { try { r.dc?.close(); } catch {} try { r.pc?.close(); } catch {} };
   if (r.saidBye) setTimeout(close, 250); else close();
   stopStream(r.mic); // the microphone goes off straight away either way
+  stopStream(r.screen); // and so does your screen, if you were sharing it
   if (r.audio) { try { r.audio.pause(); r.audio.srcObject = null; } catch {} }
   rest();
 }
@@ -318,11 +323,17 @@ function dropBoost() {
   for (const node of [b.source, b.gain, b.limiter]) { try { node.disconnect(); } catch {} }
 }
 function wireChannel(dc) {
-  dc.onopen = () => { try { dc.send(JSON.stringify({ t: "mute", on: !!state.call?.muted })); } catch {} };
+  // Says whether you're muted, and that this AURA can share screens (an older AURA ignores that).
+  // The PC that answers gets the channel already open, so it says so straight away.
+  const hello = () => { try { dc.send(JSON.stringify({ t: "mute", on: !!state.call?.muted })); dc.send('{"t":"hello","screen":1}'); } catch {} };
+  dc.onopen = hello;
+  if (dc.readyState === "open") hello();
   dc.onmessage = (e) => {
     let m = null;
     try { m = JSON.parse(e.data); } catch { return; }
     if (m?.t === "mute") patch({ peerMuted: !!m.on });
+    else if (m?.t === "hello" && m.screen) addScreenLane();
+    else if (m?.t === "screen") patch({ peerSharing: !!m.on });
     else if (m?.t === "bye" && state.call && state.call.phase !== "over") {
       // They hung up. No need to wait for Supabase to say so, and in case their hang-up never
       // reached it, say it from this side too (ending a call twice does no harm).
@@ -341,7 +352,11 @@ function buildPeer() {
   meter.listen("me", rtc.mic);
   watchMic(rtc.mic);
   pc.onicecandidate = (e) => { if (mine === session && e.candidate) queueIce(e.candidate.toJSON()); };
-  pc.ontrack = (e) => { if (mine === session) playRemote(e.streams[0] || new MediaStream([e.track])); };
+  pc.ontrack = (e) => {
+    if (mine !== session) return;
+    if (e.track.kind === "video") { if (rtc) { rtc.remoteVideo = new MediaStream([e.track]); patch({ screenRev: (state.call?.screenRev || 0) + 1 }); } return; } // their screen
+    playRemote(e.streams[0] || new MediaStream([e.track]));
+  };
   pc.ondatachannel = (e) => { if (mine === session && rtc) { rtc.dc = e.channel; wireChannel(e.channel); } };
   pc.oniceconnectionstatechange = () => { if (mine === session) onLink(pc.iceConnectionState); };
   // Anything the other PC sent before this one was ready
@@ -401,17 +416,21 @@ async function handle(signal) {
     if (typeof data?.sdp !== "string") return;
     await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
     if (mine !== session) return;
+    // A screen-share lane from their side: answer so that either of you can share
+    for (const tr of pc.getTransceivers()) { if (tr.receiver?.track?.kind === "video" && tr.direction === "recvonly") { try { tr.direction = "sendrecv"; } catch {} } }
     await drain();
     const answer = await pc.createAnswer();
     if (mine !== session) return;
     await pc.setLocalDescription(answer);
     if (mine !== session) return;
     await send("answer", { sdp: pc.localDescription.sdp });
+    screenReady();
   } else if (signal.kind === "answer" && c.outgoing) {
     if (typeof data?.sdp !== "string" || pc.signalingState !== "have-local-offer") return;
     await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
     if (mine !== session) return;
     await drain();
+    screenReady();
   } else if (signal.kind === "ice") {
     for (const cand of (Array.isArray(data) ? data : [data]).slice(0, 40)) {
       if (!cand || typeof cand.candidate !== "string" || cand.candidate.length > 1000) continue;
@@ -421,6 +440,33 @@ async function handle(signal) {
     }
   }
 }
+// ── Screen share (Added by aura-screen-share-setup.cjs) ──
+// Calls start with sound only, so they work with friends on an older AURA. Once both PCs say
+// they can share screens, the caller's PC adds a lane for a picture, in both directions. After
+// that, starting and stopping a share just puts a picture on the lane or takes it off.
+const videoLane = () => rtc?.pc?.getTransceivers().find((tr) => tr.receiver?.track?.kind === "video" && !tr.stopped && tr.currentDirection !== "stopped") || null;
+function screenReady() {
+  const lane = videoLane();
+  const ok = !!lane && lane.currentDirection === "sendrecv";
+  if (ok && state.call && !state.call.canShare) patch({ canShare: true });
+}
+async function addScreenLane() {
+  const c = state.call, mine = session;
+  if (!rtc?.pc || !c?.outgoing || videoLane()) return;
+  // Wait for any connection change already under way to finish
+  for (let i = 0; i < 40 && rtc?.pc && rtc.pc.signalingState !== "stable"; i++) { await new Promise((r) => setTimeout(r, 250)); if (mine !== session) return; }
+  if (!rtc?.pc || rtc.pc.signalingState !== "stable" || videoLane()) return;
+  try {
+    rtc.pc.addTransceiver("video", { direction: "sendrecv" });
+    const made = await rtc.pc.createOffer();
+    if (mine !== session) return;
+    await rtc.pc.setLocalDescription(made);
+    if (mine !== session) return;
+    await send("offer", { sdp: rtc.pc.localDescription.sdp });
+  } catch {} // no screen share on this call, but the call itself carries on
+}
+function tell(message) { try { if (rtc?.dc?.readyState === "open") rtc.dc.send(JSON.stringify(message)); } catch {} }
+
 function onSignal(callId, signal) {
   const c = state.call;
   if (!c || !rtc || c.id !== callId || !signal || !(signal.id > 0) || rtc.seen.has(signal.id)) return;
@@ -589,6 +635,53 @@ export const callActions = {
     try { if (rtc.dc?.readyState === "open") rtc.dc.send(JSON.stringify({ t: "mute", on: muted })); } catch {}
   },
 
+  // Share your screen, or one window. `sourceId` comes from the picker (see ScreenPicker).
+  // Sharing another one while sharing switches to it. (Added by aura-screen-share-setup.cjs)
+  async shareScreen(sourceId) {
+    const c = state.call;
+    if (!c || !rtc || (c.phase !== "live" && c.phase !== "reconnecting")) return;
+    const lane = videoLane();
+    if (!lane || !c.canShare) return toast(`Screen share needs both of you on the latest AURA. Ask ${c.peer.username} to update.`, "err");
+    const mine = session;
+    let stream = null;
+    try {
+      if (sourceId) await window.electronAPI?.setCaptureSource?.(sourceId);
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_VIDEO, audio: false });
+    } catch (e) {
+      if (mine === session) toast(e?.name === "NotAllowedError" ? "AURA isn't allowed to capture your screen. In Windows, check Settings > Privacy & security." : "AURA couldn't capture that. Pick it again, or pick another screen or window.", "err");
+      return;
+    }
+    if (mine !== session || !rtc) return stopStream(stream); // the call ended meanwhile
+    for (const a of stream.getAudioTracks()) { a.stop(); stream.removeTrack(a); } // the picture only
+    const track = stream.getVideoTracks()[0];
+    if (!track) { stopStream(stream); return toast("AURA couldn't capture that.", "err"); }
+    try { await lane.sender.replaceTrack(track); }
+    catch { stopStream(stream); return toast("Your screen couldn't be sent. Try again.", "err"); }
+    if (mine !== session || !rtc) return stopStream(stream);
+    const before = rtc.screen;
+    rtc.screen = stream;
+    if (before && before !== stream) stopStream(before);
+    try {
+      const p = lane.sender.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      p.encodings[0].maxBitrate = SCREEN_MAX_BITRATE;
+      p.encodings[0].maxFramerate = 30;
+      p.degradationPreference = "balanced";
+      await lane.sender.setParameters(p);
+    } catch {}
+    // The window you shared was closed: stop sharing
+    track.onended = () => { if (rtc?.screen === stream) callActions.stopScreen(); };
+    patch({ sharing: true });
+    tell({ t: "screen", on: true });
+  },
+  stopScreen() {
+    const lane = videoLane();
+    if (lane) lane.sender.replaceTrack(null).catch(() => {});
+    if (rtc?.screen) { stopStream(rtc.screen); rtc.screen = null; }
+    if (state.call?.sharing) patch({ sharing: false });
+    tell({ t: "screen", on: false });
+  },
+
   // Ends the call if it is with this person (used when you block them)
   endWith(userId) { if (state.call?.peer.userId === userId && state.call.phase !== "over") callActions.hangUp(); },
 
@@ -668,6 +761,9 @@ const IconHangUp = () => <Svg><path d={PHONE} transform="rotate(135 12 12)" /></
 const IconMic = () => <Svg><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" /></Svg>;
 const IconMicOff = () => <Svg><path d="M15 9.5V6a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 4.6 2.5M5.5 11.5a6.5 6.5 0 0 0 10.2 5.3M18.5 11.5c0 .9-.2 1.8-.5 2.6M12 18v3M4 4l16 16" /></Svg>;
 const IconGrip = () => <Svg size={14}><circle cx="9" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="9" cy="18" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="18" r="1.3" fill="currentColor" stroke="none" /></Svg>;
+const IconScreen = () => <Svg><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></Svg>;
+const IconExpand = () => <Svg size={15}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></Svg>;
+const IconShrink = () => <Svg size={15}><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></Svg>;
 const IconSliders = () => <Svg><path d="M5 6h8M17 6h2M5 12h2M11 12h8M5 18h9M18 18h1" /><circle cx="15" cy="6" r="2" /><circle cx="9" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></Svg>;
 
 function Face({ person, size }) {
@@ -733,6 +829,87 @@ function Devices({ onClose }) {
   );
 }
 
+// ── Screen share: pick what to share (Added by aura-screen-share-setup.cjs) ──
+function ScreenPicker({ onClose }) {
+  const box = useRef(null);
+  const [sources, setSources] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    const list = window.electronAPI?.getCaptureSources;
+    if (typeof list !== "function") { setSources([]); return; }
+    list().then((res) => {
+      if (!alive) return;
+      if (!res?.success) { setError("AURA couldn't list your screens and windows."); setSources([]); return; }
+      const all = (res.sources || []).filter((s) => s && typeof s.id === "string" && /^(screen|window):/.test(s.id));
+      setSources([...all.filter((s) => s.isScreen), ...all.filter((s) => !s.isScreen)]);
+    }).catch(() => { if (alive) { setError("AURA couldn't list your screens and windows."); setSources([]); } });
+    const away = (e) => { if (box.current && !box.current.contains(e.target) && !e.target.closest?.("[data-cx-share]")) onClose(); };
+    const esc = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => { alive = false; document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [onClose]);
+  const pick = (id) => { onClose(); callActions.shareScreen(id); };
+  const screens = (sources || []).filter((s) => s.isScreen), windows = (sources || []).filter((s) => !s.isScreen);
+  const tile = (s, i) => (
+    <button key={s.id} type="button" className="cx-src" onClick={() => pick(s.id)} title={s.name}>
+      {s.thumbnail ? <img src={s.thumbnail} alt="" draggable={false} /> : <span className="cx-src-ph"><IconScreen /></span>}
+      <span className="cx-src-name">{s.isScreen && screens.length > 1 ? `Screen ${i + 1}` : s.isScreen ? "Your whole screen" : s.name}</span>
+    </button>
+  );
+  return (
+    <div className="cx-devices cx-picker" ref={box} role="dialog" aria-label="Share your screen">
+      <div className="cx-picker-h">Share your screen</div>
+      {sources === null && <div className="cx-picker-note">Looking for screens and windows…</div>}
+      {error && <div className="cx-picker-note err">{error}</div>}
+      {sources && !sources.length && !error && (
+        <button type="button" className="cx-btn yes" onClick={() => pick("")}><IconScreen /> Share your screen</button>
+      )}
+      {screens.length > 0 && <div className="cx-src-grid">{screens.map(tile)}</div>}
+      {windows.length > 0 && <><div className="cx-picker-sub">Or one window</div><div className="cx-src-grid">{windows.map(tile)}</div></>}
+      <div className="cx-picker-note">Only the picture is shared, not the sound.</div>
+    </div>
+  );
+}
+
+// ── Screen share: their screen, in a corner or filling the window (Added by aura-screen-share-setup.cjs) ──
+function ScreenView() {
+  const call = useCall();
+  const video = useRef(null);
+  const [mode, setMode] = useState("dock"); // dock | full | hidden
+  const showing = !!call && !!call.peerSharing && (call.phase === "live" || call.phase === "reconnecting");
+  const stream = showing ? rtc?.remoteVideo || null : null;
+  useEffect(() => { if (showing) setMode("dock"); }, [showing]);
+  useEffect(() => {
+    const v = video.current;
+    if (!v) return;
+    if (v.srcObject !== stream) v.srcObject = stream;
+    if (stream) v.play().catch(() => {});
+  }, [stream, mode, call?.screenRev]);
+  useEffect(() => {
+    if (mode !== "full") return;
+    const esc = (e) => { if (e.key === "Escape") setMode("dock"); };
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [mode]);
+  if (!showing) return null;
+  const name = call.peer.username;
+  if (mode === "hidden") return (
+    <button type="button" className="cx-screen-pill" onClick={() => setMode("dock")} aria-label={`Show ${name}'s screen`}><IconScreen /> {name} is sharing their screen <b>Show</b></button>
+  );
+  return (
+    <div className={`cx-screen ${mode}`} role="region" aria-label={`${name}'s screen`}>
+      <div className="cx-screen-top">
+        <span className="cx-screen-name"><span className="cx-screen-dot" />{name}'s screen</span>
+        <button type="button" onClick={() => setMode(mode === "full" ? "dock" : "full")} title={mode === "full" ? "Back to the corner (Esc)" : "Fill the window"} aria-label={mode === "full" ? "Back to the corner" : "Fill the window"}>{mode === "full" ? <IconShrink /> : <IconExpand />}</button>
+        {mode !== "full" && <button type="button" onClick={() => setMode("hidden")} title="Hide" aria-label={`Hide ${name}'s screen`}>×</button>}
+      </div>
+      <video ref={video} autoPlay playsInline muted onDoubleClick={() => setMode(mode === "full" ? "dock" : "full")} />
+    </div>
+  );
+}
+
 // The call bar: sits at the top of the window for as long as a call is ringing or going on
 // Where the call bar sits. Left alone it is at the top in the middle; dragged, it stays where you
 // put it (remembered as a share of the window, so it lands in the same place if the window changes
@@ -757,8 +934,9 @@ function CallBar() {
   const bar = useRef(null);
   const drag = useRef(null);
   const [devices, setDevices] = useState(false);
+  const [picker, setPicker] = useState(false); // choosing what to share
   const active = !!call && (call.phase === "live" || call.phase === "reconnecting");
-  useEffect(() => { if (!active) setDevices(false); }, [active]);
+  useEffect(() => { if (!active) { setDevices(false); setPicker(false); } }, [active]);
   // The ring around your friend's picture follows their voice; the microphone button follows yours
   useEffect(() => meter.watch((me, peer) => {
     const el = bar.current;
@@ -842,7 +1020,7 @@ function CallBar() {
       <Face person={ringingIn ? { ...call.peer, avatarUrl: "" } : call.peer} size={34} />
       <div className="cx-who">
         <div className="cx-name">{name}{active && call.peerMuted && <span className="cx-peer-muted" title={`${name} is muted`}><IconMicOff /><span className="cx-sr">{name} is muted</span></span>}</div>
-        <div className="cx-status" role="status" aria-live="polite">{status ?? <><Clock since={call.since} />{call.muted && <span> · You're muted</span>}</>}</div>
+        <div className="cx-status" role="status" aria-live="polite">{status ?? <><Clock since={call.since} />{call.sharing ? <span className="cx-sharing"> · Sharing your screen</span> : call.muted && <span> · You're muted</span>}</>}</div>
       </div>
       {ringingIn && (
         <div className="cx-acts">
@@ -856,11 +1034,16 @@ function CallBar() {
       {active && (
         <div className="cx-acts">
           <button type="button" className={`cx-round mic ${call.muted ? "on" : ""}`} onClick={callActions.toggleMute} aria-pressed={call.muted} title={call.muted ? "Unmute your microphone" : "Mute your microphone"} aria-label={call.muted ? "Unmute your microphone" : "Mute your microphone"}>{call.muted ? <IconMicOff /> : <IconMic />}</button>
-          <button type="button" className={`cx-round ${devices ? "on" : ""}`} data-cx-devices onClick={() => setDevices((v) => !v)} aria-expanded={devices} title="Microphone, speakers and volume" aria-label="Microphone, speakers and volume"><IconSliders /></button>
+          {call.sharing
+            ? <button type="button" className="cx-round share on" onClick={() => { setPicker(false); callActions.stopScreen(); }} title="Stop sharing your screen" aria-label="Stop sharing your screen"><IconScreen /></button>
+            : <button type="button" className={`cx-round share ${picker ? "open" : ""}`} data-cx-share disabled={!call.canShare} onClick={() => { setDevices(false); setPicker((v) => !v); }} aria-expanded={picker}
+                title={call.canShare ? "Share your screen" : `Screen share needs both of you on the latest AURA`} aria-label={call.canShare ? "Share your screen" : "Screen share isn't available on this call"}><IconScreen /></button>}
+          <button type="button" className={`cx-round ${devices ? "on" : ""}`} data-cx-devices onClick={() => { setPicker(false); setDevices((v) => !v); }} aria-expanded={devices} title="Microphone, speakers and volume" aria-label="Microphone, speakers and volume"><IconSliders /></button>
           <button type="button" className="cx-round end" onClick={callActions.hangUp} title="Hang up" aria-label="Hang up"><IconHangUp /></button>
         </div>
       )}
       {devices && active && <Devices onClose={() => setDevices(false)} />}
+      {picker && active && !call.sharing && <ScreenPicker onClose={() => setPicker(false)} />}
     </div>
   );
 }
@@ -942,6 +1125,37 @@ const CSS = `
 :root:has(.stream-full-bar) .cx-btn,:root:has(.stream-full-bar) .cx-round{height:28px}
 :root:has(.stream-full-bar) .cx-round{width:28px}
 :root:has(.stream-full-bar) .cx-devices{top:42px}
+/* Screen share (Added by aura-screen-share-setup.cjs) */
+.cx-round.share:disabled{opacity:.4;cursor:default}
+.cx-round.share.open{background:rgba(255,255,255,.16)}
+.cx-round.share.on{background:#3ddc84;border-color:#3ddc84;color:#06240f}
+.cx-round.share.on:hover{background:#dc2626;border-color:#dc2626;color:#fff}
+.cx-sharing{color:#3ddc84}
+.cx-picker{width:440px;max-height:min(520px,calc(100vh - 90px));overflow-y:auto}
+.cx-bar.low .cx-picker{max-height:min(520px,calc(100vh - 90px))}
+.cx-picker-h{font-family:'Rajdhani',sans-serif;font-size:16px;font-weight:700;letter-spacing:.3px}
+.cx-picker-sub{font-size:12px;font-weight:600;color:var(--t2,#9aa0aa);margin-top:2px}
+.cx-picker-note{font-size:11.5px;color:var(--t2,#9aa0aa)}
+.cx-picker-note.err{color:#fca5a5}
+.cx-src-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.cx-src{display:flex;flex-direction:column;gap:6px;padding:6px;border-radius:10px;border:1px solid var(--border,rgba(255,255,255,.14));background:rgba(255,255,255,.04);color:var(--t1,#fff);cursor:pointer;text-align:left;font:500 12px 'DM Sans',sans-serif;min-width:0}
+.cx-src:hover,.cx-src:focus-visible{border-color:var(--ac,#FF5722);background:rgba(255,255,255,.08)}
+.cx-src img,.cx-src-ph{width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:6px;background:#000;display:flex;align-items:center;justify-content:center;color:var(--t3,rgba(255,255,255,.45))}
+.cx-src-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cx-screen{position:fixed;right:16px;bottom:16px;z-index:9550;width:min(480px,calc(100vw - 32px));border-radius:14px;overflow:hidden;background:#000;border:1px solid var(--borderb,rgba(255,255,255,.18));box-shadow:0 20px 50px rgba(0,0,0,.6);display:flex;flex-direction:column;font-family:'DM Sans',sans-serif}
+.cx-screen video{display:block;width:100%;aspect-ratio:16/9;background:#000;object-fit:contain}
+.cx-screen.full{inset:0;width:auto;border-radius:0;border:none;z-index:9590}
+.cx-screen.full video{flex:1;aspect-ratio:auto;height:0;min-height:0}
+.cx-screen-top{display:flex;align-items:center;gap:6px;padding:6px 8px 6px 12px;background:color-mix(in srgb,var(--panel,#1a1f26) 92%,transparent);color:var(--t1,#fff)}
+.cx-screen.full .cx-screen-top{padding-top:62px}
+:root.cx-moved .cx-screen.full .cx-screen-top{padding-top:6px}
+.cx-screen-name{flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cx-screen-dot{width:8px;height:8px;border-radius:50%;background:#3ddc84;flex-shrink:0}
+.cx-screen-top button{width:28px;height:28px;border-radius:8px;border:none;background:transparent;color:var(--t2,#9aa0aa);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1}
+.cx-screen-top button:hover,.cx-screen-top button:focus-visible{background:rgba(255,255,255,.1);color:var(--t1,#fff)}
+.cx-screen-pill{position:fixed;right:16px;bottom:16px;z-index:9550;display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;border-radius:999px;border:1px solid var(--borderb,rgba(255,255,255,.18));background:var(--panel,#1a1f26);color:var(--t1,#fff);font:500 12.5px 'DM Sans',sans-serif;cursor:pointer;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.cx-screen-pill b{color:#3ddc84;font-weight:600}
+.cx-screen-top button:focus-visible,.cx-screen-pill:focus-visible,.cx-src:focus-visible{outline:2px solid var(--ac2,var(--ac,#ff8a65));outline-offset:2px}
 .reduce-motion .cx-bar,.reduce-motion .cx-bar.ringing.in,.reduce-motion .cx-bar.moved{animation:none}
 @media (prefers-reduced-motion:reduce){.cx-bar,.cx-bar.ringing.in,.cx-bar.moved{animation:none}}
 `;
@@ -960,7 +1174,7 @@ export function mountCallLayer() {
   host.id = "aura-call-layer";
   document.body.appendChild(host);
   const root = createRoot(host);
-  root.render(<CallBar />);
+  root.render(<><CallBar /><ScreenView /></>);
   const leaving = () => callActions.reset(); // AURA is closing or reloading: hang up
   window.addEventListener("beforeunload", leaving);
   return () => {

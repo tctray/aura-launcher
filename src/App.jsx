@@ -5,7 +5,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import SessionsPage from "./components/sessions";
 import PerformancePage from "./components/performance";
-import { addSession } from "./sessionstore";
+import { addSession, loadSessions } from "./sessionstore";
+import { achievementStats } from "./achievements"; // Added by aura-achievements-fix-setup.cjs
 import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
@@ -3476,21 +3477,27 @@ function AuraApp(){
     return()=>{clearTimeout(t1);clearTimeout(t2);}
   },[]);
 
-  const checkAchievements = useCallback((newStats, currentUnlocked) => {
-    const newlyUnlocked = [];
-    ACHIEVEMENTS.forEach(a => { if (!currentUnlocked[a.id] && a.condition(newStats)) newlyUnlocked.push(a); });
-    if (newlyUnlocked.length > 0) {
-      const updated = { ...currentUnlocked };
-      newlyUnlocked.forEach(a => { updated[a.id] = Date.now(); });
-      setUnlockedAch(updated);
-      saveAchievements(updated);
-      newlyUnlocked.forEach(a => {
-        const id = uid();
-        setAchToasts(t => [...t, { id, achievement: a }]);
-        playSfx("achievement");
-        setTimeout(() => setAchToasts(t => t.filter(x => x.id !== id)), 4000);
-      });
-    }
+  // What's unlocked right now. Checks used to see an old copy, so an unlock could undo another.
+  // (Added by aura-achievements-fix-setup.cjs)
+  const unlockedRef = useRef(unlockedAch);
+  useEffect(() => { unlockedRef.current = unlockedAch; }, [unlockedAch]);
+  const checkAchievements = useCallback((newStats) => {
+    const cur = unlockedRef.current || {};
+    const fresh = ACHIEVEMENTS.filter(a => !cur[a.id] && a.condition(newStats));
+    if (!fresh.length) return;
+    const now = Date.now();
+    const add = {};
+    fresh.forEach(a => { add[a.id] = now; });
+    unlockedRef.current = { ...cur, ...add };
+    setUnlockedAch(prev => { const updated = { ...add, ...prev }; saveAchievements(updated); return updated; });
+    // Several at once (catching up on what you'd already done): one notice, not a pile
+    const shown = fresh.length > 2 ? [{ id: "many", icon: "🏆", title: fresh.length + " achievements" }] : fresh;
+    shown.forEach(a => {
+      const id = uid();
+      setAchToasts(t => [...t, { id, achievement: a }]);
+      setTimeout(() => setAchToasts(t => t.filter(x => x.id !== id)), 4000);
+    });
+    playSfx("achievement");
   }, []);
 
   useEffect(()=>{
@@ -3525,6 +3532,19 @@ function AuraApp(){
   // Favorites and playtime follow the signed-in account (see cloudsync.js)
   useCloudGames(games,setGames,toast);
   useCloudProfile({unlockedAch,setUnlockedAch,stats,setStats,theme,setTheme,accent,setAccent,customColors,setCustomColors,savedThemes,setSavedThemes,bgImage,setBgImage,settings,updateSettings,games,toast});
+  // Achievements count everything: imported games (Steam, Epic, Xbox), a library from your account,
+  // and games played from outside AURA. Checked a moment after anything changes, and at start,
+  // so what you'd already done unlocks too. (Added by aura-achievements-fix-setup.cjs)
+  const [sessionsTick, setSessionsTick] = useState(0);
+  useEffect(() => {
+    const on = () => setSessionsTick(n => n + 1);
+    window.addEventListener("aura-sessions-updated", on);
+    return () => window.removeEventListener("aura-sessions-updated", on);
+  }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => checkAchievements(achievementStats(games, stats, loadSessions(), DEMO_GAMES)), 2500);
+    return () => clearTimeout(timer);
+  }, [games, stats, sessionsTick, checkAchievements]);
   // Twitch favorites: a notice when one goes live (Added by aura-twitch-favorites-setup.cjs)
   // In front: a notice inside AURA. Hidden or behind other windows: a Windows notification.
   useFavWatch({ favs: settings.twitchFavs, alerts: settings.twitchLiveAlerts !== false, onLive: (s) => {
