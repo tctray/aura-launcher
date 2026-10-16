@@ -24,19 +24,24 @@ const fs = require("fs");
 const GENERIC = new Set([
   "launcher.exe", "game.exe", "start.exe", "play.exe", "setup.exe", "install.exe", "update.exe", "updater.exe",
   "client.exe", "app.exe", "main.exe", "bootstrapper.exe", "run.exe", "win64.exe", "shipping.exe",
+  "gamelaunchhelper.exe", // every Xbox / Game Pass game starts through one of these
 ]);
 // Helpers that run beside games: never taken as the game itself
-const HELPERS = /^(unins.*|.*crash.*|unrealcef.*|.*cefsub.*|.*cef.*process.*|crashpad.*|.*report.*|easyanticheat.*|eac.*|battleye.*|be.*service.*|start_protected_game|.*redist.*|vc_?redist.*|dxsetup|ue4prereq.*|cefprocess|.*webhelper.*|.*overlay.*|.*updater.*|.*launcher.*helper.*|steamservice|steam|epicgameslauncher|eadesktop|eabackgroundservice|origin|gamebar.*|xboxpcapp.*)\.exe$/i;
+const HELPERS = /^(unins.*|.*crash.*|unrealcef.*|.*cefsub.*|.*cef.*process.*|crashpad.*|.*report.*|easyanticheat.*|eac.*|.*anticheat.*|battleye.*|be.*service.*|start_protected_game|.*redist.*|vc_?redist.*|dxsetup|ue4prereq.*|cefprocess|.*webhelper.*|.*overlay.*|.*updater.*|.*launcher.*helper.*|steamservice|steam|epicgameslauncher|eadesktop|eabackgroundservice|origin|gamebar.*|xboxpcapp.*)\.exe$/i;
 
 const nameOf = (p) => path.win32.basename(String(p || "")).toLowerCase(); // works for C:\ paths on any PC
-const keyOf = (p) => String(p || "").toLowerCase();
+// One way of writing a path: "C:/XboxGames/x.exe" (how Xbox games are imported) and "C:\\a\\\\b" are C:\a\b
+const tidyPath = (p) => String(p || "").replace(/\//g, "\\").replace(/(?!^)\\{2,}/g, "\\");
+const keyOf = (p) => tidyPath(p).toLowerCase();
 const validExe = (p) => typeof p === "string" && p.length > 4 && p.length <= 1024 && /\.exe$/i.test(p) && !p.includes("\0");
 // A game's own folder, when it is specific enough to stand for that game (not a drive, Program
 // Files, a Steam or Xbox library folder, or the user's folder)
 const BROAD = /^[a-z]:\\(?:|program files(?: \(x86\))?|windows(?:\\.*)?|users(?:\\[^\\]+)?(?:\\desktop|\\documents|\\downloads)?|programdata|games|xboxgames|steamlibrary|epic games|windowsapps|program files\\windowsapps)$|\\steamapps(?:\\common)?$|\\steam$|\\epic games$|\\ea games$|\\origin games$|\\xboxgames$|\\windowsapps$/i;
 function folderOf(exePath) {
-  if (!validExe(exePath) || !/^[a-z]:\\/i.test(exePath)) return null;
-  const dir = path.win32.dirname(exePath).toLowerCase().replace(/\\+$/, "");
+  if (!validExe(exePath)) return null;
+  const clean = tidyPath(exePath);
+  if (!/^[a-z]:\\/i.test(clean)) return null;
+  const dir = path.win32.dirname(clean).toLowerCase().replace(/\\+$/, "");
   if (dir.split("\\").length < 3 || BROAD.test(dir)) return null;
   return dir;
 }
@@ -49,6 +54,8 @@ async function programsOnDisk(dir, readdir = (d) => fs.promises.readdir(d, { wit
   const out = [];
   let top = [];
   try { top = await readdir(dir); } catch { return out; }
+  // Programs right in the game's folder (an Xbox game sits beside its gamelaunchhelper.exe)
+  for (const e of top) if (e && e.isFile() && /\.exe$/i.test(e.name)) out.push(e.name);
   const projects = top.filter((e) => e && e.isDirectory() && !NOT_GAME_DIRS.test(e.name)).slice(0, 30);
   for (const p of projects) {
     for (const plat of ["Win64", "WinGDK"]) {
@@ -57,7 +64,7 @@ async function programsOnDisk(dir, readdir = (d) => fs.promises.readdir(d, { wit
       for (const f of files) if (f && f.isFile() && /\.exe$/i.test(f.name)) out.push(f.name);
     }
   }
-  return out.slice(0, 20);
+  return [...new Set(out)].slice(0, 20);
 }
 
 function createGameWatch({
@@ -95,7 +102,12 @@ function createGameWatch({
     if (aliasFile && fs.existsSync(aliasFile)) {
       const saved = JSON.parse(fs.readFileSync(aliasFile, "utf8"));
       for (const [k, names] of Object.entries(saved || {})) {
-        if (Array.isArray(names)) aliases.set(k, new Set(names.filter((n) => typeof n === "string" && /\.exe$/i.test(n) && n.length < 260).map((n) => n.toLowerCase())));
+        if (!Array.isArray(names)) continue;
+        // (helpers such as an anti-cheat service shared by several games were once learned by mistake: dropped)
+        const keep = names.filter((n) => typeof n === "string" && /\.exe$/i.test(n) && n.length < 260 && !HELPERS.test(n) && !GENERIC.has(n.toLowerCase())).map((n) => n.toLowerCase());
+        const key = keyOf(k), set = aliases.get(key) || new Set();
+        keep.forEach((n) => set.add(n));
+        if (set.size) aliases.set(key, set);
       }
     }
   } catch {}
@@ -160,7 +172,7 @@ function createGameWatch({
       const own = nameOf(g.exePath);
       for (const p of procs) {
         const n = String(p && p.name || "");
-        const where = String(p && p.path || "").toLowerCase();
+        const where = keyOf(p && p.path);
         if (!/\.exe$/i.test(n) || !where.startsWith(g.dir + "\\")) continue;
         if (n.toLowerCase() === own || HELPERS.test(n)) continue;
         addAlias(g.exePath, n);

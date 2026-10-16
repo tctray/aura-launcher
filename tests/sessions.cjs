@@ -170,9 +170,57 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   put("ArcRaiders.exe"); put("PioneerGame/Binaries/Win64/PioneerGame.exe"); put("Engine/Binaries/Win64/CrashReportClient.exe");
   put("Installers/Install_EasyAntiCheat.exe"); put("PioneerGame/Content/readme.txt");
   const found = typeof programsOnDisk === "function" ? await programsOnDisk(game) : null;
-  check("in a real game folder: PioneerGame.exe is found, the engine's and installers' programs aren't", JSON.stringify(found) === JSON.stringify(["PioneerGame.exe"]), found);
+  check("in a real game folder: PioneerGame.exe is found, the engine's and installers' programs aren't", Array.isArray(found) && found.includes("PioneerGame.exe") && !found.some((n) => /crash|anticheat/i.test(n)), found);
   check("a folder that isn't there finds nothing (and doesn't fail)", typeof programsOnDisk === "function" && (await programsOnDisk(path.join(game, "missing"))).length === 0);
   fs.rmSync(game, { recursive: true, force: true });
+
+  console.log("3d. Xbox / Game Pass games (Arc Raiders from the Xbox app)");
+  events.length = 0;
+  // Exactly as an Xbox import saves it: forward slashes, and the shared Xbox launcher
+  const XARC = "C:/XboxGames/ARC Raiders/Content/gamelaunchhelper.exe";
+  const XSUB = "C:/XboxGames/Subnautica 2/Content/gamelaunchhelper.exe";
+  const xdisk = { "c:\\xboxgames\\arc raiders\\content": ["gamelaunchhelper.exe", "PioneerGame.exe"], "c:\\xboxgames\\subnautica 2\\content": ["gamelaunchhelper.exe", "Subnautica2.exe", "Subnautica2-WinGDK-Shipping.exe"] };
+  const xlooked = [];
+  const xw = make({ listWithPaths: async () => [], onDisk: async (d) => { xlooked.push(d); return xdisk[d] || []; }, aliasFile: path.join(dir, "xbox.json") });
+  xw.setLibrary([XARC, XSUB, MADDEN]);
+  running = ["gamelaunchhelper.exe"];
+  await step(xw, 1000);
+  check("a path written with / is understood, and its folder is read", xlooked.includes("c:\\xboxgames\\arc raiders\\content"), xlooked);
+  check("the shared Xbox launcher alone doesn't say which game it is", events.length === 0, events);
+  running = ["PioneerGame.exe", "EACefSubProcess.exe"];
+  await step(xw, 5000);
+  check("PioneerGame.exe running: Arc Raiders gets a session", events.length === 1 && events[0][1] === XARC && /pioneergame/i.test(events[0][2]), events);
+  check("and only Arc Raiders, not the other Xbox game", events.every((e) => e[1] !== XSUB));
+  for (let i = 0; i < 60; i++) await step(xw, 5000);
+  running = []; for (let i = 0; i < 3; i++) await step(xw, 5000);
+  check("closing it ends the session with the time played", events.length === 2 && events[1][0] === "end" && events[1][2] >= 290000, events);
+  check("anti-cheat's helper isn't taken for the game", !JSON.stringify(xw.snapshot().aliases).match(/eacef|anticheat/i), xw.snapshot().aliases);
+
+  // What the learned names looked like on a real PC: an anti-cheat service shared by two EA games,
+  // and paths written in odd ways. The shared helper is dropped; the rest still works.
+  const FC = "C:\\Program Files\\EA Games\\EA SPORTS FC 26\\FC26.exe";
+  const MAD = "C:\\Program Files\\EA Games\\Madden NFL 27\\Madden27.exe";
+  const LOCK = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Lockdown Protocol\\LockdownProtocol.exe";
+  fs.writeFileSync(path.join(dir, "old.json"), JSON.stringify({
+    "c:\\program files\\ea games\\ea sports fc 26\\fc26.exe": ["eaanticheat.gameservicelauncher.exe"],
+    "c:\\program files\\ea games\\madden nfl 27\\madden27.exe": ["eaanticheat.gameservicelauncher.exe"],
+    "c:\\\\program files (x86)\\\\steam\\steamapps\\common\\lockdown protocol\\lockdownprotocol.exe": ["lockdownprotocol-win64-shipping.exe"],
+  }));
+  events.length = 0;
+  const ow = make({ onDisk: null, aliasFile: path.join(dir, "old.json") });
+  ow.setLibrary([FC, MAD, LOCK]);
+  running = ["eaanticheat.gameservicelauncher.exe"];
+  await step(ow, 1000);
+  check("EA's anti-cheat service running on its own isn't counted as FC 26 or Madden", events.length === 0, events);
+  running = ["Madden27.exe", "eaanticheat.gameservicelauncher.exe"];
+  await step(ow, 5000);
+  check("playing Madden counts as Madden only", events.length === 1 && events[0][1] === MAD, events);
+  running = []; for (let i = 0; i < 25; i++) await step(ow, 5000);
+  events.length = 0;
+  running = ["LockdownProtocol-Win64-Shipping.exe"];
+  await step(ow, 5000);
+  check("a name learned under an oddly written path still works", events.length === 1 && events[0][1] === LOCK, events);
+  running = []; for (let i = 0; i < 25; i++) await step(ow, 5000);
 
   console.log("4. What isn't counted");
   events.length = 0;
