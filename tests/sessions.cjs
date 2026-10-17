@@ -196,6 +196,21 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   check("closing it ends the session with the time played", events.length === 2 && events[1][0] === "end" && events[1][2] >= 290000, events);
   check("anti-cheat's helper isn't taken for the game", !JSON.stringify(xw.snapshot().aliases).match(/eacef|anticheat/i), xw.snapshot().aliases);
 
+  // The Xbox launcher can stay open after the game closes: that mustn't keep the timer going
+  events.length = 0;
+  xw.launched(XARC);
+  running = ["gamelaunchhelper.exe"];
+  await step(xw, 3000);
+  check("pressing Play: the shared launcher alone doesn't start the timer once the game is known", events.length === 0, events);
+  running = ["gamelaunchhelper.exe", "PioneerGame.exe"];
+  await step(xw, 20000);
+  check("the game appears: the session starts, timed from when you pressed Play", events.length === 1 && events[0][1] === XARC && events[0][3] === true, events);
+  for (let i = 0; i < 60; i++) await step(xw, 5000);
+  running = ["gamelaunchhelper.exe"];
+  for (let i = 0; i < 3; i++) await step(xw, 5000);
+  check("the game closes but its launcher stays open: the session still ends", events.length === 2 && events[1][0] === "end", events);
+  running = []; for (let i = 0; i < 25; i++) await step(xw, 5000);
+
   // What the learned names looked like on a real PC: an anti-cheat service shared by two EA games,
   // and paths written in odd ways. The shared helper is dropped; the rest still works.
   const FC = "C:\\Program Files\\EA Games\\EA SPORTS FC 26\\FC26.exe";
@@ -221,6 +236,40 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   await step(ow, 5000);
   check("a name learned under an oddly written path still works", events.length === 1 && events[0][1] === LOCK, events);
   running = []; for (let i = 0; i < 25; i++) await step(ow, 5000);
+
+  console.log("3e. Tools that come with games (Call of Duty's broker service, Marvel Rivals' uploader)");
+  // The names learned on a real PC: background tools taken for the game
+  fs.writeFileSync(path.join(dir, "tools.json"), JSON.stringify({
+    "c:\\program files (x86)\\steam\\steamapps\\common\\call of duty hq\\bootstrapper.exe": ["cod.exe", "codbrokerinstaller.exe", "codbrokerservice.exe", "codinstallcleaner.exe", "codsecureattestationwizard.exe"],
+    "c:\\program files\\epic games\\marvelrivalsjktnw\\epic_launch_helper.exe": ["auto_restarter.exe", "capturepro.exe", "client_diagnose.exe", "marvelrivals_launcher.exe", "upload_profile.exe"],
+  }));
+  const COD = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Call of Duty HQ\\bootstrapper.exe";
+  const RIVALS = "C:\\Program Files\\Epic Games\\MarvelRivalsjKtnW\\epic_launch_helper.exe";
+  const rivalsDisk = ["Marvel-Win64-Shipping.exe", "auto_restarter.exe", "capturepro.exe", "client_diagnose.exe", "epic_launch_helper.exe", "MarvelRivals_Launcher.exe", "upload_profile.exe"];
+  events.length = 0;
+  const tw = make({ onDisk: async (d) => (/marvelrivals/.test(d) ? rivalsDisk : []), aliasFile: path.join(dir, "tools.json") });
+  tw.setLibrary([COD, RIVALS]);
+  running = ["CodBrokerService.exe", "capturepro.exe", "upload_profile.exe"];
+  await step(tw, 1000); await step(tw, 5000);
+  check("Call of Duty's broker service running in the background isn't a Call of Duty session", !events.some((e) => e[1] === COD), events);
+  check("nor are Marvel Rivals' capture and upload tools a Marvel Rivals session", !events.some((e) => e[1] === RIVALS), events);
+  check("those tools are forgotten", !JSON.stringify(tw.snapshot().aliases).match(/broker|capturepro|upload_profile|diagnose|restarter|attestation|installcleaner/), tw.snapshot().aliases);
+  running = ["Marvel-Win64-Shipping.exe"];
+  await step(tw, 5000);
+  check("the real Marvel Rivals game counts (it was crowded out before)", events.length === 1 && events[0][1] === RIVALS, events);
+  running = []; for (let i = 0; i < 25; i++) await step(tw, 5000);
+  events.length = 0;
+  running = ["cod.exe"];
+  await step(tw, 5000);
+  check("and Call of Duty itself still counts", events.length === 1 && events[0][1] === COD, events);
+  running = []; for (let i = 0; i < 25; i++) await step(tw, 5000);
+  // A real folder laid out like Marvel Rivals: the game is two folders down
+  const mr = fs.mkdtempSync(path.join(os.tmpdir(), "aura-mr-"));
+  const putIn = (rel) => { const f = path.join(mr, ...rel.split("/")); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, ""); };
+  ["epic_launch_helper.exe", "capturepro.exe", "upload_profile.exe", "MarvelRivals_Launcher.exe", "MarvelGame/Marvel/Binaries/Win64/Marvel-Win64-Shipping.exe", "MarvelGame/Engine/Binaries/Win64/CrashReportClient.exe"].forEach(putIn);
+  const mrFound = typeof programsOnDisk === "function" ? await programsOnDisk(mr) : [];
+  check("in a real folder, the game two folders down is found, and listed first", mrFound[0] === "Marvel-Win64-Shipping.exe" && !mrFound.includes("CrashReportClient.exe"), mrFound);
+  fs.rmSync(mr, { recursive: true, force: true });
 
   console.log("4. What isn't counted");
   events.length = 0;

@@ -27,7 +27,9 @@ const GENERIC = new Set([
   "gamelaunchhelper.exe", // every Xbox / Game Pass game starts through one of these
 ]);
 // Helpers that run beside games: never taken as the game itself
-const HELPERS = /^(unins.*|.*crash.*|unrealcef.*|.*cefsub.*|.*cef.*process.*|crashpad.*|.*report.*|easyanticheat.*|eac.*|.*anticheat.*|battleye.*|be.*service.*|start_protected_game|.*redist.*|vc_?redist.*|dxsetup|ue4prereq.*|cefprocess|.*webhelper.*|.*overlay.*|.*updater.*|.*launcher.*helper.*|steamservice|steam|epicgameslauncher|eadesktop|eabackgroundservice|origin|gamebar.*|xboxpcapp.*)\.exe$/i;
+const HELPERS = /^(unins.*|.*crash.*|unrealcef.*|.*cefsub.*|.*cef.*process.*|crashpad.*|.*report.*|easyanticheat.*|eac.*|.*anticheat.*|battleye.*|be.*service.*|start_protected_game|.*redist.*|vc_?redist.*|dxsetup|ue4prereq.*|cefprocess|.*webhelper.*|.*overlay.*|.*updater.*|.*launcher.*helper.*|steamservice|steam|epicgameslauncher|eadesktop|eabackgroundservice|origin|gamebar.*|xboxpcapp.*|.*install.*|.*service.*|.*broker.*|.*diagnos.*|.*restart.*|.*upload.*|capture.*|.*cleaner.*|.*attestation.*|.*_?trial|.*_?showcase|.*benchmark.*|.*setup.*)\.exe$/i;
+// (the last few: tools that come with games and may run in the background, such as Call of Duty's
+// broker service, Marvel Rivals' uploader, an installer or a trial copy, so never taken for the game)
 
 const nameOf = (p) => path.win32.basename(String(p || "")).toLowerCase(); // works for C:\ paths on any PC
 // One way of writing a path: "C:/XboxGames/x.exe" (how Xbox games are imported) and "C:\\a\\\\b" are C:\a\b
@@ -51,20 +53,29 @@ function folderOf(exePath) {
 // can't be learned from what's running. Unreal games keep it in <Project>\Binaries\Win64.
 const NOT_GAME_DIRS = /^(engine|installers?|redist|_?commonredist|easyanticheat|battleye|directx|dotnet|vcredist|support|prereq.*|tools?|launcher|__installer)$/i;
 async function programsOnDisk(dir, readdir = (d) => fs.promises.readdir(d, { withFileTypes: true })) {
-  const out = [];
+  const binaries = [], beside = [];
   let top = [];
-  try { top = await readdir(dir); } catch { return out; }
-  // Programs right in the game's folder (an Xbox game sits beside its gamelaunchhelper.exe)
-  for (const e of top) if (e && e.isFile() && /\.exe$/i.test(e.name)) out.push(e.name);
-  const projects = top.filter((e) => e && e.isDirectory() && !NOT_GAME_DIRS.test(e.name)).slice(0, 30);
-  for (const p of projects) {
-    for (const plat of ["Win64", "WinGDK"]) {
-      let files = [];
-      try { files = await readdir(path.join(dir, p.name, "Binaries", plat)); } catch { continue; }
-      for (const f of files) if (f && f.isFile() && /\.exe$/i.test(f.name)) out.push(f.name);
+  try { top = await readdir(dir); } catch { return []; }
+  // Unreal games: <Project>\Binaries\Win64, or one folder deeper (Marvel Rivals: MarvelGame\Marvel\Binaries)
+  const look = async (base, depth) => {
+    let entries = base === dir ? top : [];
+    if (base !== dir) { try { entries = await readdir(base); } catch { return; } }
+    for (const p of entries.filter((e) => e && e.isDirectory() && !NOT_GAME_DIRS.test(e.name)).slice(0, 30)) {
+      let found = false;
+      for (const plat of ["Win64", "WinGDK"]) {
+        let files = [];
+        try { files = await readdir(path.join(base, p.name, "Binaries", plat)); } catch { continue; }
+        found = true;
+        for (const f of files) if (f && f.isFile() && /\.exe$/i.test(f.name)) binaries.push(f.name);
+      }
+      if (!found && depth < 1) await look(path.join(base, p.name), depth + 1);
     }
-  }
-  return [...new Set(out)].slice(0, 20);
+  };
+  await look(dir, 0);
+  // Programs right in the game's folder (an Xbox game sits beside its gamelaunchhelper.exe).
+  // The Unreal ones come first: they are the game itself.
+  for (const e of top) if (e && e.isFile() && /\.exe$/i.test(e.name)) beside.push(e.name);
+  return [...new Set([...binaries, ...beside])].slice(0, 20);
 }
 
 function createGameWatch({
@@ -78,7 +89,7 @@ function createGameWatch({
   now = Date.now,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
-  idleMs = 20000,               // how often to look when nothing is running
+  idleMs = 10000,               // how often to look when nothing is running
   busyMs = 5000,                // how often while a game runs or is starting
   missesToEnd = 2,
   launchWaitMs = 3 * 60 * 1000, // how long a game AURA started may take to appear, and how long a new game counts as "starting"
@@ -125,7 +136,7 @@ function createGameWatch({
     if (!validExe(exePath) || !/\.exe$/i.test(n) || HELPERS.test(n) || GENERIC.has(n) || n === nameOf(exePath)) return false;
     const k = keyOf(exePath);
     const set = aliases.get(k) || new Set();
-    if (set.has(n) || set.size >= 5) return false;
+    if (set.has(n) || set.size >= 8) return false;
     set.add(n); aliases.set(k, set); saveAliases();
     return true;
   }
@@ -196,8 +207,11 @@ function createGameWatch({
     for (const [k, exePath] of games) {
       const own = nameOf(exePath);
       const wanted = pending.has(k) || sessions.has(k);
+      // A shared launcher (gamelaunchhelper.exe for Xbox games) stops counting once the game's real
+      // program is known: it can stay open after the game closes, which kept the timer going.
+      const launcherOnly = GENERIC.has(own) && (aliases.get(k)?.size || 0) > 0;
       // A name shared by two games in the library, or a generic one, counts only for a game AURA started
-      const trustOwn = wanted || (all && !GENERIC.has(own) && counts.get(own) === 1);
+      const trustOwn = !launcherOnly && (wanted || (all && !GENERIC.has(own) && counts.get(own) === 1));
       if (trustOwn && runningNames.has(own)) { found.set(k, runningNames.get(own)); continue; }
       const ue = (all || wanted) ? unrealOf(own).find((n) => runningNames.has(n)) : null;
       if (ue) { found.set(k, runningNames.get(ue)); continue; }

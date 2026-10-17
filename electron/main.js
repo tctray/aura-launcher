@@ -141,6 +141,17 @@ function loadAppSettings() {
 function saveAppSettings() {
   try { fs.writeFileSync(settingsFile(), JSON.stringify(appSettings, null, 2)); } catch (e) { console.error("Settings save failed:", e.message); }
 }
+// F11: full screen on or off, remembered like the switch in Settings (Added by aura-look-setup.cjs)
+let modeBeforeFull = "maximized";
+function toggleFullScreenMode() {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  const full = appSettings.windowMode === "fullscreen";
+  if (!full) modeBeforeFull = appSettings.windowMode === "windowed" ? "windowed" : "maximized";
+  appSettings.windowMode = full ? modeBeforeFull : "fullscreen";
+  saveAppSettings();
+  applyWindowMode(appSettings.windowMode);
+  mainWin.webContents.send("window-mode-changed", appSettings.windowMode);
+}
 function applyWindowMode(mode) {
   if (!mainWin) return;
   if (mode === "fullscreen") {
@@ -390,7 +401,12 @@ function createWindow() {
     mainWin.setFullScreen(true);
   });
   mainWin.webContents.on("leave-html-full-screen", () => {
-    mainWin.setFullScreen(false);
+    applyWindowMode(appSettings.windowMode); // back to how you set AURA: full screen stays full screen
+  });
+  mainWin.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || input.key !== "F11" || input.isAutoRepeat || input.control || input.alt || input.meta || input.shift) return;
+    event.preventDefault();
+    toggleFullScreenMode();
   });
   mainWin.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
     // Only AURA's own pages may capture the screen

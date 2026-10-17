@@ -65,6 +65,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // ── Twitch live streams ──────────────────────────────────────────────────────
   searchTwitch:       (opts) => ipcRenderer.invoke("search-twitch", opts),
+  // F11 switched full screen (Added by aura-look-setup.cjs)
+  onWindowModeChanged: (cb) => { const h = (_e, mode) => cb(mode); ipcRenderer.on("window-mode-changed", h); return () => ipcRenderer.removeListener("window-mode-changed", h); },
   fetchTwitchStreams: (opts) => ipcRenderer.invoke("fetch-twitch-streams", opts),
   // Twitch favorites (Added by aura-twitch-favorites-setup.cjs)
   twitchLiveNotice:   (info) => ipcRenderer.invoke("twitch-live-notice", info),

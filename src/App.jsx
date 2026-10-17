@@ -10,6 +10,7 @@ import { achievementStats } from "./achievements"; // Added by aura-achievements
 import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
+import { readPicture, themeFrom, pickAccent } from "./components/bgtheme"; // a theme from your background (Added by aura-look-setup.cjs)
 import { FavStar, FavEditor, cleanFavs, toggleFav, isFav, loginOf, migrateFavs, liveFor, useFavLive, useFavWatch, renameFavs, favLiveStream, refreshFavLive } from "./components/twitchfavs"; // Twitch favorites
 import MessagesPage, { AuraFriendsTab, MessagesIcon, useAuraSocial } from "./components/messages";
 import { PrivacyButton } from "./components/privacy";
@@ -107,6 +108,7 @@ const SETTINGS_DEFAULTS = {
   noBlur: false,
   homeBanner: true,       // the game slideshow at the top of Home
   windowMode: "maximized",// "maximized" | "fullscreen" | "windowed"
+  matchBgTheme: false,   // keep the theme matched to your background picture (Added by aura-look-setup.cjs)
   // Running in the background (Added by aura-tray-setup.cjs)
   keepRunning: true,      // closing the window keeps AURA in the tray, so calls still reach you
   startWithWindows: false,
@@ -1956,6 +1958,76 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
 }
 
 // ── Customize ─────────────────────────────────────────────────────────────────
+// ── A theme from your background (Added by aura-look-setup.cjs) ──
+// AURA reads the colours in your picture. Tap one to build the theme around it, or keep the
+// theme matched to whatever background you pick.
+const bgKey = (src) => (src ? String(src.length) + ":" + src.slice(0, 40) + src.slice(-40) : "");
+function BgThemePicker({ bgImage, onUse }) {
+  const s = useSettings();
+  const [colors, setColors] = useState(undefined); // undefined: reading, null: couldn't
+  const [picked, setPicked] = useState("");
+  useEffect(() => {
+    let alive = true;
+    setColors(undefined); setPicked("");
+    readPicture(bgImage).then((c) => { if (alive) setColors(c && c.length ? c : null); });
+    return () => { alive = false; };
+  }, [bgImage]);
+  const base = colors?.[0]?.hex;
+  const accent = picked || (colors ? pickAccent(colors) : "");
+  const preview = colors ? themeFrom(base, accent) : null;
+  const choose = (hexColor) => { if (!colors) return; setPicked(hexColor); onUse(themeFrom(base, hexColor)); try { localStorage.setItem("aura_bg_theme_for", bgKey(bgImage)); } catch {} };
+  // Kept matched: a new background gets its theme once (your own changes after that are kept)
+  useEffect(() => {
+    if (!s.matchBgTheme || !colors) return;
+    let done = "";
+    try { done = localStorage.getItem("aura_bg_theme_for") || ""; } catch {}
+    if (done !== bgKey(bgImage)) choose(pickAccent(colors));
+  }, [s.matchBgTheme, colors]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="bgt">
+      <div className="bgt-h">Theme from your background</div>
+      <div className="bgt-s">Tap a color from your picture to build AURA's colors around it.</div>
+      {colors === undefined && <div className="bgt-s">Reading the colors in your picture…</div>}
+      {colors === null && <div className="bgt-s bgt-err">AURA can't read the colors of this picture (the website it's from doesn't allow it). Use Browse to pick a picture from your PC instead.</div>}
+      {colors && (
+        <>
+          <div className="bgt-sw" role="group" aria-label="Colors in your background">
+            {colors.map((c) => (
+              <button key={c.hex} type="button" className={`bgt-dot ${accent === c.hex ? "on" : ""}`} style={{ background: c.hex }} onClick={() => choose(c.hex)} title={`Build the theme around ${c.hex}`} aria-label={`Build the theme around ${c.hex}`} aria-pressed={accent === c.hex} />
+            ))}
+          </div>
+          {preview && <div className="bgt-strip" aria-hidden="true">{[preview.bg, preview.panel, preview.card, preview.hover, preview.ac, preview.ac2].map((c, i) => <span key={i} style={{ background: c }} />)}</div>}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button type="button" className="btn-p" style={{ justifyContent: "center" }} onClick={() => choose(accent)}>Use These Colors</button>
+            <label className="bgt-auto">
+              <span className={`tog ${s.matchBgTheme ? "on" : ""}`} role="switch" aria-checked={!!s.matchBgTheme} tabIndex={0}
+                onClick={() => updateSettings({ matchBgTheme: !s.matchBgTheme })}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); updateSettings({ matchBgTheme: !s.matchBgTheme }); } }} />
+              Match my theme to new backgrounds
+            </label>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+const BGT_CSS = `
+.bgt{text-align:left;margin-top:22px;padding:16px;border-radius:12px;background:var(--card);border:1px solid var(--border);display:flex;flex-direction:column;gap:12px}
+.bgt-h{font-family:Rajdhani,sans-serif;font-size:15px;font-weight:700;letter-spacing:.5px;color:var(--t1)}
+.bgt-s{font-size:11px;color:var(--t2);margin-top:-6px}
+.bgt-err{color:var(--danger)}
+.bgt-sw{display:flex;gap:10px;flex-wrap:wrap}
+.bgt-dot{width:38px;height:38px;border-radius:10px;border:2px solid rgba(255,255,255,.12);cursor:pointer;padding:0;transition:transform .15s,border-color .15s}
+.bgt-dot:hover{transform:scale(1.08)}
+.bgt-dot.on{border-color:#fff;transform:scale(1.1)}
+.bgt-dot:focus-visible,.bgt-auto .tog:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.bgt-strip{display:flex;height:12px;border-radius:8px;overflow:hidden}
+.bgt-strip span{flex:1}
+.bgt-auto{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--t2);cursor:pointer;user-select:none}
+.reduce-motion .bgt-dot{transition:none}
+`;
+if (typeof document !== "undefined" && !document.getElementById("aura-bgt-css")) { const el = document.createElement("style"); el.id = "aura-bgt-css"; el.textContent = BGT_CSS; document.head.appendChild(el); }
+
 function Customize({ theme, onThemeChange, accent, onAccentChange, customColors, onCustomColorsChange, bgImage, onBgChange, savedThemes, onSaveTheme, onDeleteTheme, onLoadTheme }) {
   const [local, setLocal] = useState(customColors || {bg:"#222831",panel:"#1a1f26",card:"#2D4059",hover:"#354d6e",ac:"#FF5722",ac2:"#ff8a65"});
   const [tab, setTab] = useState("presets");
@@ -1964,6 +2036,8 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
   const [bgInput, setBgInput] = useState(bgImage||"");
   const updateLocal = (key, val) => { const updated={...local,[key]:val};setLocal(updated);if(theme==="custom") onCustomColorsChange(updated); };
   const applyCustom = () => { onCustomColorsChange(local);onThemeChange("custom"); };
+  // A theme made from the background picture: it becomes your custom theme (Added by aura-look-setup.cjs)
+  const applyBgColors = (colors) => { setLocal(colors); setAc2color(colors.ac2); onAccentChange(null); onThemeChange("custom"); onCustomColorsChange(colors); };
   const activeTheme = theme==="custom"&&customColors ? customColors : (THEMES[theme]||THEMES.midnight);
   const previewAc = accent||activeTheme.ac;
   const previewAc2 = ac2color||activeTheme.ac2||previewAc;
@@ -2081,6 +2155,7 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
               <button className="btn-p" style={{flex:1,justifyContent:"center"}} onClick={()=>onBgChange(bgInput)}>Apply Background</button>
               {bgImage&&<button className="btn-gh" style={{padding:"10px 16px"}} onClick={()=>{onBgChange("");setBgInput("");}}>Remove</button>}
             </div>
+            {bgImage&&<BgThemePicker bgImage={bgImage} onUse={applyBgColors}/>}
           </div>
         )}
         {tab==="saved"&&(
@@ -2976,8 +3051,11 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
             <SetRange value={s.zoom} min={0.8} max={1.3} step={0.05} onChange={v=>set({zoom:v})} format={pct}/></div>
           <div className="sr"><div><div className="sr-l">Card Size</div><div className="sr-s">Size of game cards in the library and shelves</div></div>
             <Seg value={s.cardSize} options={[["sm","Small"],["md","Medium"],["lg","Large"]]} onChange={v=>set({cardSize:v})}/></div>
-          <div className="sr"><div><div className="sr-l">Window Mode</div><div className="sr-s">How AURA opens. Press F11 to toggle fullscreen anytime</div></div>
-            <Seg value={s.windowMode} options={[["maximized","Maximized"],["fullscreen","Fullscreen"],["windowed","Windowed"]]} onChange={v=>set({windowMode:v})}/></div>
+          {/* Full screen as a switch, and F11 to switch anytime (Added by aura-look-setup.cjs) */}
+          <div className="sr"><div><div className="sr-l">Full Screen <kbd style={{background:"var(--hover)",border:"1px solid var(--border)",borderRadius:4,padding:"1px 6px",fontFamily:"monospace",fontSize:10,marginLeft:6,color:"var(--t2)"}}>F11</kbd></div><div className="sr-s">AURA fills your whole screen. Press F11 anytime to switch between full screen and maximized</div></div>
+            <div className={`tog ${s.windowMode==="fullscreen"?"on":""}`} role="switch" aria-checked={s.windowMode==="fullscreen"} aria-label="Full screen" tabIndex={0} onClick={()=>set({windowMode:s.windowMode==="fullscreen"?"maximized":"fullscreen"})} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();(()=>set({windowMode:s.windowMode==="fullscreen"?"maximized":"fullscreen"}))();}}}/></div>
+          {s.windowMode!=="fullscreen"&&<div className="sr"><div><div className="sr-l">Open in a Window</div><div className="sr-s">Off: AURA opens maximized. On: it opens in a smaller window you can move</div></div>
+            <div className={`tog ${s.windowMode==="windowed"?"on":""}`} role="switch" aria-checked={s.windowMode==="windowed"} aria-label="Open in a window" tabIndex={0} onClick={()=>set({windowMode:s.windowMode==="windowed"?"maximized":"windowed"})} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();(()=>set({windowMode:s.windowMode==="windowed"?"maximized":"windowed"}))();}}}/></div>}
           <div className="sr"><div><div className="sr-l">Reduce Animations</div><div className="sr-s">Turn off motion, hover lifts and transitions</div></div><Tog k="reduceMotion"/></div>
           <div className="sr"><div><div className="sr-l">Disable Blur Effects</div><div className="sr-s">Faster on older PCs and integrated graphics</div></div><Tog k="noBlur"/></div>
           <div className="sr"><div><div className="sr-l">Home Banner</div><div className="sr-s">The game slideshow at the top of Home. Turn it off to see your whole background</div></div><Tog k="homeBanner"/></div>
@@ -3532,6 +3610,13 @@ function AuraApp(){
   // Favorites and playtime follow the signed-in account (see cloudsync.js)
   useCloudGames(games,setGames,toast);
   useCloudProfile({unlockedAch,setUnlockedAch,stats,setStats,theme,setTheme,accent,setAccent,customColors,setCustomColors,savedThemes,setSavedThemes,bgImage,setBgImage,settings,updateSettings,games,toast});
+  // F11 switched full screen: the Full Screen switch in Settings follows (Added by aura-look-setup.cjs)
+  useEffect(() => {
+    const off = window.electronAPI?.onWindowModeChanged?.((mode) => {
+      if (["maximized", "fullscreen", "windowed"].includes(mode) && SETTINGS.windowMode !== mode) updateSettings({ windowMode: mode });
+    });
+    return () => { if (typeof off === "function") off(); };
+  }, []);
   // Achievements count everything: imported games (Steam, Epic, Xbox), a library from your account,
   // and games played from outside AURA. Checked a moment after anything changes, and at start,
   // so what you'd already done unlocks too. (Added by aura-achievements-fix-setup.cjs)

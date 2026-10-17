@@ -87,6 +87,7 @@ if (fs.existsSync(path.join(__dirname, "login.cjs"))) add("window", "Staying log
 if (fs.existsSync(path.join(__dirname, "twitch-favorites.cjs"))) add("window", "Twitch favorites and live notices", "twitch-favorites.cjs");
 if (fs.existsSync(path.join(__dirname, "achievements.cjs"))) add("window", "Achievements count everything", "achievements.cjs");
 if (fs.existsSync(path.join(__dirname, "screen-share.cjs"))) add("window", "Screen share in voice calls", "screen-share.cjs");
+if (fs.existsSync(path.join(__dirname, "look.cjs"))) add("window", "Full Screen switch and a theme from your background", "look.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;
