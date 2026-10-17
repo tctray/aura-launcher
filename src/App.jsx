@@ -3409,8 +3409,9 @@ function AuraApp(){
   const gamesRef=useRef(games);
   useEffect(()=>{gamesRef.current=games;},[games]);
   // Sessions also count library games started outside AURA (see electron/gamewatch.js)
-  const watchList=useMemo(()=>games.map(g=>g.exePath).filter(Boolean).join("\n"),[games]);
-  useEffect(()=>{ window.electronAPI?.watchGames?.(watchList?watchList.split("\n"):[]); },[watchList]);
+  // (with each game's name, for the AURA Bar and Discord)
+  const watchList=useMemo(()=>JSON.stringify(games.filter(g=>g.exePath).map(g=>({exePath:g.exePath,title:g.title||""}))),[games]);
+  useEffect(()=>{ try { window.electronAPI?.watchGames?.(JSON.parse(watchList)); } catch {} },[watchList]);
   const [profile,setProfile]=useState(()=>loadProfile());
   const [theme,setTheme]=useState(()=>loadTheme());
   const [accent,setAccent]=useState(()=>loadAccent());

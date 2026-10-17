@@ -36,6 +36,8 @@
  *   - Tools that come with games and can run in the background (Call of Duty's broker service,
  *     Marvel Rivals' uploader and capture tools, installers, trial copies) are never taken for the
  *     game, and the real Marvel Rivals program is found two folders down.
+ *   - The AURA Bar and your Discord status show the game's name ("Arc Raiders") instead of its
+ *     program's ("gamelaunchhelper"), also for games started outside AURA.
  *   - Already ran an earlier version of this script? Run this one too: it updates that copy.
  *   - Settings > Library: "Count Games Started Outside AURA" (on). Turn it off to count only
  *     games started with Play.
@@ -370,6 +372,59 @@ function editMainV3(text) {
 }
 
 
+// ── Version 5: the game's name, not its program's (gamelaunchhelper) ─────────
+function editMainV5(text) {
+  if (text.includes("function titleOf(")) return { text, notes: [] };
+  let t = text;
+  const swap = (a, b, what) => { const i = t.indexOf(a); if (i < 0 || t.indexOf(a, i + 1) >= 0) throw new Error(what); t = t.slice(0, i) + b + t.slice(i + a.length); };
+  swap('const watchListFile = () => path.join(app.getPath("userData"), "watched-games.json");\n',
+    'const watchListFile = () => path.join(app.getPath("userData"), "watched-games.json");\n' +
+    '// Each library game\'s name, so the AURA Bar and Discord say "Arc Raiders", not "gamelaunchhelper"\n' +
+    'const gameTitlesFile = () => path.join(app.getPath("userData"), "watched-titles.json");\n' +
+    'let gameTitles = {};\n' +
+    'try { gameTitles = JSON.parse(fs.readFileSync(gameTitlesFile(), "utf8")) || {}; } catch {}\n' +
+    'const titleKey = (p) => String(p || "").replace(/\\//g, "\\\\").toLowerCase();\n' +
+    'function titleOf(exePath) {\n' +
+    '  const t = gameTitles[titleKey(exePath)];\n' +
+    '  return typeof t === "string" && t.trim() ? t.trim().slice(0, 80) : path.basename(String(exePath || ""), ".exe");\n' +
+    '}\n',
+    'where the watch list is kept ( const watchListFile = ... )');
+  swap('ipcMain.handle("games:watch", (_e, list) => {\n  const paths = (Array.isArray(list) ? list : []).filter((p) => typeof p === "string" && p.length <= 1024 && /\\.exe$/i.test(p)).slice(0, 2000);\n',
+    'ipcMain.handle("games:watch", (_e, list) => {\n' +
+    '  // Each one: the program\'s path, or { exePath, title }\n' +
+    '  const items = (Array.isArray(list) ? list : []).slice(0, 2000);\n' +
+    '  const titles = {};\n' +
+    '  for (const it of items) if (it && typeof it === "object" && typeof it.exePath === "string" && /\\.exe$/i.test(it.exePath) && typeof it.title === "string" && it.title.trim()) titles[titleKey(it.exePath)] = it.title.trim().slice(0, 80);\n' +
+    '  gameTitles = titles;\n' +
+    '  try { fs.writeFileSync(gameTitlesFile(), JSON.stringify(titles)); } catch {}\n' +
+    '  const paths = items.map((it) => (it && typeof it === "object" ? it.exePath : it)).filter((p) => typeof p === "string" && p.length <= 1024 && /\\.exe$/i.test(p));\n',
+    'the watch list from the window ( ipcMain.handle("games:watch", ... ) )');
+  swap('    currentGameName = path.basename(exePath, ".exe");\n',
+    '    currentGameName = titleOf(exePath);\n' +
+    '    if (!launched) rpc.setActivity({ details: `Playing ${titleOf(exePath)}`, state: "AURA Game Launcher", largeImageKey: "aura_logo", startTimestamp: new Date(start || Date.now()) }).catch(() => {});\n',
+    'the session start ( currentGameName = path.basename(exePath, ".exe"); )');
+  swap('    if (currentGameName === path.basename(exePath, ".exe")) currentGameName = null;\n',
+    '    if (currentGameName === titleOf(exePath) || currentGameName === path.basename(exePath, ".exe")) currentGameName = null;\n',
+    'the session end ( if (currentGameName === path.basename(exePath, ".exe")) currentGameName = null; )');
+  swap('    if (launched) rpc.setActivity({ details: "Browsing Game Library",',
+    '    rpc.setActivity({ details: "Browsing Game Library",',
+    'the Discord status after a game ( if (launched) rpc.setActivity({ details: "Browsing Game Library", ... )');
+  swap('      details: `Playing ${path.basename(exePath, ".exe")}`,\n',
+    '      details: `Playing ${titleOf(exePath)}`,\n',
+    'the Discord status when a game starts ( details: `Playing ${path.basename(exePath, ".exe")}`, )');
+  return { text: t, notes: ["the AURA Bar and Discord show the game's name (Arc Raiders), not its program's (gamelaunchhelper)"] };
+}
+function editAppV5(text) {
+  if (text.includes("exePath:g.exePath,title:g.title")) return { text, notes: [] };
+  const a = '  const watchList=useMemo(()=>games.map(g=>g.exePath).filter(Boolean).join("\\n"),[games]);\n  useEffect(()=>{ window.electronAPI?.watchGames?.(watchList?watchList.split("\\n"):[]); },[watchList]);\n';
+  const i = text.indexOf(a);
+  if (i < 0) throw new Error("the list of games sent for Sessions ( const watchList=useMemo(... ) )");
+  const b = '  // (with each game\'s name, for the AURA Bar and Discord)\n' +
+    '  const watchList=useMemo(()=>JSON.stringify(games.filter(g=>g.exePath).map(g=>({exePath:g.exePath,title:g.title||""}))),[games]);\n' +
+    '  useEffect(()=>{ try { window.electronAPI?.watchGames?.(JSON.parse(watchList)); } catch {} },[watchList]);\n';
+  return { text: text.slice(0, i) + b + text.slice(i + a.length), notes: ["sends each game's name with it"] };
+}
+
 // ── AURA's checks (only when they are installed) ─────────────────────────────
 function editRunner(text) {
   if (/sessions\.cjs/.test(text)) return { text, notes: [] };
@@ -453,10 +508,10 @@ function run() {
   // Both steps run every time; each skips what's already done (so this also updates a copy set up
   // by this script's first version)
   const both = (...steps) => (text) => { let t = text; const notes = []; for (const step of steps) { const r = step(t); t = r.text; notes.push(...r.notes); } return { text: t, notes }; };
-  consider("main file", files.main, both(editMain, editMainV2, editMainV3), true);
+  consider("main file", files.main, both(editMain, editMainV2, editMainV3, editMainV5), true);
   consider("perf.js", files.perf, editPerf, true);
   consider("preload", files.preload, both(editPreload, editPreloadV2), true);
-  consider("App file", files.app, both(editApp, editAppV2), false);
+  consider("App file", files.app, both(editApp, editAppV2, editAppV5), false);
   consider("sessions", files.store, editSessionStore, false);
   consider("privacy", files.privacy, editPrivacy, false);
   const runner = path.join(ROOT, "tests", "run.cjs");

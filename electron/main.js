@@ -823,25 +823,41 @@ const gameWatch = gameWatchKit.createGameWatch({
   aliasFile: path.join(app.getPath("userData"), "game-programs.json"),
   onStart: (exePath, programName, { launched, start }) => {
     perf.beginSession(exePath, programName);
-    currentGameName = path.basename(exePath, ".exe");
+    currentGameName = titleOf(exePath);
+    if (!launched) rpc.setActivity({ details: `Playing ${titleOf(exePath)}`, state: "AURA Game Launcher", largeImageKey: "aura_logo", startTimestamp: new Date(start || Date.now()) }).catch(() => {});
     pushBarState();
     console.log("Session started: " + path.basename(exePath) + (launched ? "" : " (started outside AURA)"));
     mainWin?.webContents.send("game-session-started", { exePath, startTime: start, launched }); // the Now Playing timer
   },
   onEnd: (exePath, { start, end, launched }) => {
     const perfSummary = perf.endSession(exePath);
-    if (currentGameName === path.basename(exePath, ".exe")) currentGameName = null;
+    if (currentGameName === titleOf(exePath) || currentGameName === path.basename(exePath, ".exe")) currentGameName = null;
     pushBarState();
     console.log("Session ended: " + path.basename(exePath) + " (" + Math.round((end - start) / 1000) + "s)");
     mainWin?.webContents.send("game-session-ended", { exePath, sessionMs: Math.max(0, end - start), startTime: start, endTime: end, perf: perfSummary, detected: !launched });
-    if (launched) rpc.setActivity({ details: "Browsing Game Library", state: "AURA Game Launcher", largeImageKey: "aura_logo", startTimestamp: new Date() }).catch(() => {});
+    rpc.setActivity({ details: "Browsing Game Library", state: "AURA Game Launcher", largeImageKey: "aura_logo", startTimestamp: new Date() }).catch(() => {});
   },
 });
 // The games to look for: your library (the window sends it), remembered for next time
 const watchListFile = () => path.join(app.getPath("userData"), "watched-games.json");
+// Each library game's name, so the AURA Bar and Discord say "Arc Raiders", not "gamelaunchhelper"
+const gameTitlesFile = () => path.join(app.getPath("userData"), "watched-titles.json");
+let gameTitles = {};
+try { gameTitles = JSON.parse(fs.readFileSync(gameTitlesFile(), "utf8")) || {}; } catch {}
+const titleKey = (p) => String(p || "").replace(/\//g, "\\").toLowerCase();
+function titleOf(exePath) {
+  const t = gameTitles[titleKey(exePath)];
+  return typeof t === "string" && t.trim() ? t.trim().slice(0, 80) : path.basename(String(exePath || ""), ".exe");
+}
 try { gameWatch.setLibrary(JSON.parse(fs.readFileSync(watchListFile(), "utf8"))); } catch {}
 ipcMain.handle("games:watch", (_e, list) => {
-  const paths = (Array.isArray(list) ? list : []).filter((p) => typeof p === "string" && p.length <= 1024 && /\.exe$/i.test(p)).slice(0, 2000);
+  // Each one: the program's path, or { exePath, title }
+  const items = (Array.isArray(list) ? list : []).slice(0, 2000);
+  const titles = {};
+  for (const it of items) if (it && typeof it === "object" && typeof it.exePath === "string" && /\.exe$/i.test(it.exePath) && typeof it.title === "string" && it.title.trim()) titles[titleKey(it.exePath)] = it.title.trim().slice(0, 80);
+  gameTitles = titles;
+  try { fs.writeFileSync(gameTitlesFile(), JSON.stringify(titles)); } catch {}
+  const paths = items.map((it) => (it && typeof it === "object" ? it.exePath : it)).filter((p) => typeof p === "string" && p.length <= 1024 && /\.exe$/i.test(p));
   gameWatch.setLibrary(paths);
   try { fs.writeFileSync(watchListFile(), JSON.stringify(paths)); } catch {}
   return { success: true, count: paths.length };
@@ -887,7 +903,7 @@ ipcMain.handle("launch-game", async (_e, exePath) => {
     gameWatch.launched(exePath);
 
     rpc.setActivity({
-      details: `Playing ${path.basename(exePath, ".exe")}`,
+      details: `Playing ${titleOf(exePath)}`,
       state:   "AURA Game Launcher",
       largeImageKey: "aura_logo",
       startTimestamp: new Date(),
