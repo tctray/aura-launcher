@@ -23,7 +23,9 @@ export function longestStreak(times) {
 
 // The numbers the achievements are checked against. Never lower than what AURA already counted.
 // Demo games (the ones AURA starts with) don't count as games you added or favorited.
-export function achievementStats(games, stats, sessions, demoGames) {
+// `extra`: what AURA can see right now: clips and screenshots on this PC, friends, linked accounts,
+// the size of a call you're in (Added by aura-new-achievements-setup.cjs)
+export function achievementStats(games, stats, sessions, demoGames, extra = {}) {
   const s = stats && typeof stats === "object" ? stats : {};
   const all = Array.isArray(games) ? games.filter((g) => g && typeof g === "object") : [];
   const demo = new Set((Array.isArray(demoGames) ? demoGames : []).map((d) => d.id + "|" + d.exePath));
@@ -47,5 +49,12 @@ export function achievementStats(games, stats, sessions, demoGames) {
     gamesPlayedCount: Math.max(num(s.gamesPlayedCount), played.size),
     totalPlaytimeHours: Math.max(num(s.totalPlaytimeHours), num(s.totalPlaytimeMs) / 3600000, sessionHours),
     streakDays: Math.max(num(s.streakDays), longestStreak(times)),
+    screenshotsTaken: Math.max(num(s.screenshotsTaken), num(extra && extra.screenshots)),
+    clipsSaved: Math.max(num(s.clipsSaved), num(extra && extra.clips)),
+    friendsCount: Math.max(num(s.friendsCount), num(extra && extra.friends)),
+    messagesSent: num(s.messagesSent),
+    accountsLinked: Math.max(num(s.accountsLinked), num(extra && extra.accounts)),
+    maxPartySize: Math.max(num(s.maxPartySize), num(extra && extra.partySize)),
+    firstSeenAt: typeof s.firstSeenAt === "string" && /^\d{4}-\d{2}-\d{2}/.test(s.firstSeenAt) ? s.firstSeenAt.slice(0, 10) : null,
   };
 }

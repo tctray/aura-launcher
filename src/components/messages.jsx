@@ -160,6 +160,7 @@ const actions = {
       const saved = await call("sendMessage", conversationId, content);
       setThread(conversationId, (t) => ({ items: mergeMessage(t.items.filter((m) => m.id !== tempId), saved) }));
       touchConversation(saved, false);
+      try { window.dispatchEvent(new Event("aura-message-sent")); } catch {} // for First Contact (Added by aura-new-achievements-setup.cjs)
       return true;
     } catch (e) {
       setThread(conversationId, (t) => ({ items: t.items.map((m) => (m.id === tempId ? { ...m, pending: false, failed: true, error: e.message } : m)) }));
@@ -185,6 +186,7 @@ const actions = {
       if (saved.media?.path) set((s) => ({ media: { ...s.media, [saved.media.path]: { url: attachment.url, at: Date.now(), life: Infinity } } }));
       setThread(conversationId, (t) => ({ items: mergeMessage(t.items.filter((m) => m.id !== tempId), saved) }));
       touchConversation(saved, false);
+      try { window.dispatchEvent(new Event("aura-message-sent")); } catch {} // for First Contact (Added by aura-new-achievements-setup.cjs)
       return true;
     } catch (e) {
       setThread(conversationId, (t) => ({ items: t.items.map((m) => (m.id === tempId ? { ...m, pending: false, failed: true, error: e.message } : m)) }));
@@ -472,6 +474,12 @@ function tidy(raw) {
   return String(raw ?? "").replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "").replace(/^\s+|\s+$/g, "").replace(/\n{4,}/g, "\n\n\n");
 }
 const MAX_LENGTH = 4000;
+
+// How many friends you have, for First Friend (Added by aura-new-achievements-setup.cjs)
+export function useFriendCount() {
+  const s = useSocial();
+  return (s.friends || []).filter((f) => f.state === "friend").length;
+}
 
 // ── Started once, from AuraApp ────────────────────────────────────────────────
 export function useAuraSocial({ view, goTo, toast }) {

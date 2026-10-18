@@ -49,6 +49,8 @@ const isSocialHost = (url) => {
 };
 // Every window and embedded page: where it may go, and what opens outside AURA
 app.on("web-contents-created", (_e, contents) => {
+  // The installed AURA has no developer tools: if anything opens them, they close (Added by aura-no-devtools-setup.cjs)
+  if (app.isPackaged) contents.on("devtools-opened", () => { try { contents.closeDevTools(); } catch {} });
   const type = contents.getType();
   const outside = (url) => { if (/^(https?|mailto):/i.test(String(url))) safeOpenExternal(url); };
   if (type === "webview") {
@@ -357,6 +359,7 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      devTools: !app.isPackaged, // developer tools only while developing (Added by aura-no-devtools-setup.cjs)
       webviewTag: true,
       webSecurity: true,
       enableBlinkFeatures: "GetDisplayMedia",
@@ -396,6 +399,15 @@ function createWindow() {
   // AURA's own pages may use the microphone and capture the screen; websites inside AURA
   // ask you first and never get the rest (see security.js)
   permissions.lock(mainWin.webContents.session);
+  // No menu bar (File, Edit, View...): it offered developer tools and reloading the page (Added by aura-no-devtools-setup.cjs)
+  mainWin.setMenu(null);
+  if (!app.isPackaged) {
+    // While developing: F12 or Ctrl+Shift+I opens the developer tools
+    mainWin.webContents.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown") return;
+      if (input.key === "F12" || (input.control && input.shift && String(input.key).toLowerCase() === "i")) { event.preventDefault(); mainWin.webContents.toggleDevTools(); }
+    });
+  }
 
   mainWin.webContents.on("enter-html-full-screen", () => {
     mainWin.setFullScreen(true);
@@ -632,6 +644,7 @@ function notifyBar(channel, data) {
 }
 
 app.whenReady().then(() => {
+  require("electron").Menu.setApplicationMenu(null); // no menu bar on any of AURA's windows (Added by aura-no-devtools-setup.cjs)
   // YouTube refuses to play embedded videos ("Error 153") unless the request says which site
   // or app is embedding them. The installed app is loaded from a file, which sends nothing,
   // so fill that in here. In dev (http://localhost) the browser already sends it.

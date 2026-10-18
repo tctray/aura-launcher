@@ -96,7 +96,8 @@ const DAY = 86400000;
     });
     await page.goto(base + "/index.html", { waitUntil: "load" });
     await page.waitForTimeout(5500);
-    const unlocked = () => page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem("aura_achievements") || "{}")).sort());
+    // (Early Adopter unlocks for anyone new before 2027, so it isn't counted here; Added by aura-new-achievements-setup.cjs)
+    const unlocked = () => page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem("aura_achievements") || "{}")).filter((k) => k !== "early_adopter").sort());
     const toastText = () => page.evaluate(() => [...document.querySelectorAll(".ach-toast")].map((t) => t.innerText.replace(/\s+/g, " ")));
     check("a fresh AURA with only the demo games unlocks nothing", (await unlocked()).length === 0, await unlocked());
     await page.locator('.gm-rail-item[title="Settings"], .sb-item[title="Settings"]').first().click({ timeout: 5000 });
@@ -121,7 +122,7 @@ const DAY = 86400000;
     check("catching up on several at once gives one notice, not a pile", (await toastText()).length === 1 && /3 achievements/.test((await toastText())[0] || ""), await toastText());
     await page.locator('.gm-rail-item[title="Achievements"], .sb-item[title="Achievements"]').first().click({ timeout: 5000 });
     await page.waitForTimeout(600);
-    check("the Achievements page shows 5 unlocked", /5 \/ \d+ unlocked/.test(await page.locator(".ach-progress").innerText()), await page.locator(".ach-progress").innerText());
+    check("the Achievements page shows 5 unlocked", /[56] \/ \d+ unlocked/.test(await page.locator(".ach-progress").innerText()), await page.locator(".ach-progress").innerText());
     check("nothing crashed along the way", (await page.locator(".aura-fallback").count()) === 0 && thrown.filter((m) => !/reading 'live'/.test(m)).length === 0, thrown);
   } finally {
     await browser.close();

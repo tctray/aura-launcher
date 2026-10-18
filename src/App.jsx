@@ -12,7 +12,8 @@ import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
 import { readPicture, themeFrom, pickAccent } from "./components/bgtheme"; // a theme from your background (Added by aura-look-setup.cjs)
 import { FavStar, FavEditor, cleanFavs, toggleFav, isFav, loginOf, migrateFavs, liveFor, useFavLive, useFavWatch, renameFavs, favLiveStream, refreshFavLive } from "./components/twitchfavs"; // Twitch favorites
-import MessagesPage, { AuraFriendsTab, MessagesIcon, useAuraSocial } from "./components/messages";
+import MessagesPage, { AuraFriendsTab, MessagesIcon, useAuraSocial, useFriendCount } from "./components/messages";
+import { useCall } from "./components/calls"; // a call in progress counts as a party (Added by aura-new-achievements-setup.cjs)
 import { PrivacyButton } from "./components/privacy";
 import { CallSoundSettings } from "./components/sounds";
 import { FeedbackButton } from "./components/feedback";
@@ -77,6 +78,8 @@ const saveAccent = (a) => { try { localStorage.setItem("aura_accent",a); } catch
 const loadCustomTheme = () => { try { const s=localStorage.getItem("aura_custom_theme"); return s?JSON.parse(s):null; } catch { return null; } };
 const saveCustomTheme = (t) => { try { localStorage.setItem("aura_custom_theme",JSON.stringify(t)); } catch {} };
 
+// Anyone whose first launch is before this date gets Early Adopter (Added by aura-new-achievements-setup.cjs)
+const EARLY_ADOPTER_CUTOFF = "2027-01-01";
 const ACHIEVEMENTS = [
   { id:"first_launch",    title:"First Launch",   description:"Launch your first game",        icon:"🎮", condition:(s)=>s.totalLaunches>=1 },
   { id:"five_games_added",title:"Collector I",    description:"Add 5 games to your library",   icon:"📚", condition:(s)=>s.gamesAdded>=5 },
@@ -90,11 +93,22 @@ const ACHIEVEMENTS = [
   { id:"seven_day_streak",title:"Unstoppable",    description:"Play 7 days in a row",          icon:"⚡", condition:(s)=>s.streakDays>=7 },
   { id:"five_games_played",title:"Explorer",      description:"Play 5 different games",        icon:"🧭", condition:(s)=>s.gamesPlayedCount>=5 },
   { id:"ten_games_played",title:"Adventurer",     description:"Play 10 different games",       icon:"🌍", condition:(s)=>s.gamesPlayedCount>=10 },
+  // New achievements (Added by aura-new-achievements-setup.cjs)
+  { id:"first_screenshot", title:"Picture Perfect", description:"Capture your first screenshot",            icon:"📸", condition:(s)=>(s.screenshotsTaken||0)>=1 },
+  { id:"first_clip",       title:"Clip It!",        description:"Save your first clip",                     icon:"🎬", condition:(s)=>(s.clipsSaved||0)>=1 },
+  { id:"ten_captures",     title:"Content Creator", description:"Create 10 screenshots or clips",           icon:"🎥", condition:(s)=>((s.screenshotsTaken||0)+(s.clipsSaved||0))>=10 },
+  { id:"first_friend",     title:"First Friend",    description:"Add your first friend",                    icon:"🤝", condition:(s)=>(s.friendsCount||0)>=1 },
+  { id:"first_message",    title:"First Contact",   description:"Send your first message",                  icon:"💬", condition:(s)=>(s.messagesSent||0)>=1 },
+  { id:"account_linked",   title:"Connected",       description:"Link Steam, Discord or Xbox",              icon:"🔗", condition:(s)=>(s.accountsLinked||0)>=1 },
+  // Calls are one-on-one for now: Squad Up waits for group calls, and Aura Legend doesn't wait for it
+  { id:"squad_up",         title:"Squad Up",        description:"Join or create a party with 3+ friends (coming with group calls)", icon:"👥", soon:true, condition:(s)=>(s.maxPartySize||0)>=4 },
+  { id:"early_adopter",    title:"Early Adopter",   description:"Join AURA during the launch window",       icon:"🚀", condition:(s)=>!!s.firstSeenAt && s.firstSeenAt < EARLY_ADOPTER_CUTOFF },
+  { id:"aura_legend",      title:"Aura Legend",     description:"Unlock every other achievement",           icon:"👑", condition:(s,u={})=>ACHIEVEMENTS.every(a=>a.id==="aura_legend"||a.soon||u[a.id]) },
 ];
 
 const loadAchievements = () => { try { const s=localStorage.getItem("aura_achievements"); return s?JSON.parse(s):{}; } catch { return {}; } };
 const saveAchievements = (a) => { try { localStorage.setItem("aura_achievements",JSON.stringify(a)); } catch {} };
-const loadStats = () => { try { const s=localStorage.getItem("aura_stats"); return s?JSON.parse(s):{totalLaunches:0,gamesAdded:0,totalPlaytimeHours:0,favoritesCount:0,streakDays:0,gamesPlayedCount:0,lastPlayedDate:null,playedGameIds:[]}; } catch { return {totalLaunches:0,gamesAdded:0,totalPlaytimeHours:0,favoritesCount:0,streakDays:0,gamesPlayedCount:0,lastPlayedDate:null,playedGameIds:[]}; } };
+const loadStats = () => { try { const s=localStorage.getItem("aura_stats"); return s?JSON.parse(s):{totalLaunches:0,gamesAdded:0,totalPlaytimeHours:0,favoritesCount:0,streakDays:0,gamesPlayedCount:0,lastPlayedDate:null,screenshotsTaken:0,clipsSaved:0,friendsCount:0,messagesSent:0,accountsLinked:0,maxPartySize:0,firstSeenAt:null,playedGameIds:[]}; } catch { return {totalLaunches:0,gamesAdded:0,totalPlaytimeHours:0,favoritesCount:0,streakDays:0,gamesPlayedCount:0,lastPlayedDate:null,screenshotsTaken:0,clipsSaved:0,friendsCount:0,messagesSent:0,accountsLinked:0,maxPartySize:0,firstSeenAt:null,playedGameIds:[]}; } };
 const saveStats = (s) => { try { localStorage.setItem("aura_stats",JSON.stringify(s)); } catch {} };
 
 // ── App settings (Settings page) ──────────────────────────────────────────────
@@ -3562,7 +3576,10 @@ function AuraApp(){
   useEffect(() => { unlockedRef.current = unlockedAch; }, [unlockedAch]);
   const checkAchievements = useCallback((newStats) => {
     const cur = unlockedRef.current || {};
-    const fresh = ACHIEVEMENTS.filter(a => !cur[a.id] && a.condition(newStats));
+    const fresh = ACHIEVEMENTS.filter(a => !cur[a.id] && a.condition(newStats, cur));
+    // Aura Legend: also counts the ones unlocking right now (Added by aura-new-achievements-setup.cjs)
+    const seen = { ...cur }; fresh.forEach(a => { seen[a.id] = 1; });
+    ACHIEVEMENTS.forEach(a => { if (!seen[a.id] && a.condition(newStats, seen)) { fresh.push(a); seen[a.id] = 1; } });
     if (!fresh.length) return;
     const now = Date.now();
     const add = {};
@@ -3622,15 +3639,56 @@ function AuraApp(){
   // and games played from outside AURA. Checked a moment after anything changes, and at start,
   // so what you'd already done unlocks too. (Added by aura-achievements-fix-setup.cjs)
   const [sessionsTick, setSessionsTick] = useState(0);
+  // New achievements: clips, screenshots, friends, messages, linked accounts, calls, first launch (Added by aura-new-achievements-setup.cjs)
+  const friendCount = useFriendCount();
+  const liveCall = useCall();
+  const callLive = !!liveCall && (liveCall.phase === "live" || liveCall.phase === "reconnecting");
+  const [captureCounts, setCaptureCounts] = useState({});
+  useEffect(() => {
+    let alive = true;
+    const look = async () => {
+      const api = window.electronAPI;
+      if (!api?.isElectron) return;
+      const out = {};
+      try { const r = await api.getClips?.(); if (r?.success && Array.isArray(r.clips)) out.clips = r.clips.length; } catch {}
+      try { const r = await api.getScreenshots?.(); if (r?.success && Array.isArray(r.screenshots)) out.screenshots = r.screenshots.length; } catch {}
+      let linked = 0;
+      try { const r = await api.discordGetUser?.(); if (r?.success) linked++; } catch {}
+      try { if (localStorage.getItem("aura_steam_id")) linked++; } catch {}
+      if (gamesRef.current.some((g) => /\\xboxgames\\|\\windowsapps\\/i.test(String(g?.exePath || "").replace(/\//g, "\\")))) linked++; // Xbox games in your library
+      out.accounts = linked;
+      if (alive) setCaptureCounts((c) => (JSON.stringify({ ...c, ...out }) === JSON.stringify(c) ? c : { ...c, ...out }));
+    };
+    look();
+    const timer = setInterval(look, 60000);
+    window.addEventListener("focus", look);
+    return () => { alive = false; clearInterval(timer); window.removeEventListener("focus", look); };
+  }, []);
+  // Messages you send (messages.jsx says so)
+  useEffect(() => {
+    const sent = () => setStats((prev) => { const s = { ...prev, messagesSent: (Number(prev.messagesSent) || 0) + 1 }; saveStats(s); return s; });
+    window.addEventListener("aura-message-sent", sent);
+    return () => window.removeEventListener("aura-message-sent", sent);
+  }, []);
+  // The day you first used AURA: today, or earlier if your sessions or library say so
+  useEffect(() => {
+    if (stats.firstSeenAt) return;
+    let first = Date.now();
+    for (const x of loadSessions()) if (Number.isFinite(x?.start) && x.start > 0 && x.start < first) first = x.start;
+    for (const g of gamesRef.current) if (Number.isFinite(g?.addedAt) && g.addedAt > 0 && g.addedAt < first) first = g.addedAt;
+    const d = new Date(first);
+    const day = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    setStats((prev) => { if (prev.firstSeenAt) return prev; const s = { ...prev, firstSeenAt: day }; saveStats(s); return s; });
+  }, [stats.firstSeenAt]);
   useEffect(() => {
     const on = () => setSessionsTick(n => n + 1);
     window.addEventListener("aura-sessions-updated", on);
     return () => window.removeEventListener("aura-sessions-updated", on);
   }, []);
   useEffect(() => {
-    const timer = setTimeout(() => checkAchievements(achievementStats(games, stats, loadSessions(), DEMO_GAMES)), 2500);
+    const timer = setTimeout(() => checkAchievements(achievementStats(games, stats, loadSessions(), DEMO_GAMES, { ...captureCounts, friends: friendCount, partySize: callLive ? 2 : 0 })), 2500);
     return () => clearTimeout(timer);
-  }, [games, stats, sessionsTick, checkAchievements]);
+  }, [games, stats, sessionsTick, checkAchievements, captureCounts, friendCount, callLive]);
   // Twitch favorites: a notice when one goes live (Added by aura-twitch-favorites-setup.cjs)
   // In front: a notice inside AURA. Hidden or behind other windows: a Windows notification.
   useFavWatch({ favs: settings.twitchFavs, alerts: settings.twitchLiveAlerts !== false, onLive: (s) => {

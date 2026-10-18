@@ -73,6 +73,7 @@ if (fs.existsSync(securityFile) && fs.existsSync(path.join(__dirname, "security.
 if (fs.existsSync(path.join(__dirname, "browser-tabs.cjs"))) add("files", "Browser tabs", "browser-tabs.cjs");
 if (fs.existsSync(path.join(__dirname, "ringtones.cjs"))) add("files", "Ringtones and message sounds", "ringtones.cjs");
 if (fs.existsSync(path.join(__dirname, "sessions.cjs"))) add("files", "Sessions: every library game, however it was started", "sessions.cjs", [path.join(ROOT, "electron", "gamewatch.js")]);
+if (fs.existsSync(path.join(__dirname, "no-devtools.cjs"))) add("files", "No menu bar or developer tools in the installed AURA", "no-devtools.cjs");
 add("window", "The window opens and every page loads", "window.cjs");
 if (fs.existsSync(path.join(__dirname, "friends-playing.cjs"))) add("window", "Home: Friends Playing Now", "friends-playing.cjs");
 if (fs.existsSync(path.join(__dirname, "tray-settings.cjs"))) add("window", "Settings: running in the background", "tray-settings.cjs");
@@ -88,6 +89,7 @@ if (fs.existsSync(path.join(__dirname, "twitch-favorites.cjs"))) add("window", "
 if (fs.existsSync(path.join(__dirname, "achievements.cjs"))) add("window", "Achievements count everything", "achievements.cjs");
 if (fs.existsSync(path.join(__dirname, "screen-share.cjs"))) add("window", "Screen share in voice calls", "screen-share.cjs");
 if (fs.existsSync(path.join(__dirname, "look.cjs"))) add("window", "Full Screen switch and a theme from your background", "look.cjs");
+if (fs.existsSync(path.join(__dirname, "new-achievements.cjs"))) add("window", "New achievements", "new-achievements.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;
