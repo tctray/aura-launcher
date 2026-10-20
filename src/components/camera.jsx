@@ -191,6 +191,12 @@ const CSS = `
 .cam-btn.close:hover{background:rgba(255,77,109,.14);color:var(--danger,#ff4d6d);}
 .cam-view{position:relative;flex:1;min-height:0;background:#000;}
 .cam-view video{width:100%;height:100%;object-fit:cover;display:block;}
+.cam-view:fullscreen{background:#000;}
+.cam-view:fullscreen video{object-fit:contain;}
+.cam-view:fullscreen .cam-size{display:none;}
+.cam-exit{display:none;}
+.cam-view:fullscreen .cam-exit{display:block;position:absolute;top:18px;right:18px;padding:9px 16px;border:1px solid rgba(255,255,255,.25);border-radius:999px;background:rgba(0,0,0,.6);color:#fff;font:600 13px 'DM Sans',sans-serif;cursor:pointer;}
+.cam-view:fullscreen .cam-exit:hover{background:rgba(0,0,0,.85);}
 .cam-off{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:14px;text-align:center;font-size:11px;line-height:1.45;color:var(--t2,#aaa);}
 .cam-off .err{color:#ff8a8a;}
 .cam-go{background:var(--ac,#FF5722);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:11px;font-weight:700;font-family:'DM Sans',sans-serif;cursor:pointer;}
@@ -328,6 +334,9 @@ export function CameraPanel({ settings = {}, onSettings = () => {} }) {
   useCss();
   const c = useCamera();
   const video = useRef(null);
+  const view = useRef(null); // (full screen: Added by aura-call-screen-setup.cjs)
+  const fullOff = () => { if (document.fullscreenElement && document.fullscreenElement === view.current) document.exitFullscreen().catch(() => {}); };
+  useEffect(() => { const esc = (e) => { if (e.key === "Escape") fullOff(); }; window.addEventListener("keydown", esc); return () => { window.removeEventListener("keydown", esc); fullOff(); }; }, []);
   const [, redraw] = useState(0);
   const [live, setLive] = useState(null); // while dragging or resizing: { x, y, w }
   const width = Math.min(Math.max(Number(settings.camWidth) || 320, 200), 720);
@@ -412,10 +421,11 @@ export function CameraPanel({ settings = {}, onSettings = () => {} }) {
         {c.devices.length > 1 && <button className="cam-btn" title="Switch camera" aria-label="Switch camera" onClick={nextCamera} disabled={!c.on}>⇄</button>}
         <button className={`cam-btn ${settings.camMirror !== false ? "is-on" : ""}`} title="Mirror the preview" aria-label="Mirror the preview" aria-pressed={settings.camMirror !== false} onClick={() => save({ camMirror: settings.camMirror === false })}>⇋</button>
         <button className={`cam-btn ${c.on ? "is-on" : ""}`} title={c.on ? "Turn the camera off" : "Turn the camera on"} aria-label={c.on ? "Turn the camera off" : "Turn the camera on"} aria-pressed={c.on} onClick={power}>⏻</button>
+        <button className="cam-btn" title="Full screen (Esc to go back)" aria-label="Show the camera full screen" onClick={() => { try { view.current?.requestFullscreen?.({ navigationUI: "hide" })?.catch?.(() => {}); } catch {} }}>⛶</button>
         <button className="cam-btn" title="Minimize" aria-label="Minimize the camera" onClick={() => setMinimized(true)}>–</button>
         <button className="cam-btn close" title="Close the camera" aria-label="Close the camera" onClick={closeCamera}>✕</button>
       </div>
-      <div className="cam-view">
+      <div className="cam-view" ref={view} onDoubleClick={() => { if (document.fullscreenElement === view.current) document.exitFullscreen().catch(() => {}); else try { view.current?.requestFullscreen?.()?.catch?.(() => {}); } catch {} }}>
         <video ref={video} autoPlay muted playsInline style={{ transform: settings.camMirror !== false ? "scaleX(-1)" : "none", visibility: c.on ? "visible" : "hidden" }} />
         {!c.on && (
           <div className="cam-off">
@@ -424,6 +434,7 @@ export function CameraPanel({ settings = {}, onSettings = () => {} }) {
           </div>
         )}
         {c.on && <BgPicker settings={settings} onSettings={save} />}
+        <button className="cam-exit" onClick={fullOff} aria-label="Exit full screen">Exit full screen (Esc)</button>
         <div className="cam-size" onPointerDown={resize} title="Drag to resize" aria-hidden="true" />
       </div>
     </div>

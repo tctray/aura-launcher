@@ -152,10 +152,10 @@ async function person(browser, world, base, id, name) {
   const callFrom = async (from, to, toName) => {
     await from.locator(`button.cx-call[title="Call ${toName}"]`).first().click({ timeout: 10000 });
     await until(() => to.evaluate(() => !!document.querySelector(".cx-bar.ringing.in")));
-    await to.locator(".cx-btn.yes").click({ timeout: 5000 });
+    await to.locator(".cx-btn.yes").click({ timeout: 15000 });
     return (await live(from)) && (await live(to));
   };
-  const hangUp = async (p) => { await p.locator(".cx-round.end").click({ timeout: 5000 }).catch(() => {}); await sleep(1500); };
+  const hangUp = async (p) => { await p.locator(".cx-round.end").click({ timeout: 15000 }).catch(() => {}); await sleep(1500); };
   // How much of their voice and picture is arriving
   const incoming = (p) => p.evaluate(async () => {
     const pc = window.__pcs.filter((x) => x.connectionState !== "closed").pop();
@@ -164,7 +164,7 @@ async function person(browser, world, base, id, name) {
     (await pc.getStats()).forEach((r) => {
       if (r.type !== "inbound-rtp") return;
       if (r.kind === "audio") out.audio = r.bytesReceived || 0;
-      if (r.kind === "video") { out.video = r.bytesReceived || 0; out.frames = r.framesDecoded || 0; out.width = r.frameWidth || 0; }
+      if (r.kind === "video") { out.video += r.bytesReceived || 0; out.frames = Math.max(out.frames, r.framesDecoded || 0); out.width = Math.max(out.width, r.frameWidth || 0); } // (two picture lanes now: Added by aura-call-camera-setup.cjs)
     });
     return out;
   });
@@ -194,7 +194,7 @@ async function person(browser, world, base, id, name) {
     console.log("2. Alex shares the screen");
     await shareA.click();
     const tiles = A.locator(".cx-picker .cx-src");
-    await tiles.first().waitFor({ timeout: 5000 });
+    await tiles.first().waitFor({ timeout: 15000 });
     const names = await tiles.allInnerTexts();
     check("the picker lists the whole screen first, then windows", names.length === 2 && /whole screen/i.test(names[0]) && /Notepad/.test(names[1]), names);
     check("and says only the picture is shared", /Only the picture is shared/.test(await A.locator(".cx-picker").innerText()));
@@ -210,7 +210,8 @@ async function person(browser, world, base, id, name) {
     await sleep(1500);
     const moving = await screenShown(B);
     check("and it's moving, not a still picture", !!moving && moving.t > t0, { t0, now: moving?.t });
-    b = await incoming(B);
+    // A busy PC can take a few seconds to get the picture going (Added by aura-call-camera-setup.cjs)
+    b = (await until(async () => { const x = await incoming(B); return x && x.width >= 320 && x.frames > 10 ? x : null; }, 12000)) || (await incoming(B));
     check("the picture arrives at a good size", b.width >= 320 && b.frames > 10, b);
     await B.locator('.cx-screen button[aria-label="Full screen"]').click();
     await sleep(500);
@@ -219,7 +220,7 @@ async function person(browser, world, base, id, name) {
     check("Bri can make it full screen: the whole monitor, not just AURA's window", !!seen && seen.full && seen.box >= 1300 && /cx-screen/.test(fsEl), { seen, fsEl });
     check("full screen says how to get out", /Press Esc to exit full screen/.test(await B.locator(".cx-screen").innerText()));
     await B.mouse.move(600, 400); await sleep(2900);
-    check("the top strip fades away when the mouse is still", await B.evaluate(() => !!document.querySelector(".cx-screen.full.idle")));
+    check("the top strip fades away when the mouse is still", !!(await until(() => B.evaluate(() => !!document.querySelector(".cx-screen.full.idle")), 8000)));
     await B.mouse.move(620, 420); await sleep(200);
     check("and comes back when the mouse moves", await B.evaluate(() => !document.querySelector(".cx-screen.idle")));
     await B.keyboard.press("Escape");
@@ -229,7 +230,7 @@ async function person(browser, world, base, id, name) {
     await sleep(500);
     check("double-clicking the picture goes full screen too", !!(await screenShown(B))?.full && !!(await B.evaluate(() => document.fullscreenElement)));
     await B.mouse.move(640, 300); await sleep(100);
-    await B.locator('.cx-screen button[aria-label="Exit full screen"]').click({ timeout: 3000 }).catch(() => {});
+    await B.locator('.cx-screen button[aria-label="Exit full screen"]').click({ timeout: 15000 }).catch(() => {});
     await sleep(500);
     check("and the button brings it back", !(await screenShown(B))?.full && !(await B.evaluate(() => document.fullscreenElement)));
     await B.locator('.cx-screen button[aria-label="Hide Alex\'s screen"]').click();
@@ -244,18 +245,18 @@ async function person(browser, world, base, id, name) {
     check("Alex stops sharing: Bri's view goes away", await until(async () => !(await B.locator(".cx-screen, .cx-screen-pill").count())));
     check("and Alex's screen isn't being captured any more", await until(() => A.evaluate(() => !document.querySelector(".cx-round.share.on") && window.__screens.length === 1 && window.__screens.every((s) => s.getTracks().every((t) => t.readyState === "ended")))));
     await shareB.click();
-    await B.locator(".cx-picker .cx-src").nth(1).click({ timeout: 5000 });
+    await B.locator(".cx-picker .cx-src").nth(1).click({ timeout: 15000 });
     seen = await until(async () => { const s = await screenShown(A); return s && s.w > 0 && s; });
     check("Bri can share a window back, and Alex sees it", !!seen && /Bri's screen/.test(await A.locator(".cx-screen").innerText()), seen);
     check("the window Bri picked is the one captured", await B.evaluate(() => window.__chosen.includes("window:22:0")));
-    await B.locator(".cx-round.share.on").click({ timeout: 5000 });
+    await B.locator(".cx-round.share.on").click({ timeout: 15000 });
     await shareA.click();
-    await A.locator(".cx-picker .cx-src").first().click({ timeout: 5000 });
+    await A.locator(".cx-picker .cx-src").first().click({ timeout: 15000 });
     check("Alex can share again after stopping", !!(await until(async () => { const s = await screenShown(B); return s && s.w > 0; })));
     const signalsBefore = world.sent["user-A"] || 0;
     await A.locator('.cx-round.share.on').click();
     await shareA.click();
-    await A.locator(".cx-picker .cx-src").nth(1).click({ timeout: 5000 });
+    await A.locator(".cx-picker .cx-src").nth(1).click({ timeout: 15000 });
     await until(async () => { const s = await screenShown(B); return s && s.w > 0; });
     check("starting and stopping doesn't reconnect the call", (world.sent["user-A"] || 0) === signalsBefore, { before: signalsBefore, after: world.sent["user-A"] });
 

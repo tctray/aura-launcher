@@ -17,6 +17,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { ringtone, soundPrefs } from "./sounds"; // your ringtone (Settings > Calls and messages)
+import { cameraEffects } from "./camfx"; // your camera background in calls (Added by aura-camera-backgrounds-setup.cjs)
 
 const RING_OUT_MS = 30000;    // a call you make rings this long before "didn't answer"
 const RING_IN_MS = 50000;     // a call ringing for you is given up on after this, if nothing ends it first
@@ -32,6 +33,9 @@ const FALLBACK_SERVERS = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun.cl
 // picture gets softer or slower by itself rather than stopping.
 const SCREEN_MAX_BITRATE = 4000000;
 const SCREEN_VIDEO = { frameRate: { ideal: 30, max: 30 }, width: { max: 1920 }, height: { max: 1080 } };
+// Your camera in a call (Added by aura-call-camera-setup.cjs): up to 1080p at 30 frames a second when the camera can
+const CAM_MAX_BITRATE = 2500000;
+const CAM_VIDEO = { width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 }, frameRate: { ideal: 30, max: 30 } };
 // Screen share quality, picked in the Share Screen box (Added by aura-quality-setup.cjs)
 //   Auto: 1080p, 30 fps. Smooth: 1080p at 60 fps, keeps it moving (games). Sharp: up to 1440p, keeps text crisp.
 // On a slow connection each eases down by itself instead of stopping.
@@ -82,7 +86,7 @@ const toast = (text, kind) => callHooks.toast?.(text, kind);
 
 let session = 0;   // goes up whenever a call starts or ends, so late answers to old questions are ignored
 let rtc = null;    // the working parts of the call in progress
-const newRtc = () => ({ pc: null, dc: null, mic: null, audio: null, screen: null, remoteVideo: null, config: null, queue: Promise.resolve(), seen: new Set(), polled: 0, early: [], pendingIce: [], outIce: [], restarts: 0, wasLive: false, accepting: false, saidBye: false, timers: {} });
+const newRtc = () => ({ pc: null, dc: null, mic: null, audio: null, screen: null, remoteVideo: null, cam: null, remoteCam: null, peerCam: false, config: null, queue: Promise.resolve(), seen: new Set(), polled: 0, early: [], pendingIce: [], outIce: [], restarts: 0, wasLive: false, accepting: false, saidBye: false, timers: {} });
 
 // ── Your microphone, speakers and volume ──────────────────────────────────────
 function loadPrefs() {
@@ -109,6 +113,14 @@ async function openMic(deviceId = prefs.mic) {
     }
     throw e;
   }
+}
+// What went wrong with the camera, in words (Added by aura-call-camera-setup.cjs)
+function camProblem(e) {
+  const name = e?.name || "";
+  if (name === "NotAllowedError" || name === "SecurityError") return "AURA isn't allowed to use your camera. In Windows, open Settings > Privacy & security > Camera and let desktop apps use it.";
+  if (name === "NotFoundError" || name === "OverconstrainedError") return "No camera found. Plug one in and try again.";
+  if (name === "NotReadableError" || name === "AbortError") return "Your camera is being used by another app. Close it and try again.";
+  return "AURA couldn't use your camera" + (e?.message ? " (" + e.message + ")." : ".");
 }
 function micProblem(e) {
   const name = e?.name || "";
@@ -247,6 +259,8 @@ function cleanup() {
   if (r.saidBye) setTimeout(close, 250); else close();
   stopStream(r.mic); // the microphone goes off straight away either way
   stopStream(r.screen); // and so does your screen, if you were sharing it
+  stopStream(r.cam); // and your camera (Added by aura-call-camera-setup.cjs)
+  stopStream(r.camRaw); // (the camera itself: Added by aura-camera-backgrounds-setup.cjs)
   if (r.audio) { try { r.audio.pause(); r.audio.srcObject = null; } catch {} }
   rest();
 }
@@ -346,15 +360,16 @@ function dropBoost() {
 function wireChannel(dc) {
   // Says whether you're muted, and that this AURA can share screens (an older AURA ignores that).
   // The PC that answers gets the channel already open, so it says so straight away.
-  const hello = () => { try { dc.send(JSON.stringify({ t: "mute", on: !!state.call?.muted })); dc.send('{"t":"hello","screen":1}'); } catch {} };
+  const hello = () => { try { dc.send(JSON.stringify({ t: "mute", on: !!state.call?.muted })); dc.send('{"t":"hello","screen":1,"cam":1}'); } catch {} };
   dc.onopen = hello;
   if (dc.readyState === "open") hello();
   dc.onmessage = (e) => {
     let m = null;
     try { m = JSON.parse(e.data); } catch { return; }
     if (m?.t === "mute") patch({ peerMuted: !!m.on });
-    else if (m?.t === "hello" && m.screen) addScreenLane();
+    else if (m?.t === "hello" && m.screen) { if (m.cam && rtc) rtc.peerCam = true; addScreenLane(); } // (camera: Added by aura-call-camera-setup.cjs)
     else if (m?.t === "screen") patch({ peerSharing: !!m.on });
+    else if (m?.t === "cam") patch({ peerCamOn: !!m.on });
     else if (m?.t === "bye" && state.call && state.call.phase !== "over") {
       // They hung up. No need to wait for Supabase to say so, and in case their hang-up never
       // reached it, say it from this side too (ending a call twice does no harm).
@@ -375,7 +390,12 @@ function buildPeer() {
   pc.onicecandidate = (e) => { if (mine === session && e.candidate) queueIce(e.candidate.toJSON()); };
   pc.ontrack = (e) => {
     if (mine !== session) return;
-    if (e.track.kind === "video") { if (rtc) { rtc.remoteVideo = new MediaStream([e.track]); patch({ screenRev: (state.call?.screenRev || 0) + 1 }); } return; } // their screen
+    if (e.track.kind === "video") {
+      if (!rtc) return;
+      // The second picture lane is their camera; the first is their screen (Added by aura-call-camera-setup.cjs)
+      if (videoLanes()[1] && e.transceiver === videoLanes()[1]) { rtc.remoteCam = new MediaStream([e.track]); patch({ camRev: (state.call?.camRev || 0) + 1 }); return; }
+      rtc.remoteVideo = new MediaStream([e.track]); patch({ screenRev: (state.call?.screenRev || 0) + 1 }); return; // their screen
+    }
     playRemote(e.streams[0] || new MediaStream([e.track]));
   };
   pc.ondatachannel = (e) => { if (mine === session && rtc) { rtc.dc = e.channel; wireChannel(e.channel); } };
@@ -466,11 +486,15 @@ async function handle(signal) {
 // Calls start with sound only, so they work with friends on an older AURA. Once both PCs say
 // they can share screens, the caller's PC adds a lane for a picture, in both directions. After
 // that, starting and stopping a share just puts a picture on the lane or takes it off.
-const videoLane = () => rtc?.pc?.getTransceivers().find((tr) => tr.receiver?.track?.kind === "video" && !tr.stopped && tr.currentDirection !== "stopped") || null;
+const videoLanes = () => rtc?.pc?.getTransceivers().filter((tr) => tr.receiver?.track?.kind === "video" && !tr.stopped && tr.currentDirection !== "stopped") || [];
+const videoLane = () => videoLanes()[0] || null;
+const camLane = () => videoLanes()[1] || null; // your camera and theirs (Added by aura-call-camera-setup.cjs)
 function screenReady() {
   const lane = videoLane();
   const ok = !!lane && lane.currentDirection === "sendrecv";
   if (ok && state.call && !state.call.canShare) patch({ canShare: true });
+  const cam = camLane();
+  if (cam && cam.currentDirection === "sendrecv" && state.call && !state.call.canCam) patch({ canCam: true });
 }
 async function addScreenLane() {
   const c = state.call, mine = session;
@@ -480,6 +504,7 @@ async function addScreenLane() {
   if (!rtc?.pc || rtc.pc.signalingState !== "stable" || videoLane()) return;
   try {
     rtc.pc.addTransceiver("video", { direction: "sendrecv" });
+    if (rtc.peerCam) rtc.pc.addTransceiver("video", { direction: "sendrecv" }); // a second lane for cameras, when both can (Added by aura-call-camera-setup.cjs)
     preferCodecs(rtc.pc); // (Added by aura-quality-setup.cjs)
     const made = await rtc.pc.createOffer();
     if (mine !== session) return;
@@ -709,6 +734,63 @@ export const callActions = {
     tell({ t: "screen", on: false });
   },
 
+  // Your camera, for the other person to see (Added by aura-call-camera-setup.cjs)
+  async startCamera() {
+    const c = state.call;
+    if (!c || !rtc || (c.phase !== "live" && c.phase !== "reconnecting") || c.camOn || c.camStarting) return;
+    const lane = camLane();
+    if (!lane || !c.canCam) return toast(`Camera needs both of you on the latest AURA. Ask ${c.peer.username} to update.`, "err");
+    const mine = session;
+    patch({ camStarting: true });
+    // The camera picked in Settings > Camera, if there is one
+    let picked = "";
+    try { picked = JSON.parse(localStorage.getItem("aura_settings") || "{}").camDevice || ""; } catch {}
+    const want = (id) => navigator.mediaDevices.getUserMedia({ audio: false, video: { ...CAM_VIDEO, ...(id ? { deviceId: { exact: id } } : {}) } });
+    let stream = null;
+    try {
+      try { stream = await want(picked); }
+      catch (e) { if (picked && (e?.name === "OverconstrainedError" || e?.name === "NotFoundError")) stream = await want(""); else throw e; }
+    } catch (e) {
+      if (mine === session) { patch({ camStarting: false }); toast(camProblem(e), "err"); }
+      return;
+    }
+    if (mine !== session || !rtc || !state.call?.camStarting) return stopStream(stream); // the call ended (or you pressed again) meanwhile
+    // What's sent has your background (Settings > Camera); the camera itself is kept to let go of later (Added by aura-camera-backgrounds-setup.cjs)
+    const raw = stream;
+    const fx = cameraEffects(raw);
+    if (fx) stream = fx.stream;
+    const track = stream.getVideoTracks()[0];
+    try { await lane.sender.replaceTrack(track); }
+    catch { stopStream(stream); stopStream(raw); patch({ camStarting: false }); return toast("Your camera couldn't be sent. Try again.", "err"); }
+    if (mine !== session || !rtc) { stopStream(raw); return stopStream(stream); }
+    rtc.cam = stream; rtc.camRaw = raw;
+    try {
+      const p = lane.sender.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      p.encodings[0].maxBitrate = CAM_MAX_BITRATE;
+      p.encodings[0].maxFramerate = 30;
+      p.degradationPreference = "balanced";
+      await lane.sender.setParameters(p);
+    } catch {}
+    // Unplugged mid-call: turn it off and say so
+    const camTrack = raw.getVideoTracks()[0];
+    if (camTrack) camTrack.onended = () => { if (rtc?.camRaw === raw) { callActions.stopCamera(); toast("Your camera was disconnected.", "err"); } };
+    patch({ camOn: true, camStarting: false, camRev: (state.call?.camRev || 0) + 1 });
+    tell({ t: "cam", on: true });
+  },
+  stopCamera() {
+    const lane = camLane();
+    if (lane) lane.sender.replaceTrack(null).catch(() => {});
+    if (rtc?.cam) { stopStream(rtc.cam); rtc.cam = null; }
+    if (rtc?.camRaw) { stopStream(rtc.camRaw); rtc.camRaw = null; } // the camera itself
+    if (state.call?.camOn || state.call?.camStarting) patch({ camOn: false, camStarting: false });
+    tell({ t: "cam", on: false });
+  },
+
+  // The call screen (Added by aura-call-screen-setup.cjs)
+  openStage() { const c = state.call; if (c && (c.phase === "live" || c.phase === "reconnecting")) patch({ stage: true }); },
+  closeStage() { if (state.call?.stage) patch({ stage: false }); },
+
   // Ends the call if it is with this person (used when you block them)
   endWith(userId) { if (state.call?.peer.userId === userId && state.call.phase !== "over") callActions.hangUp(); },
 
@@ -788,6 +870,8 @@ const IconHangUp = () => <Svg><path d={PHONE} transform="rotate(135 12 12)" /></
 const IconMic = () => <Svg><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" /></Svg>;
 const IconMicOff = () => <Svg><path d="M15 9.5V6a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 4.6 2.5M5.5 11.5a6.5 6.5 0 0 0 10.2 5.3M18.5 11.5c0 .9-.2 1.8-.5 2.6M12 18v3M4 4l16 16" /></Svg>;
 const IconGrip = () => <Svg size={14}><circle cx="9" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="6" r="1.3" fill="currentColor" stroke="none" /><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="9" cy="18" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="18" r="1.3" fill="currentColor" stroke="none" /></Svg>;
+const IconCam = () => <Svg><rect x="2" y="6" width="14" height="12" rx="2" /><path d="m16 10 6-3v10l-6-3z" /></Svg>; // (Added by aura-call-camera-setup.cjs)
+const IconExpandCam = () => <Svg size={14}><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></Svg>;
 const IconScreen = () => <Svg><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></Svg>;
 const IconExpand = () => <Svg size={15}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></Svg>;
 const IconShrink = () => <Svg size={15}><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></Svg>;
@@ -969,6 +1053,128 @@ function ScreenView() {
   );
 }
 
+// ── Cameras, in the call box (Added by aura-call-camera-setup.cjs) ──
+// Their camera, big, with yours small in its corner (mirrored, like a mirror). It hangs under the
+// call box and moves with it. The arrows make it bigger; the dash tucks it away.
+function CamVideo({ stream, rev, mirror, className }) {
+  const v = useRef(null);
+  useEffect(() => { const el = v.current; if (!el) return; if (el.srcObject !== stream) el.srcObject = stream || null; if (stream) el.play().catch(() => {}); }, [stream, rev]);
+  return <video ref={v} className={className} autoPlay playsInline muted style={mirror ? { transform: "scaleX(-1)" } : undefined} />;
+}
+function CallCams({ call }) {
+  const [big, setBig] = useState(false);
+  const [hidden, setHidden] = useState(false);
+  const theirs = call.peerCamOn ? rtc?.remoteCam || null : null;
+  const mine = call.camOn ? rtc?.cam || null : null;
+  if (!theirs && !mine) return null;
+  const name = call.peer.username;
+  if (hidden) return (
+    <button type="button" className="cx-cams-pill" onClick={() => setHidden(false)} aria-label="Show the cameras">{theirs ? `${name}'s camera` : "Your camera"} <b>Show</b></button>
+  );
+  return (
+    <div className={`cx-cams ${theirs ? "two" : "solo"} ${big ? "big" : ""}`} role="region" aria-label="Cameras">
+      {theirs
+        ? <><CamVideo className="cx-cam-theirs" stream={theirs} rev={call.camRev} /><span className="cx-cam-name">{name}</span>{mine && <CamVideo className="cx-cam-mine small" stream={mine} rev={call.camRev} mirror />}</>
+        : <><CamVideo className="cx-cam-mine" stream={mine} rev={call.camRev} mirror /><span className="cx-cam-name">You</span></>}
+      <div className="cx-cam-tools">
+        {theirs && <button type="button" onClick={() => setBig((b) => !b)} title={big ? "Smaller" : "Bigger"} aria-label={big ? "Make the camera smaller" : "Make the camera bigger"}><IconExpandCam /></button>}
+        <button type="button" onClick={() => setHidden(true)} title="Hide the cameras" aria-label="Hide the cameras">–</button>
+      </div>
+    </div>
+  );
+}
+
+// ── The call screen (Added by aura-call-screen-setup.cjs) ──
+// The whole monitor for a call: a big tile for each of you, showing the camera when it's on and
+// the profile picture when it isn't (with a green ring while that person talks). When they share
+// their screen it takes the middle, with both of you at the side. The call buttons are along the
+// bottom. Esc, or the button, goes back to the call box.
+function myself() {
+  try { const p = JSON.parse(localStorage.getItem("aura_profile") || "null") || {}; return { userId: p.userId || "me", username: p.username || "You", avatarUrl: p.avatarUrl || p.avatar || "" }; }
+  catch { return { userId: "me", username: "You", avatarUrl: "" }; }
+}
+function StageVideo({ stream, rev, mirror, contain }) {
+  const v = useRef(null);
+  useEffect(() => { const el = v.current; if (!el) return; if (el.srcObject !== stream) el.srcObject = stream || null; if (stream) el.play().catch(() => {}); }, [stream, rev]);
+  return <video ref={v} autoPlay playsInline muted style={{ transform: mirror ? "scaleX(-1)" : undefined, objectFit: contain ? "contain" : "cover" }} />;
+}
+function StageTile({ who, person, stream, rev, mirror, muted, sharing }) {
+  return (
+    <div className={`cx-tile ${who} ${stream ? "cam" : ""}`} role="group" aria-label={who === "me" ? "You" : person.username}>
+      {stream ? <StageVideo stream={stream} rev={rev} mirror={mirror} /> : <Face person={person} size={128} />}
+      <span className="cx-tile-name">
+        {muted && <span className="cx-tile-muted" title={who === "me" ? "You're muted" : `${person.username} is muted`}><IconMicOff /></span>}
+        {who === "me" ? "You" : person.username}{sharing && <span className="cx-tile-sharing"> · sharing</span>}
+      </span>
+    </div>
+  );
+}
+function CallStage() {
+  const call = useCall();
+  const box = useRef(null);
+  const [picker, setPicker] = useState(false);
+  const open = !!call && !!call.stage && (call.phase === "live" || call.phase === "reconnecting");
+  // Opening it fills the whole monitor (if Windows won't, it still fills AURA's window)
+  useEffect(() => {
+    if (!open) { setPicker(false); return; }
+    const el = box.current;
+    try { el?.requestFullscreen?.({ navigationUI: "hide" })?.catch?.(() => {}); } catch {}
+    let wasFull = false;
+    const changed = () => { if (document.fullscreenElement === el) wasFull = true; else if (wasFull) callActions.closeStage(); };
+    const esc = (e) => { if (e.key === "Escape") callActions.closeStage(); };
+    document.addEventListener("fullscreenchange", changed);
+    window.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("fullscreenchange", changed);
+      window.removeEventListener("keydown", esc);
+      if (document.fullscreenElement === el) document.exitFullscreen().catch(() => {});
+    };
+  }, [open]);
+  // The green rings follow your voices
+  useEffect(() => meter.watch((me, peer) => {
+    const el = box.current;
+    if (!el) return;
+    el.style.setProperty("--cx-me", me.toFixed(2));
+    el.style.setProperty("--cx-peer", peer.toFixed(2));
+  }), [open]);
+  if (!open) return null;
+  const name = call.peer.username;
+  const theirCam = call.peerCamOn ? rtc?.remoteCam || null : null;
+  const myCam = call.camOn ? rtc?.cam || null : null;
+  const screen = call.peerSharing ? rtc?.remoteVideo || null : null;
+  return (
+    <div ref={box} className={`cx-stage ${screen ? "with-screen" : ""}`} role="dialog" aria-label={`Call with ${name}`}>
+      <div className="cx-stage-top">
+        <span className="cx-stage-dot" />
+        <span className="cx-stage-name">{name}</span>
+        <span className="cx-stage-time">{call.phase === "reconnecting" ? "Reconnecting…" : <Clock since={call.since} />}</span>
+        <span className="cx-stage-hint">Press Esc to go back</span>
+      </div>
+      <div className="cx-stage-main">
+        {screen && <div className="cx-stage-screen" aria-label={`${name}'s screen`}><StageVideo stream={screen} rev={call.screenRev} contain /></div>}
+        <div className="cx-tiles">
+          <StageTile who="them" person={call.peer} stream={theirCam} rev={call.camRev} muted={call.peerMuted} sharing={!!screen} />
+          <StageTile who="me" person={myself()} stream={myCam} rev={call.camRev} mirror muted={call.muted} sharing={!!call.sharing} />
+        </div>
+      </div>
+      <div className="cx-stage-bar">
+        <button type="button" className={`cx-round mic ${call.muted ? "on" : ""}`} onClick={callActions.toggleMute} aria-pressed={call.muted} title={call.muted ? "Unmute your microphone" : "Mute your microphone"} aria-label={call.muted ? "Unmute your microphone" : "Mute your microphone"}>{call.muted ? <IconMicOff /> : <IconMic />}</button>
+        <button type="button" className={`cx-round cam ${call.camOn ? "on" : ""}`} disabled={!call.canCam || call.camStarting} aria-pressed={!!call.camOn}
+          onClick={() => (call.camOn ? callActions.stopCamera() : callActions.startCamera())}
+          title={!call.canCam ? "Camera needs both of you on the latest AURA" : call.camOn ? "Turn your camera off" : "Turn your camera on"}
+          aria-label={!call.canCam ? "Camera isn't available on this call" : call.camOn ? "Turn your camera off" : "Turn your camera on"}><IconCam /></button>
+        {call.sharing
+          ? <button type="button" className="cx-round share on" onClick={() => { setPicker(false); callActions.stopScreen(); }} title="Stop sharing your screen" aria-label="Stop sharing your screen"><IconScreen /></button>
+          : <button type="button" className={`cx-round share ${picker ? "open" : ""}`} data-cx-share disabled={!call.canShare} onClick={() => setPicker((v) => !v)} aria-expanded={picker}
+              title={call.canShare ? "Share your screen" : "Screen share needs both of you on the latest AURA"} aria-label={call.canShare ? "Share your screen" : "Screen share isn't available on this call"}><IconScreen /></button>}
+        <button type="button" className="cx-round end" onClick={callActions.hangUp} title="Hang up" aria-label="Hang up"><IconHangUp /></button>
+        <button type="button" className="cx-round leave" onClick={callActions.closeStage} title="Back to the call box (Esc)" aria-label="Leave the call screen"><IconShrink /></button>
+        {picker && !call.sharing && <ScreenPicker onClose={() => setPicker(false)} />}
+      </div>
+    </div>
+  );
+}
+
 // The call bar: sits at the top of the window for as long as a call is ringing or going on
 // Where the call bar sits. Left alone it is at the top in the middle; dragged, it stays where you
 // put it (remembered as a share of the window, so it lands in the same place if the window changes
@@ -1079,7 +1285,7 @@ function CallBar() {
       <Face person={ringingIn ? { ...call.peer, avatarUrl: "" } : call.peer} size={34} />
       <div className="cx-who">
         <div className="cx-name">{name}{active && call.peerMuted && <span className="cx-peer-muted" title={`${name} is muted`}><IconMicOff /><span className="cx-sr">{name} is muted</span></span>}</div>
-        <div className="cx-status" role="status" aria-live="polite">{status ?? <><Clock since={call.since} />{call.sharing ? <span className="cx-sharing"> · Sharing your screen</span> : call.muted && <span> · You're muted</span>}</>}</div>
+        <div className="cx-status" role="status" aria-live="polite">{status ?? <><Clock since={call.since} />{call.sharing ? <span className="cx-sharing"> · Sharing your screen</span> : call.camOn ? <span className="cx-sharing"> · Camera on</span> : call.muted && <span> · You're muted</span>}</>}</div>
       </div>
       {ringingIn && (
         <div className="cx-acts">
@@ -1097,10 +1303,17 @@ function CallBar() {
             ? <button type="button" className="cx-round share on" onClick={() => { setPicker(false); callActions.stopScreen(); }} title="Stop sharing your screen" aria-label="Stop sharing your screen"><IconScreen /></button>
             : <button type="button" className={`cx-round share ${picker ? "open" : ""}`} data-cx-share disabled={!call.canShare} onClick={() => { setDevices(false); setPicker((v) => !v); }} aria-expanded={picker}
                 title={call.canShare ? "Share your screen" : `Screen share needs both of you on the latest AURA`} aria-label={call.canShare ? "Share your screen" : "Screen share isn't available on this call"}><IconScreen /></button>}
+          {/* Your camera (Added by aura-call-camera-setup.cjs) */}
+          <button type="button" className={`cx-round cam ${call.camOn ? "on" : ""}`} disabled={!call.canCam || call.camStarting} aria-pressed={!!call.camOn}
+            onClick={() => (call.camOn ? callActions.stopCamera() : callActions.startCamera())}
+            title={!call.canCam ? "Camera needs both of you on the latest AURA" : call.camOn ? "Turn your camera off" : "Turn your camera on"}
+            aria-label={!call.canCam ? "Camera isn't available on this call" : call.camOn ? "Turn your camera off" : "Turn your camera on"}><IconCam /></button>
           <button type="button" className={`cx-round ${devices ? "on" : ""}`} data-cx-devices onClick={() => { setPicker(false); setDevices((v) => !v); }} aria-expanded={devices} title="Microphone, speakers and volume" aria-label="Microphone, speakers and volume"><IconSliders /></button>
+          <button type="button" className="cx-round stage" onClick={() => { setDevices(false); setPicker(false); callActions.openStage(); }} title="Open the call screen" aria-label="Open the call screen"><IconExpand /></button>{/* (Added by aura-call-screen-setup.cjs) */}
           <button type="button" className="cx-round end" onClick={callActions.hangUp} title="Hang up" aria-label="Hang up"><IconHangUp /></button>
         </div>
       )}
+      {active && <CallCams call={call} />}
       {devices && active && <Devices onClose={() => setDevices(false)} />}
       {picker && active && !call.sharing && <ScreenPicker onClose={() => setPicker(false)} />}
     </div>
@@ -1184,6 +1397,58 @@ const CSS = `
 :root:has(.stream-full-bar) .cx-btn,:root:has(.stream-full-bar) .cx-round{height:28px}
 :root:has(.stream-full-bar) .cx-round{width:28px}
 :root:has(.stream-full-bar) .cx-devices{top:42px}
+/* The call screen (Added by aura-call-screen-setup.cjs) */
+.cx-round.stage.on{background:rgba(255,255,255,.16)}
+.cx-stage{position:fixed;inset:0;z-index:9620;display:flex;flex-direction:column;background:radial-gradient(120% 90% at 50% 0%,color-mix(in srgb,var(--ac,#FF5722) 10%,#111116) 0%,#0b0b0e 70%);color:var(--t1,#fff);font-family:'DM Sans',sans-serif;--cx-me:0;--cx-peer:0}
+.cx-stage *{box-sizing:border-box}
+.cx-stage-top{display:flex;align-items:center;gap:10px;padding:16px 22px;flex-shrink:0}
+.cx-stage-dot{width:9px;height:9px;border-radius:50%;background:#3ddc84;box-shadow:0 0 8px #3ddc84}
+.cx-stage-name{font-family:'Rajdhani',sans-serif;font-size:20px;font-weight:700;letter-spacing:.4px}
+.cx-stage-time{font-size:13px;color:#3ddc84;font-variant-numeric:tabular-nums}
+.cx-stage-hint{margin-left:auto;font-size:12px;color:var(--t3,rgba(255,255,255,.45))}
+.cx-stage-main{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;gap:16px;padding:0 22px}
+.cx-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;width:100%;max-width:min(1600px,calc((100vh - 190px) * 32 / 9 + 16px))}
+.cx-stage.with-screen .cx-tiles{grid-template-columns:1fr;width:min(320px,26vw);flex-shrink:0;max-width:none}
+.cx-stage-screen{flex:1;min-width:0;height:100%;border-radius:16px;overflow:hidden;background:#000;border:1px solid rgba(255,255,255,.1)}
+.cx-stage-screen video{width:100%;height:100%;display:block;background:#000}
+.cx-tile{position:relative;aspect-ratio:16/9;border-radius:18px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#20202a,#131319);border:1px solid rgba(255,255,255,.08)}
+.cx-tile.them{box-shadow:0 0 0 calc(var(--cx-peer) * 4px) rgba(61,220,132,.85)}
+.cx-tile.me{box-shadow:0 0 0 calc(var(--cx-me) * 4px) rgba(61,220,132,.85)}
+.cx-tile video{position:absolute;inset:0;width:100%;height:100%;background:#000}
+.cx-tile .cx-face{box-shadow:0 0 0 calc(var(--cx-peer) * 10px) rgba(61,220,132,.8)}
+.cx-tile.me .cx-face{box-shadow:0 0 0 calc(var(--cx-me) * 10px) rgba(61,220,132,.8)}
+.cx-stage.with-screen .cx-tile .cx-face{width:72px!important;height:72px!important;font-size:30px!important}
+.cx-tile-name{position:absolute;left:12px;bottom:12px;display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:rgba(0,0,0,.6);font-size:13px;font-weight:600}
+.cx-tile-muted{display:inline-flex;color:#fca5a5}
+.cx-tile-muted svg{width:14px;height:14px}
+.cx-tile-sharing{color:#3ddc84;font-weight:500}
+.cx-stage-bar{position:relative;display:flex;align-items:center;justify-content:center;gap:12px;padding:18px;flex-shrink:0}
+.cx-stage-bar .cx-round{width:50px;height:50px}
+.cx-stage-bar .cx-round svg{width:21px;height:21px}
+.cx-stage-bar .cx-round.leave{margin-left:18px}
+.cx-stage .cx-picker{top:auto;right:auto;bottom:84px;left:50%;transform:translateX(-50%)}
+.cx-stage button:focus-visible{outline:2px solid var(--ac2,var(--ac,#ff8a65));outline-offset:2px}
+:root:has(.cx-stage) .cx-bar,:root:has(.cx-stage) .cx-screen,:root:has(.cx-stage) .cx-screen-pill{display:none}
+@media (max-width:760px){.cx-tiles{grid-template-columns:1fr}.cx-stage.with-screen .cx-stage-main{flex-direction:column}.cx-stage.with-screen .cx-tiles{width:100%;grid-template-columns:1fr 1fr}}
+/* Cameras in calls (Added by aura-call-camera-setup.cjs) */
+.cx-round.cam:disabled{opacity:.4;cursor:default}
+.cx-round.cam.on{background:#3ddc84;border-color:#3ddc84;color:#06240f}
+.cx-round.cam.on:hover{background:#dc2626;border-color:#dc2626;color:#fff}
+.cx-cams{position:absolute;top:56px;left:50%;transform:translateX(-50%);width:340px;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:#000;border:1px solid var(--borderb,rgba(255,255,255,.18));box-shadow:0 20px 50px rgba(0,0,0,.55);cursor:grab}
+.cx-cams.solo{width:200px}
+.cx-cams.big{width:min(640px,calc(100vw - 24px))}
+.cx-bar.low .cx-cams{top:auto;bottom:56px}
+.cx-cams video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+.cx-cams video.small{inset:auto 8px 8px auto;width:28%;height:auto;aspect-ratio:16/9;border-radius:8px;border:1px solid rgba(255,255,255,.3);box-shadow:0 6px 18px rgba(0,0,0,.5)}
+.cx-cam-name{position:absolute;left:8px;bottom:8px;padding:2px 8px;border-radius:999px;background:rgba(0,0,0,.55);font-size:11.5px;font-weight:600;color:#fff}
+.cx-cam-tools{position:absolute;top:6px;right:6px;display:flex;gap:4px;opacity:0;transition:opacity .15s}
+.cx-cams:hover .cx-cam-tools,.cx-cams:focus-within .cx-cam-tools{opacity:1}
+.cx-cam-tools button{width:26px;height:26px;border-radius:7px;border:none;background:rgba(0,0,0,.6);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;line-height:1}
+.cx-cam-tools button:hover{background:rgba(0,0,0,.85)}
+.cx-cams-pill{position:absolute;top:56px;left:50%;transform:translateX(-50%);white-space:nowrap;display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:999px;border:1px solid var(--borderb,rgba(255,255,255,.18));background:var(--panel,#1a1f26);color:var(--t1,#fff);font:500 12px 'DM Sans',sans-serif;cursor:pointer;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.cx-bar.low .cx-cams-pill{top:auto;bottom:56px}
+.cx-cams-pill b{color:#3ddc84;font-weight:600}
+.cx-cam-tools button:focus-visible,.cx-cams-pill:focus-visible{outline:2px solid var(--ac2,var(--ac,#ff8a65));outline-offset:2px;opacity:1}
 /* Screen share (Added by aura-screen-share-setup.cjs) */
 .cx-round.share:disabled{opacity:.4;cursor:default}
 .cx-round.share.open{background:rgba(255,255,255,.16)}
@@ -1248,7 +1513,7 @@ export function mountCallLayer() {
   host.id = "aura-call-layer";
   document.body.appendChild(host);
   const root = createRoot(host);
-  root.render(<><CallBar /><ScreenView /></>);
+  root.render(<><CallBar /><ScreenView /><CallStage /></>); // (call screen: Added by aura-call-screen-setup.cjs)
   const leaving = () => callActions.reset(); // AURA is closing or reloading: hang up
   window.addEventListener("beforeunload", leaving);
   return () => {

@@ -95,6 +95,8 @@ if (fs.existsSync(path.join(__dirname, "stream-bar.cjs"))) add("window", "Live S
 if (fs.existsSync(path.join(__dirname, "camera.cjs"))) add("window", "The camera: preview, settings, recordings", "camera.cjs");
 if (fs.existsSync(path.join(__dirname, "quality.cjs"))) add("window", "Picture quality: screen share, calls and recordings", "quality.cjs");
 if (fs.existsSync(path.join(__dirname, "camera-backgrounds.cjs"))) add("window", "Camera backgrounds and green screen", "camera-backgrounds.cjs");
+if (fs.existsSync(path.join(__dirname, "call-camera.cjs"))) add("window", "Your camera in calls", "call-camera.cjs");
+if (fs.existsSync(path.join(__dirname, "call-screen.cjs"))) add("window", "The call screen", "call-screen.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;
