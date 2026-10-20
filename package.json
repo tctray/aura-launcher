@@ -56,6 +56,7 @@
     }
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.0.1",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@node-steam/vdf": "^2.2.0",
     "@supabase/supabase-js": "^2.117.2",

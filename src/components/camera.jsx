@@ -9,6 +9,7 @@
 // The camera only turns on when you press something that says so. Nothing is saved or sent
 // anywhere: the picture stays on this PC, and only goes into a clip you record yourself.
 import { useEffect, useRef, useState } from "react";
+import { BACKGROUNDS, cameraEffects, paintBackground, refreshCameraEffects, setBackgroundPicture, backgroundPicture, shrinkPicture, effectsStatus, onEffectsStatus } from "./camfx"; // backgrounds (Added by aura-camera-backgrounds-setup.cjs)
 
 // ── The camera itself (one for all of AURA) ─────────────────────────────────
 const cam = { open: false, minimized: false, on: false, starting: false, stream: null, error: "", devices: [], deviceId: "" };
@@ -78,10 +79,10 @@ export async function startCamera(deviceId = "") {
   }
   if (mine !== attempt) { stream.getTracks().forEach((t) => t.stop()); return false; } // turned off meanwhile
   const track = stream.getVideoTracks()[0];
-  cam.stream = stream; cam.on = true; cam.starting = false;
+  cam.raw = stream; const fx = cameraEffects(stream); cam.stream = fx ? fx.stream : stream; cam.on = true; cam.starting = false; // (the background: Added by aura-camera-backgrounds-setup.cjs)
   cam.deviceId = (track && track.getSettings && track.getSettings().deviceId) || deviceId || "";
   if (track) track.addEventListener("ended", () => {
-    if (cam.stream !== stream) return;
+    if (cam.raw !== stream) return;
     stopTracks();
     cam.error = "The camera was disconnected. Plug it back in, then press Turn on.";
     emit();
@@ -92,7 +93,8 @@ export async function startCamera(deviceId = "") {
 }
 function stopTracks() {
   if (cam.stream) cam.stream.getTracks().forEach((t) => { try { t.stop(); } catch {} });
-  cam.stream = null; cam.on = false;
+  if (cam.raw) cam.raw.getTracks().forEach((t) => { try { t.stop(); } catch {} }); // the camera itself
+  cam.stream = null; cam.raw = null; cam.on = false;
 }
 export function stopCamera() { attempt++; stopTracks(); cam.starting = false; emit(); }
 export function openCamera(deviceId) { cam.open = true; cam.minimized = false; cam.error = ""; emit(); if (!cam.on && !cam.starting) startCamera(deviceId); }
@@ -196,6 +198,22 @@ const CSS = `
 .cam-size{position:absolute;right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;touch-action:none;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.35) 50%,rgba(255,255,255,.35) 60%,transparent 60%,transparent 72%,rgba(255,255,255,.35) 72%,rgba(255,255,255,.35) 82%,transparent 82%);}
 .cam-pill{position:fixed;z-index:900;display:flex;align-items:center;gap:6px;height:36px;padding:0 6px 0 12px;border-radius:18px;background:var(--panel,#141418);border:1px solid var(--border,#2a2a35);box-shadow:0 10px 30px rgba(0,0,0,.5);font-family:Rajdhani,sans-serif;font-size:13px;font-weight:700;letter-spacing:.5px;color:var(--t1,#fff);}
 .cam-menu-dot{width:7px;height:7px;border-radius:50%;background:#eb0400;box-shadow:0 0 6px #eb0400;margin-left:auto;flex-shrink:0;}
+/* Backgrounds (Added by aura-camera-backgrounds-setup.cjs) */
+.cam-bg-btn{position:absolute;left:8px;bottom:8px;z-index:2;padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.25);background:rgba(0,0,0,.55);color:#fff;font:600 11px 'DM Sans',sans-serif;cursor:pointer;opacity:0;transition:opacity .15s;}
+.cam-view:hover .cam-bg-btn,.cam-bg-btn:focus-visible,.cam-bg-btn.open{opacity:1;}
+.cam-bg-btn:focus-visible,.cam-bg:focus-visible,.cam-bg-tile:focus-visible{outline:2px solid var(--ac,#FF5722);outline-offset:2px;}
+.cam-bgs{position:absolute;left:6px;right:6px;bottom:40px;z-index:2;display:flex;gap:6px;overflow-x:auto;padding:6px;border-radius:10px;background:rgba(10,10,14,.85);border:1px solid rgba(255,255,255,.12);}
+.cam-bg{flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:3px;padding:3px;border-radius:7px;border:2px solid transparent;background:none;color:var(--t2,#aaa);font:600 9.5px 'DM Sans',sans-serif;cursor:pointer;}
+.cam-bg.on{border-color:var(--ac,#FF5722);color:#fff;}
+.cam-swatch{display:block;border-radius:5px;}
+.cam-bg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px;margin-top:10px;}
+.cam-bg-tile{display:flex;flex-direction:column;gap:5px;padding:4px;border-radius:10px;border:2px solid var(--border,#2a2a35);background:var(--card,#1c1c22);color:var(--t1,#fff);font:600 11px 'DM Sans',sans-serif;cursor:pointer;text-align:left;}
+.cam-bg-tile .cam-swatch{width:100%;height:auto;aspect-ratio:16/9;}
+.cam-bg-tile.on{border-color:var(--ac,#FF5722);}
+.cam-bg-row{flex-direction:column;align-items:stretch!important;}
+.cam-bg-note{font-size:11px;color:var(--t2,#aaa);}
+.cam-bg-note.err{color:#ff8a8a;}
+.cam-bg-link{background:none;border:none;padding:0;color:var(--ac,#FF5722);font:600 11px 'DM Sans',sans-serif;cursor:pointer;text-decoration:underline;}
 @media (prefers-reduced-motion:no-preference){.cam-pan.on .cam-dot{animation:pulse 2s infinite;}}
 `;
 function useCss() {
@@ -234,6 +252,69 @@ export function CameraButton({ rail = false, open: menuOpen = true, settings = {
       </div>
     </div>
   );
+}
+
+// ── Backgrounds (Added by aura-camera-backgrounds-setup.cjs) ──
+// A little picture of each background
+function BgSwatch({ id, w = 96, h = 54 }) {
+  const ref = useRef(null);
+  const [, again] = useState(0);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (id === "none") { ctx.fillStyle = "#26262e"; ctx.fillRect(0, 0, w, h); ctx.strokeStyle = "rgba(255,255,255,.35)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(w * 0.3, h * 0.8); ctx.lineTo(w * 0.7, h * 0.2); ctx.stroke(); return; }
+    if (id === "blur") { paintBackground(ctx, w, h, "studio"); ctx.filter = "blur(3px)"; ctx.fillStyle = "rgba(255,255,255,.25)"; for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.arc(w * (0.15 + i * 0.18), h * (0.35 + (i % 2) * 0.3), h * 0.16, 0, 7); ctx.fill(); } ctx.filter = "none"; return; }
+    paintBackground(ctx, w, h, id);
+    // your photo loads a moment later
+    if (id === "picture" && backgroundPicture()) { const t = setTimeout(() => { paintBackground(ctx, w, h, id); again((n) => n + 1); }, 300); return () => clearTimeout(t); }
+  }, [id, w, h]);
+  return <canvas ref={ref} width={w} height={h} className="cam-swatch" aria-hidden="true" />;
+}
+// Choosing your photo
+function usePhotoPicker(onChange) {
+  const input = useRef(null);
+  const [problem, setProblem] = useState("");
+  const pick = () => { setProblem(""); input.current?.click(); };
+  const box = (
+    <input ref={input} type="file" accept="image/*" style={{ display: "none" }} aria-hidden="true" tabIndex={-1}
+      onChange={async (e) => {
+        const f = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!f) return;
+        try { setBackgroundPicture(await shrinkPicture(f)); onChange({ camBg: "picture" }); refreshCameraEffects(); }
+        catch (err) { setProblem(err.message || "That picture couldn't be used."); }
+      }} />
+  );
+  return { pick, box, problem };
+}
+// The Background button on the preview, and its row of choices
+function BgPicker({ settings, onSettings }) {
+  const [open, setOpen] = useState(false);
+  const now = settings.camBg || "none";
+  const choose = (id) => { onSettings({ camBg: id }); refreshCameraEffects(); };
+  const photo = usePhotoPicker(onSettings);
+  return (
+    <>
+      <button className={`cam-bg-btn ${open ? "open" : ""}`} onClick={() => setOpen((v) => !v)} aria-expanded={open} title="Background">Background</button>
+      {open && (
+        <div className="cam-bgs" role="radiogroup" aria-label="Background">
+          {BACKGROUNDS.map((b) => (
+            <button key={b.id} role="radio" aria-checked={now === b.id} className={`cam-bg ${now === b.id ? "on" : ""}`} title={b.label}
+              onClick={() => (b.id === "picture" && !backgroundPicture() ? photo.pick() : choose(b.id))}>
+              <BgSwatch id={b.id} w={48} h={27} /><span>{b.label}</span>
+            </button>
+          ))}
+          {photo.box}
+        </div>
+      )}
+    </>
+  );
+}
+function useEffectsStatus() {
+  const [s, setS] = useState(effectsStatus());
+  useEffect(() => onEffectsStatus(setS), []);
+  return s;
 }
 
 // ── The floating preview ─────────────────────────────────────────────────────
@@ -342,6 +423,7 @@ export function CameraPanel({ settings = {}, onSettings = () => {} }) {
             {!c.starting && <button className="cam-go" onClick={() => startCamera(settings.camDevice || "")}>Turn on</button>}
           </div>
         )}
+        {c.on && <BgPicker settings={settings} onSettings={save} />}
         <div className="cam-size" onPointerDown={resize} title="Drag to resize" aria-hidden="true" />
       </div>
     </div>
@@ -362,6 +444,17 @@ export function CameraSettings({ settings: s, onChange, Seg }) {
   const named = c.devices.some((d) => !/^Camera \d+$/.test(d.label));
   const saved = s.camDevice && !c.devices.some((d) => d.id === s.camDevice) ? [{ id: s.camDevice, label: s.camDeviceName || "Saved camera (not plugged in)" }] : [];
   const width = Number(s.camWidth) || 320;
+  const fx = useEffectsStatus(); // (Added by aura-camera-backgrounds-setup.cjs)
+  const bg = s.camBg || "none", greenMode = s.camGreen || "auto";
+  const choose = (id) => { onChange({ camBg: id }); refreshCameraEffects(); };
+  const photo = usePhotoPicker(onChange);
+  const greenNote = greenMode === "on" ? "AURA always swaps green for your background"
+    : greenMode === "off" ? "AURA finds you in the picture by itself (no green screen needed)"
+    : !c.on || bg === "none" ? "AURA looks for a green screen behind you when a background is on"
+    : fx.green ? "Green screen found: AURA swaps the green for your background"
+    : fx.cutout === "failed" ? "No green screen found, and finding you in the picture doesn't work on this PC. A green screen still works"
+    : fx.cutout === "loading" ? "No green screen found: getting ready to find you in the picture…"
+    : "No green screen found: AURA finds you in the picture by itself";
   return (
     <div className="ss">
       <div className="ss-t">CAMERA</div>
@@ -382,6 +475,20 @@ export function CameraSettings({ settings: s, onChange, Seg }) {
           <Switch on={s.camMirror !== false} label="Mirror the preview" onChange={(v) => onChange({ camMirror: v })} /></div>
         <div className="sr"><div><div className="sr-l">Preview Size</div><div className="sr-s">You can also drag its corner to any size</div></div>
           <Seg value={SIZES.some(([px]) => px === width) ? width : null} options={SIZES} onChange={(v) => onChange({ camWidth: v })} /></div>
+        {/* Backgrounds (Added by aura-camera-backgrounds-setup.cjs) */}
+        <div className="sr cam-bg-row"><div><div className="sr-l">Background</div><div className="sr-s">What's behind you, in the preview, calls and recordings. It all happens on this PC</div></div>
+          <div className="cam-bg-grid" role="radiogroup" aria-label="Background">
+            {BACKGROUNDS.map((b) => (
+              <button key={b.id} type="button" role="radio" aria-checked={bg === b.id} className={`cam-bg-tile ${bg === b.id ? "on" : ""}`}
+                onClick={() => (b.id === "picture" && !backgroundPicture() ? photo.pick() : choose(b.id))}><BgSwatch id={b.id} />{b.label}</button>
+            ))}
+          </div>
+          {photo.box}
+          {backgroundPicture() && <div className="cam-bg-note"><button type="button" className="cam-bg-link" onClick={photo.pick}>Choose a different photo</button></div>}
+          {photo.problem && <div className="cam-bg-note err">{photo.problem}</div>}
+        </div>
+        <div className="sr"><div><div className="sr-l">Green Screen</div><div className="sr-s">{greenNote}</div></div>
+          <Seg value={greenMode} options={[["auto", "Auto"], ["on", "Always"], ["off", "Never"]]} onChange={(v) => { onChange({ camGreen: v }); refreshCameraEffects(); }} /></div>
         <div className="sr"><div><div className="sr-l">Camera in Recordings</div><div className="sr-s">While the camera is on, clips you record with F9, the AURA Bar or the Clips page show it in a corner. When it's off, clips are only the screen</div></div>
           <Switch on={!!s.camInRecordings} label="Camera in recordings" onChange={(v) => onChange({ camInRecordings: v })} /></div>
         {s.camInRecordings && <div className="sr"><div><div className="sr-l">Corner</div><div className="sr-s">Where the camera goes in the clip</div></div>
