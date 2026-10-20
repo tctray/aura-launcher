@@ -10,6 +10,7 @@ import { achievementStats } from "./achievements"; // Added by aura-achievements
 import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
+import { FOCUSABLE, nextInDirection, isUsable, scopeOf } from "./components/padnav"; // moving around with a controller (Added by aura-controller-setup.cjs)
 import { readPicture, themeFrom, pickAccent } from "./components/bgtheme"; // a theme from your background (Added by aura-look-setup.cjs)
 import { FavStar, FavEditor, cleanFavs, toggleFav, isFav, loginOf, migrateFavs, liveFor, useFavLive, useFavWatch, renameFavs, favLiveStream, refreshFavLive } from "./components/twitchfavs"; // Twitch favorites
 import MessagesPage, { AuraFriendsTab, MessagesIcon, useAuraSocial, useFriendCount } from "./components/messages";
@@ -3154,159 +3155,194 @@ const CONTROLLER_CSS = `
 .ctrl-badge.lb,.ctrl-badge.rb{background:var(--hover);color:var(--t1);border:1px solid var(--borderb);}
 .ctrl-badge.start{background:var(--hover);color:var(--t1);border:1px solid var(--borderb);font-size:7px;width:28px;}
 .ctrl-sep{width:1px;height:16px;background:var(--border);margin:0 4px;}
-.ctrl-focus{outline:3px solid var(--ac)!important;outline-offset:3px!important;border-radius:10px!important;}
+.ctrl-focus{outline:3px solid var(--ac)!important;outline-offset:3px!important;scroll-margin:28px;}
 `;
 
-function useController({ view, goTo, navItems, heroGame, setHeroGame, modal, setModal, doPlay, doFav, games, sorted }) {
+// Moving around AURA with a controller (Added by aura-controller-setup.cjs)
+//   D-pad or left stick: move to the next thing in that direction (hold to keep moving)
+//   A: select   B: back (closes what's open, then to the menu, then Home)   X: play   Y: favorite
+//   LB / RB: previous / next page   Right stick: scroll   Start: show the buttons
+// Only while AURA is the window in front, so playing a game never moves things in AURA.
+function useController({ view, goTo, navItems, heroGame, setHeroGame, modal, setModal }) {
   const [connected, setConnected] = useState(false);
   const [hint, setHint] = useState(null);
   const [hintHide, setHintHide] = useState(false);
-  const prevButtons = useRef({});
-  const focusIdx = useRef(0);
   const hintTimer = useRef(null);
-  const rafRef = useRef(null);
-  const lastInput = useRef(0);
-  const REPEAT_DELAY = 180; // ms between repeated inputs when held
-  const INITIAL_DELAY = 300; // ms before repeat starts
+  const live = useRef({});
+  live.current = { view, goTo, navItems, heroGame, setHeroGame, modal, setModal };
+  const st = useRef({ prev: {}, dir: null, repeatAt: 0, focus: null });
 
-  const showHint = (msg) => {
+  const showHint = (msg, ms = 2600) => {
     setHint(msg);
     setHintHide(false);
     clearTimeout(hintTimer.current);
     hintTimer.current = setTimeout(() => {
       setHintHide(true);
-      setTimeout(() => setHint(null), 400);
-    }, 2500);
+      hintTimer.current = setTimeout(() => setHint(null), 400);
+    }, ms);
   };
 
-  const getFocusables = () => {
-    return Array.from(document.querySelectorAll(
-      '.gm-card, .gm-mf-card, .card, .sb-item, .gm-rail-item, .btn-p, .btn-gh, .chip, .twitch-card'
-    )).filter(el => {
-      const rect = el.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    });
-  };
-
-  const moveFocus = (dir) => {
-    const els = getFocusables();
-    if (!els.length) return;
-    focusIdx.current = Math.max(0, Math.min(els.length - 1, focusIdx.current + dir));
-    const el = els[focusIdx.current];
-    el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-    document.querySelectorAll('.ctrl-focus').forEach(e => e.classList.remove('ctrl-focus'));
-    el.classList.add('ctrl-focus');
-  };
-
-  const pressButton = () => {
-    const els = getFocusables();
-    if (!els.length) return;
-    const el = els[focusIdx.current];
-    if (el) el.click();
-  };
-
+  // The focus ring's look is always there (it used to come and go with the notice)
   useEffect(() => {
-    const onConnect = (e) => {
-      setConnected(true);
-      showHint(`🎮 ${e.gamepad.id.slice(0, 24)} connected`);
-    };
-    const onDisconnect = () => {
-      setConnected(false);
-      setHint(null);
-    };
-    window.addEventListener('gamepadconnected', onConnect);
-    window.addEventListener('gamepaddisconnected', onDisconnect);
-    return () => {
-      window.removeEventListener('gamepadconnected', onConnect);
-      window.removeEventListener('gamepaddisconnected', onDisconnect);
-    };
+    if (document.getElementById("aura-ctrl-css")) return;
+    const el = document.createElement("style");
+    el.id = "aura-ctrl-css";
+    el.textContent = CONTROLLER_CSS;
+    document.head.appendChild(el);
   }, []);
 
   useEffect(() => {
-    const BTNS = {
-      A: 0, B: 1, X: 2, Y: 3,
-      LB: 4, RB: 5,
-      SELECT: 8, START: 9,
-      UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15,
-    };
+    const any = () => Array.from(navigator.getGamepads?.() || []).some(Boolean);
+    if (any()) setConnected(true);
+    const onConnect = () => { setConnected(true); showHint("🎮 Controller connected. Press Start to see the buttons"); };
+    const onDisconnect = () => setConnected(any());
+    window.addEventListener("gamepadconnected", onConnect);
+    window.addEventListener("gamepaddisconnected", onDisconnect);
+    return () => { window.removeEventListener("gamepadconnected", onConnect); window.removeEventListener("gamepaddisconnected", onDisconnect); clearTimeout(hintTimer.current); };
+  }, []);
 
+  useEffect(() => {
+    const s = st.current;
+    const B = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, START: 9, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 };
+    const ring = (el) => { document.querySelectorAll(".ctrl-focus").forEach((e) => { if (e !== el) e.classList.remove("ctrl-focus"); }); if (el) el.classList.add("ctrl-focus"); };
+    const mark = (el) => {
+      if (!el) return;
+      ring(el);
+      if (!el.matches("button,a[href],input,select,textarea,[tabindex]")) el.setAttribute("tabindex", "-1");
+      // A text box is only typed in after A; passing over it doesn't start typing
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+      if (typing) { const a = document.activeElement; if (a && a !== document.body && a.blur) a.blur(); }
+      else { try { el.focus({ preventScroll: true }); } catch {} }
+      try { el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: SETTINGS.reduceMotion ? "auto" : "smooth" }); } catch {}
+      s.focus = el;
+      s.showRing = true;
+    };
+    const candidates = () => [...scopeOf().querySelectorAll(FOCUSABLE)].filter(isUsable);
+    const current = () => {
+      const scope = scopeOf();
+      const el = s.focus;
+      if (el && el.isConnected && scope.contains(el) && isUsable(el)) return el;
+      const a = document.activeElement;
+      if (a && a !== document.body && scope.contains(a) && a.matches(FOCUSABLE) && isUsable(a)) return a;
+      return null;
+    };
+    const regionOf = (el) => (inMenu(el) ? "menu" : el.closest(".fp") ? "friends" : el.closest(".cx-bar") ? "call" : "page");
+    const inMenu = (el) => !!el.closest("aside.sb,aside.gm-rail,.sb-item,.gm-rail-item");
+    // Where to start: the first thing on the page itself (not the menu, not the friends panel)
+    // Where to start on a page: its first game or stream (top left), else the first thing on it
+    const first = () => {
+      const list = candidates();
+      const onScreen = (el) => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < window.innerHeight; };
+      const page = list.filter((el) => regionOf(el) === "page" && onScreen(el)).map(rectOf).sort((a, b) => (Math.abs(a.top - b.top) > 20 ? a.top - b.top : a.left - b.left)).map((c) => c.el);
+      return page.find((el) => el.matches(".card,.gm-card,.gm-mf-card,.twitch-card,.clip-card")) || page.find((el) => !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) || page[0] || list[0];
+    };
+    const rectOf = (el) => { const r = el.getBoundingClientRect(); return { el, left: r.left, top: r.top, right: r.right, bottom: r.bottom }; };
+    const move = (dir) => {
+      if (s.mouse) { s.mouse = false; return mark(first()); } // after the mouse: start again from the page
+      const cur = current();
+      if (!cur) return mark(first());
+      let others = candidates().filter((e) => e !== cur && !cur.contains(e) && !e.contains(cur));
+      // Up and down stay in the same part of the window (the menu, the page, the friends panel);
+      // left and right move between them
+      if (dir === "up" || dir === "down") { const same = others.filter((e) => regionOf(e) === regionOf(cur)); if (same.length) others = same; }
+      const next = nextInDirection(rectOf(cur), others.map(rectOf), dir);
+      if (next) mark(next.el);
+    };
+    const escape = () => {
+      const t = document.activeElement && document.activeElement !== document.body ? document.activeElement : document;
+      t.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
+    };
+    const back = () => {
+      const L = live.current;
+      const a = document.activeElement;
+      if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) { a.blur(); ring(a); s.focus = a; return; } // stop typing, stay put
+      if (scopeOf() !== document.body) { escape(); if (L.modal) L.setModal(null); return; } // close what's open
+      if (L.heroGame) { L.setHeroGame(null); return; }
+      const cur = current();
+      if (cur && !inMenu(cur)) { mark(document.querySelector(".sb-item.on,.gm-rail-item.on,.sb-item.active,.gm-rail-item.active") || [...document.querySelectorAll(".sb-item,.gm-rail-item")].find(isUsable)); return; }
+      if (L.view !== "home") L.goTo("home");
+    };
+    const page = (step) => {
+      const L = live.current;
+      const ids = L.navItems.map((n) => n.id);
+      const at = Math.max(0, ids.indexOf(L.view));
+      const next = ids[Math.min(ids.length - 1, Math.max(0, at + step))];
+      if (next && next !== L.view) { L.goTo(next); s.focus = null; setTimeout(() => mark(first()), 350); }
+    };
+    const select = () => {
+      if (s.mouse) { s.mouse = false; return mark(first()); }
+      const el = current();
+      if (!el) return mark(first());
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) { el.focus(); return; }
+      const r = el.getBoundingClientRect();
+      // A game in the Library opens from its name strip
+      const target = el.matches(".card") ? el.querySelector(".card-info") || el : el;
+      target.click();
+      // Some things are drawn again when used (a switch in Settings): keep the ring on the new one
+      setTimeout(() => {
+        if (s.focus !== el || el.isConnected) return;
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        const near = candidates().map(rectOf).map((c) => ({ c, d: Math.hypot((c.left + c.right) / 2 - cx, (c.top + c.bottom) / 2 - cy) })).sort((a, b) => a.d - b.d)[0];
+        if (near && near.d < 40) mark(near.c.el);
+      }, 80);
+    };
+    // X: play the game you're on
+    const launch = () => {
+      const el = current();
+      const play = el && (el.querySelector(".play-btn") || el.closest(".card")?.querySelector(".play-btn"));
+      if (play) play.click();
+    };
+    const favorite = () => {
+      const el = current();
+      const fav = el && (el.querySelector(".c-act.fav,.twitch-fav") || el.closest(".card")?.querySelector(".c-act.fav"));
+      if (fav) fav.click();
+    };
+    const scroller = (el) => { let p = el; while (p && p !== document.body) { const cs = getComputedStyle(p); if (/(auto|scroll)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 4) return p; p = p.parentElement; } return null; };
+
+    let raf = 0;
     const poll = () => {
-      const gamepads = navigator.getGamepads();
-      const gp = Array.from(gamepads).find(g => g);
-      if (!gp) { rafRef.current = requestAnimationFrame(poll); return; }
-
-      const pressed = (btn) => gp.buttons[btn]?.pressed;
-      const justPressed = (btn) => pressed(btn) && !prevButtons.current[btn];
-
-      // D-pad / stick navigation
-      const lx = gp.axes[0] || 0;
-      const ly = gp.axes[1] || 0;
-      const now = Date.now();
-      const canMove = now - lastInput.current > REPEAT_DELAY;
-
-      if (canMove) {
-        if (justPressed(BTNS.RIGHT) || lx > 0.7) {
-          moveFocus(1); lastInput.current = now;
-        } else if (justPressed(BTNS.LEFT) || lx < -0.7) {
-          moveFocus(-1); lastInput.current = now;
-        } else if (justPressed(BTNS.DOWN) || ly > 0.7) {
-          moveFocus(4); lastInput.current = now;
-        } else if (justPressed(BTNS.UP) || ly < -0.7) {
-          moveFocus(-4); lastInput.current = now;
-        }
+      raf = requestAnimationFrame(poll);
+      const gp = Array.from(navigator.getGamepads?.() || []).find((g) => g && g.connected !== false);
+      // AURA redraws things (a switch, a card) and its own class names replace the ring: put it back
+      if (s.showRing && s.focus && s.focus.isConnected && !s.focus.classList.contains("ctrl-focus")) s.focus.classList.add("ctrl-focus");
+      if (!gp) return;
+      const pressed = (i) => !!gp.buttons[i]?.pressed;
+      const now = performance.now();
+      const was = s.prev;
+      s.prev = Object.fromEntries(Object.entries(B).map(([k, i]) => [k, pressed(i)]));
+      // Only while AURA is the window in front (not while you're playing)
+      if (!document.hasFocus() || document.visibilityState !== "visible") { s.dir = null; return; }
+      const just = (k) => s.prev[k] && !was[k];
+      // Moving: d-pad or left stick, again and again while held
+      const lx = gp.axes[0] || 0, ly = gp.axes[1] || 0;
+      const dir = s.prev.UP || ly < -0.6 ? "up" : s.prev.DOWN || ly > 0.6 ? "down" : s.prev.LEFT || lx < -0.6 ? "left" : s.prev.RIGHT || lx > 0.6 ? "right" : null;
+      if (dir && dir !== s.dir) { move(dir); s.repeatAt = now + 380; }
+      else if (dir && now >= s.repeatAt) { move(dir); s.repeatAt = now + 110; }
+      s.dir = dir;
+      if (just("A")) select();
+      if (just("B")) back();
+      if (just("Y")) favorite();
+      if (just("X")) launch();
+      if (just("LB")) page(-1);
+      if (just("RB")) page(1);
+      if (just("START")) showHint("D-pad: move   A: select   B: back   X: play   Y: favorite   LB / RB: pages   Right stick: scroll", 5000);
+      // Right stick scrolls whatever you're in
+      const ry = gp.axes[3] || 0;
+      if (Math.abs(ry) > 0.25) {
+        const box = (current() && scroller(current())) || scroller(document.querySelector(".main,.content,.sc") || document.body) || document.scrollingElement;
+        if (box) box.scrollBy(0, ry * 22);
       }
-
-      // A — select / confirm
-      if (justPressed(BTNS.A)) pressButton();
-
-      // B — back
-      if (justPressed(BTNS.B)) {
-        if (heroGame) setHeroGame(null);
-        else if (modal) setModal(null);
-        else if (view !== 'home') goTo('home');
-      }
-
-      // LB / RB — cycle nav items
-      if (justPressed(BTNS.LB)) {
-        const ids = navItems.map(n => n.id);
-        const cur = ids.indexOf(view);
-        goTo(ids[Math.max(0, cur - 1)]);
-      }
-      if (justPressed(BTNS.RB)) {
-        const ids = navItems.map(n => n.id);
-        const cur = ids.indexOf(view);
-        goTo(ids[Math.min(ids.length - 1, cur + 1)]);
-      }
-
-      // Y — favorite focused game
-      if (justPressed(BTNS.Y)) {
-        const els = getFocusables();
-        const el = els[focusIdx.current];
-        if (el) {
-          const favBtn = el.querySelector('.c-act.fav') || el.closest('.card')?.querySelector('.c-act.fav');
-          if (favBtn) favBtn.click();
-        }
-      }
-
-      // START — show controls hint
-      if (justPressed(BTNS.START)) {
-        showHint('← → navigate  A select  B back  LB/RB switch tabs  Y favorite');
-      }
-
-      // Store button states
-      Object.entries(BTNS).forEach(([key, idx]) => {
-        prevButtons.current[key] = pressed(idx);
-      });
-
-      rafRef.current = requestAnimationFrame(poll);
     };
+    raf = requestAnimationFrame(poll);
+    // The mouse takes over: the ring goes until the controller is used again
+    const onMouse = () => { ring(null); s.mouse = true; s.showRing = false; };
+    window.addEventListener("mousedown", onMouse, true);
+    window.addEventListener("wheel", onMouse, { passive: true, capture: true });
+    return () => { cancelAnimationFrame(raf); window.removeEventListener("mousedown", onMouse, true); window.removeEventListener("wheel", onMouse, true); };
+  }, []);
 
-    rafRef.current = requestAnimationFrame(poll);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [view, heroGame, modal, goTo, navItems, setHeroGame, setModal]);
-
-  // Reset focus index on view change
-  useEffect(() => { focusIdx.current = 0; }, [view, heroGame]);
+  // A new page or a game opened: start from the top of it
+  useEffect(() => { st.current.focus = null; document.querySelectorAll(".ctrl-focus").forEach((e) => e.classList.remove("ctrl-focus")); }, [view, heroGame]);
 
   return { connected, hint, hintHide };
 }
@@ -3848,7 +3884,7 @@ function AuraApp(){
       {id:"home"},{id:"library"},{id:"recent"},{id:"favorites"},
       {id:"streams"},{id:"social"},{id:"messages"},{id:"clips"},{id:"sessions"},{id:"performance"},{id:"achievements"},{id:"customize"},{id:"settings"},
     ],
-    heroGame, setHeroGame, modal, setModal, doPlay, doFav, games, sorted,
+    heroGame, setHeroGame, modal, setModal,
   });
 
   const ControllerHUD = () => hint ? (
@@ -3859,15 +3895,7 @@ function AuraApp(){
         {connected && <><div className="ctrl-sep"/><span style={{fontSize:10,color:"var(--ac)"}}>🎮</span></>}
       </div>
     </>
-  ) : connected ? (
-    <>
-      <style>{CONTROLLER_CSS}</style>
-      <div style={{position:"fixed",bottom:16,right:80,zIndex:9999,display:"flex",alignItems:"center",gap:6,background:"rgba(10,10,14,.8)",border:"1px solid var(--border)",borderRadius:20,padding:"5px 12px",backdropFilter:"blur(10px)"}}>
-        <span style={{fontSize:10,color:"var(--ac)"}}>🎮</span>
-        <span style={{fontSize:9,color:"var(--t3)",fontFamily:"DM Sans,sans-serif"}}>Controller Active</span>
-      </div>
-    </>
-  ) : null;
+  ) : null; // (no "Controller Active" box: it covered the corner; Added by aura-controller-setup.cjs)
 
 
   if(!profile){

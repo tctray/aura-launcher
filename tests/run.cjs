@@ -90,6 +90,7 @@ if (fs.existsSync(path.join(__dirname, "achievements.cjs"))) add("window", "Achi
 if (fs.existsSync(path.join(__dirname, "screen-share.cjs"))) add("window", "Screen share in voice calls", "screen-share.cjs");
 if (fs.existsSync(path.join(__dirname, "look.cjs"))) add("window", "Full Screen switch and a theme from your background", "look.cjs");
 if (fs.existsSync(path.join(__dirname, "new-achievements.cjs"))) add("window", "New achievements", "new-achievements.cjs");
+if (fs.existsSync(path.join(__dirname, "controller.cjs"))) add("window", "Playing with a controller", "controller.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;
