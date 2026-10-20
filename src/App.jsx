@@ -10,6 +10,7 @@ import { achievementStats } from "./achievements"; // Added by aura-achievements
 import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
+import { CameraButton, CameraPanel, CameraSettings, cameraOverlay } from "./components/camera"; // the camera (Added by aura-camera-setup.cjs)
 import { FOCUSABLE, nextInDirection, isUsable, scopeOf } from "./components/padnav"; // moving around with a controller (Added by aura-controller-setup.cjs)
 import { readPicture, themeFrom, pickAccent } from "./components/bgtheme"; // a theme from your background (Added by aura-look-setup.cjs)
 import { FavStar, FavEditor, cleanFavs, toggleFav, isFav, loginOf, migrateFavs, liveFor, useFavLive, useFavWatch, renameFavs, favLiveStream, refreshFavLive } from "./components/twitchfavs"; // Twitch favorites
@@ -141,6 +142,14 @@ const SETTINGS_DEFAULTS = {
   systemVolume: 1,        // 0 – 2
   recordSourceId: "",     // screen/window chosen for the AURA Bar and F9
   recordSourceName: "",
+  // Camera (Added by aura-camera-setup.cjs)
+  camDevice: "",         // the camera to use ("" = the one Windows picks)
+  camDeviceName: "",
+  camMirror: true,       // the preview shows you like a mirror (recordings never are)
+  camWidth: 320,         // preview size
+  camX: null, camY: null,// where the preview is (null: bottom right)
+  camInRecordings: false,// put the camera in a corner of clips while it's on
+  camCorner: "br",
 };
 const MAIN_SETTING_KEYS = ["windowMode","zoom","micDevice","systemDevice","micVolume","systemVolume","keepRunning","startWithWindows","trackAllGames"];
 const loadSettings = () => {
@@ -256,6 +265,7 @@ async function startQuickRecording(game, sourceId) {
   if (quickRec.handingOff) return false; // previous clip is still being handed over (a split second)
   quickRec.starting = true;
   let screenStream = null;
+  let camShot = null; // the camera in a corner, when it's on and switched on in Settings (Added by aura-camera-setup.cjs)
   try {
     // Screen-share route: main.js answers this request with the chosen screen
     // and audio: "loopback", which is how Electron captures computer sound.
@@ -279,7 +289,8 @@ async function startQuickRecording(game, sourceId) {
     console.log("Quick record audio: system tracks =", screenStream.getAudioTracks().length,
       "| mic tracks =", micStream ? micStream.getAudioTracks().length : 0, "| audio engine =", ctx.state);
 
-    const combined = new MediaStream([...screenStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
+    if (SETTINGS.camInRecordings) camShot = cameraOverlay(screenStream.getVideoTracks()[0], { corner: SETTINGS.camCorner });
+    const combined = new MediaStream([...(camShot ? [camShot.track] : screenStream.getVideoTracks()), ...dest.stream.getAudioTracks()]);
     const mimeType = pickRecorderType();
     const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 8000000 });
     await window.electronAPI.startFfmpegPipe(game, mimeType);
@@ -294,7 +305,10 @@ async function startQuickRecording(game, sourceId) {
       quickRec.handingOff = false;
     };
     quickRec.cleanup = () => {
-      [screenStream, micStream, combined].forEach((st) => st?.getTracks().forEach((t) => t.stop()));
+      camShot?.stop();
+      [screenStream, micStream].forEach((st) => st?.getTracks().forEach((t) => t.stop()));
+      if (!camShot) combined.getTracks().forEach((t) => t.stop()); // (with the camera, its own track stays on)
+      dest.stream.getTracks().forEach((t) => t.stop());
       ctx.close().catch(() => {});
     };
     recorder.start(500);
@@ -304,7 +318,7 @@ async function startQuickRecording(game, sourceId) {
   } catch (e) {
     console.error("Quick record failed:", e);
     if (quickRec.cleanup) quickRec.cleanup();
-    else screenStream?.getTracks().forEach((t) => t.stop());
+    else { camShot?.stop(); screenStream?.getTracks().forEach((t) => t.stop()); }
     quickRec.cleanup = null;
     window.electronAPI.quickRecordState({ recording: false });
     return false;
@@ -711,6 +725,8 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 
 /* CURRENTLY PLAYING BAR */
 .now-playing{position:fixed;bottom:0;left:0;right:0;height:72px;background:rgba(10,10,12,.92);backdrop-filter:blur(20px);border-top:1px solid var(--border);z-index:500;display:flex;align-items:center;padding:0 24px;gap:16px;animation:fadeUp .3s ease;}
+/* Live Streams ends above the Now Playing bar, so it never covers the stream or its buttons (Added by aura-stream-bar-setup.cjs) */
+body:has(.now-playing) .streams-page{padding-bottom:72px;}
 .np-cover{width:48px;height:48px;border-radius:8px;object-fit:cover;border:1px solid var(--border);flex-shrink:0;}
 .np-cover-ph{width:48px;height:48px;border-radius:8px;background:var(--card);border:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px;}
 .np-info{flex:1;min-width:0;}
@@ -1784,9 +1800,11 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
           });
         }
         if (chatContainerRef.current && chatOpen && !restored?.success) {
+          // The chat's own box (it used to open over the player) (Added by aura-stream-bar-setup.cjs)
+          const ch = chatContainerRef.current.getBoundingClientRect();
           await window.electronAPI.chatOpen({
             channel: activeStream.userLogin || activeStream.user,
-            bounds: { x: Math.round(pr.x), y: Math.round(pr.y), width: Math.round(pr.width), height: Math.round(pr.height) }
+            bounds: { x: Math.round(ch.x), y: Math.round(ch.y), width: Math.round(ch.width), height: Math.round(ch.height) }
           });
         }
       }
@@ -1814,17 +1832,8 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
 
   const player = activeStream ? (
     <div style={{flex:1,display:"flex",flexDirection:"column",background:"#000",minWidth:0,minHeight:0}}>
-      <div ref={playerContainerRef} style={{flex:1,minHeight:0,background:"#000"}}>
-        {!window.electronAPI?.isElectron && (
-          <iframe
-            src={`https://player.twitch.tv/?channel=${activeStream.userLogin||activeStream.user}&parent=localhost`}
-            style={{width:"100%",height:"100%",border:"none",display:"block"}}
-            allowFullScreen
-          />
-        )}
-      </div>
-      {/* Stream info bar */}
-      <div style={{padding:"10px 16px",background:"#0e0e10",borderTop:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
+      {/* Stream info bar: above the player, so the Now Playing bar can't cover Close (Added by aura-stream-bar-setup.cjs) */}
+      <div style={{padding:"10px 16px",background:"#0e0e10",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
         <div style={{width:8,height:8,borderRadius:"50%",background:"#eb0400",boxShadow:"0 0 6px #eb0400",flexShrink:0}}/>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontFamily:"Rajdhani,sans-serif",fontSize:14,fontWeight:700,color:"var(--t1)",letterSpacing:.3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeStream.user}</div>
@@ -1835,6 +1844,15 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
         <button onClick={()=>setFull(!fullRef.current)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>{isStreamFull?"⊠ Exit Full":"⛶ Full"}</button>
         <button onClick={()=>setChatOpen(o=>!o)} style={{background:"var(--acd)",border:"1px solid var(--acg)",color:"var(--ac)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>{chatOpen?"Hide Chat":"Show Chat"}</button>
         <button onClick={()=>{setActiveStream(null);onStreamChange?.(null);onClear&&onClear();}} style={{background:"rgba(255,77,109,.1)",border:"1px solid rgba(255,77,109,.3)",color:"var(--danger)",borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif",flexShrink:0}}>✕ Close</button>
+      </div>
+      <div ref={playerContainerRef} style={{flex:1,minHeight:0,background:"#000"}}>
+        {!window.electronAPI?.isElectron && (
+          <iframe
+            src={`https://player.twitch.tv/?channel=${activeStream.userLogin||activeStream.user}&parent=localhost`}
+            style={{width:"100%",height:"100%",border:"none",display:"block"}}
+            allowFullScreen
+          />
+        )}
       </div>
     </div>
   ) : null;
@@ -1864,7 +1882,7 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
 
 
   return (
-    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:activeStream?"var(--bg)":"transparent",height:"100%"}}>
+    <div className="streams-page" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:activeStream?"var(--bg)":"transparent",height:"100%"}}>
       {/* Full view: the only part of AURA the player doesn't cover. Always a way out. */}
       {isStreamFull && activeStream && window.electronAPI?.isElectron && (
         <div className="stream-full-bar" style={{position:"fixed",top:0,left:0,right:0,height:44,zIndex:5000,background:"#0e0e10",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",gap:12,padding:"0 16px",boxSizing:"border-box"}}>
@@ -2476,8 +2494,10 @@ function ClipsPage({ nowPlayingGame, toast }) {
         });
       }
 
+      // The camera in a corner, when it's on and switched on in Settings (Added by aura-camera-setup.cjs)
+      const camShot = SETTINGS.camInRecordings ? cameraOverlay(stream.getVideoTracks()[0], { corner: SETTINGS.camCorner }) : null;
       const combined = new MediaStream([
-        ...stream.getVideoTracks(),
+        ...(camShot ? [camShot.track] : stream.getVideoTracks()),
         ...destination.stream.getAudioTracks(),
       ]);
 
@@ -2498,7 +2518,9 @@ function ClipsPage({ nowPlayingGame, toast }) {
         clipsRecorders.delete(recorder);
         await Promise.all(pending); // make sure the last seconds are saved before converting
         await window.electronAPI.stopFfmpegPipe();
-        combined.getTracks().forEach(t => t.stop());
+        camShot?.stop();
+        [...stream.getTracks(), ...destination.stream.getTracks()].forEach(t => t.stop());
+        if (!camShot) combined.getTracks().forEach(t => t.stop());
         audioCtx.close();
         setTimeout(loadClips, 2000);
       };
@@ -3114,6 +3136,8 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
             <SetRange value={s.systemVolume} min={0} max={2} step={0.05} onChange={v=>set({systemVolume:v})} format={pct}/></div>
         </div>
       </div>
+      {/* The camera (Added by aura-camera-setup.cjs) */}
+      <CameraSettings settings={s} onChange={set} Seg={Seg}/>
       <div className="ss">
         <div className="ss-t">LIBRARY</div>
         <div className="ss-card">
@@ -3934,6 +3958,7 @@ function AuraApp(){
             ))}
             {/* Log out, at the bottom of the rail */}
             <div style={{marginTop:"auto",paddingTop:8,width:"100%",display:"flex",flexDirection:"column",alignItems:"center",flexShrink:0}}>
+              <CameraButton rail open={sidebarOpen} settings={settings}/>{/* (Added by aura-camera-setup.cjs) */}
               <LogoutButton rail open={sidebarOpen}/>
             </div>
           </aside>
@@ -3972,6 +3997,7 @@ function AuraApp(){
         {quickPickerModal}
         <AutoUpdater/>
         <ControllerHUD/>
+        <CameraPanel settings={settings} onSettings={updateSettings}/>
         {isRecording&&<RecordingIndicator game={recGame} elapsed={recElapsed} onStop={async()=>{ if(isQuickRecording()) stopQuickRecording(); else await window.electronAPI?.stopRecording(); setIsRecording(false);}}/>}
         <div className="tc">
           {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
@@ -4023,6 +4049,7 @@ function AuraApp(){
               <div className="sb-stat-s">across {games.length} games</div>
             </div>}
           </div>
+          <CameraButton open={sidebarOpen} settings={settings}/>{/* the camera (Added by aura-camera-setup.cjs) */}
           {/* Log out, at the bottom of the sidebar */}
           <div style={{paddingBottom:10,flexShrink:0}}>
             <LogoutButton open={sidebarOpen}/>
@@ -4123,6 +4150,7 @@ function AuraApp(){
       {quickPickerModal}
       <AutoUpdater/>
       <ControllerHUD/>
+      <CameraPanel settings={settings} onSettings={updateSettings}/>
       <div className="tc">
         {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
         {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}
