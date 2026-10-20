@@ -32,6 +32,27 @@ const FALLBACK_SERVERS = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun.cl
 // picture gets softer or slower by itself rather than stopping.
 const SCREEN_MAX_BITRATE = 4000000;
 const SCREEN_VIDEO = { frameRate: { ideal: 30, max: 30 }, width: { max: 1920 }, height: { max: 1080 } };
+// Screen share quality, picked in the Share Screen box (Added by aura-quality-setup.cjs)
+//   Auto: 1080p, 30 fps. Smooth: 1080p at 60 fps, keeps it moving (games). Sharp: up to 1440p, keeps text crisp.
+// On a slow connection each eases down by itself instead of stopping.
+const SHARE_MODES = {
+  auto: { label: "Auto", hint: "Good for most things: 1080p at 30 fps.", video: SCREEN_VIDEO, fps: 30, bitrate: 8000000, prefer: "balanced", content: "" },
+  smooth: { label: "Smooth", hint: "60 fps for games and fast motion.", video: { frameRate: { ideal: 60, max: 60 }, width: { max: 1920 }, height: { max: 1080 } }, fps: 60, bitrate: 12000000, prefer: "maintain-framerate", content: "motion" },
+  sharp: { label: "Sharp", hint: "Clearest text and detail, up to 1440p.", video: { frameRate: { ideal: 30, max: 30 }, width: { max: 2560 }, height: { max: 1440 } }, fps: 30, bitrate: 12000000, prefer: "maintain-resolution", content: "detail" },
+};
+// Pictures in calls use the graphics card's H.264 when this PC has it (clearer, lighter while gaming), else VP9
+function preferCodecs(pc) {
+  try {
+    const all = RTCRtpReceiver.getCapabilities?.("video")?.codecs || [];
+    const rank = (c) => (/h264/i.test(c.mimeType) ? (/packetization-mode=1/.test(c.sdpFmtpLine || "") ? 0 : 1) : /vp9/i.test(c.mimeType) ? 2 : 3);
+    if (!all.some((c) => rank(c) < 3)) return;
+    const order = all.map((c, i) => [c, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([c]) => c);
+    for (const tr of pc.getTransceivers()) {
+      if (tr.receiver?.track?.kind !== "video" || tr.stopped || typeof tr.setCodecPreferences !== "function") continue;
+      try { tr.setCodecPreferences(order); } catch {}
+    }
+  } catch {}
+}
 // What a missed call leaves in the conversation (written by Supabase, see aura-messages-voice.sql)
 export const MISSED_CALL = "📞 Missed voice call";
 
@@ -68,8 +89,8 @@ function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
     const spot = p.pos && Number.isFinite(p.pos.x) && Number.isFinite(p.pos.y) ? { x: Math.min(1, Math.max(0, p.pos.x)), y: Math.min(1, Math.max(0, p.pos.y)) } : null;
-    return { mic: typeof p.mic === "string" ? p.mic : "", speaker: typeof p.speaker === "string" ? p.speaker : "", volume: Number.isFinite(p.volume) ? Math.min(MAX_VOLUME, Math.max(0, p.volume)) : 1, pos: spot };
-  } catch { return { mic: "", speaker: "", volume: 1, pos: null }; }
+    return { mic: typeof p.mic === "string" ? p.mic : "", speaker: typeof p.speaker === "string" ? p.speaker : "", volume: Number.isFinite(p.volume) ? Math.min(MAX_VOLUME, Math.max(0, p.volume)) : 1, pos: spot, shareMode: SHARE_MODES[p.shareMode] ? p.shareMode : "auto" };
+  } catch { return { mic: "", speaker: "", volume: 1, pos: null, shareMode: "auto" }; }
 }
 let prefs = loadPrefs();
 function savePrefs(next) {
@@ -418,6 +439,7 @@ async function handle(signal) {
     if (mine !== session) return;
     // A screen-share lane from their side: answer so that either of you can share
     for (const tr of pc.getTransceivers()) { if (tr.receiver?.track?.kind === "video" && tr.direction === "recvonly") { try { tr.direction = "sendrecv"; } catch {} } }
+    preferCodecs(pc); // (Added by aura-quality-setup.cjs)
     await drain();
     const answer = await pc.createAnswer();
     if (mine !== session) return;
@@ -458,6 +480,7 @@ async function addScreenLane() {
   if (!rtc?.pc || rtc.pc.signalingState !== "stable" || videoLane()) return;
   try {
     rtc.pc.addTransceiver("video", { direction: "sendrecv" });
+    preferCodecs(rtc.pc); // (Added by aura-quality-setup.cjs)
     const made = await rtc.pc.createOffer();
     if (mine !== session) return;
     await rtc.pc.setLocalDescription(made);
@@ -643,10 +666,11 @@ export const callActions = {
     const lane = videoLane();
     if (!lane || !c.canShare) return toast(`Screen share needs both of you on the latest AURA. Ask ${c.peer.username} to update.`, "err");
     const mine = session;
+    const mode = SHARE_MODES[prefs.shareMode] || SHARE_MODES.auto; // (Added by aura-quality-setup.cjs)
     let stream = null;
     try {
       if (sourceId) await window.electronAPI?.setCaptureSource?.(sourceId);
-      stream = await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_VIDEO, audio: false });
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: mode.video, audio: false });
     } catch (e) {
       if (mine === session) toast(e?.name === "NotAllowedError" ? "AURA isn't allowed to capture your screen. In Windows, check Settings > Privacy & security." : "AURA couldn't capture that. Pick it again, or pick another screen or window.", "err");
       return;
@@ -655,6 +679,9 @@ export const callActions = {
     for (const a of stream.getAudioTracks()) { a.stop(); stream.removeTrack(a); } // the picture only
     const track = stream.getVideoTracks()[0];
     if (!track) { stopStream(stream); return toast("AURA couldn't capture that.", "err"); }
+    // Tell the encoder what it's showing: motion (games) or detail (text)
+    try { if (mode.content) track.contentHint = mode.content; } catch {}
+    track.applyConstraints?.(mode.video)?.catch?.(() => {});
     try { await lane.sender.replaceTrack(track); }
     catch { stopStream(stream); return toast("Your screen couldn't be sent. Try again.", "err"); }
     if (mine !== session || !rtc) return stopStream(stream);
@@ -664,9 +691,9 @@ export const callActions = {
     try {
       const p = lane.sender.getParameters();
       if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-      p.encodings[0].maxBitrate = SCREEN_MAX_BITRATE;
-      p.encodings[0].maxFramerate = 30;
-      p.degradationPreference = "balanced";
+      p.encodings[0].maxBitrate = mode.bitrate;
+      p.encodings[0].maxFramerate = mode.fps;
+      p.degradationPreference = mode.prefer;
       await lane.sender.setParameters(p);
     } catch {}
     // The window you shared was closed: stop sharing
@@ -832,6 +859,7 @@ function Devices({ onClose }) {
 // ── Screen share: pick what to share (Added by aura-screen-share-setup.cjs) ──
 function ScreenPicker({ onClose }) {
   const box = useRef(null);
+  const [mode, setMode] = useState(SHARE_MODES[prefs.shareMode] ? prefs.shareMode : "auto"); // (Added by aura-quality-setup.cjs)
   const [sources, setSources] = useState(null);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -861,6 +889,14 @@ function ScreenPicker({ onClose }) {
   return (
     <div className="cx-devices cx-picker" ref={box} role="dialog" aria-label="Share your screen">
       <div className="cx-picker-h">Share your screen</div>
+      {/* Quality (Added by aura-quality-setup.cjs) */}
+      <div className="cx-quality" role="radiogroup" aria-label="Quality">
+        {Object.entries(SHARE_MODES).map(([k, m]) => (
+          <button key={k} type="button" role="radio" aria-checked={mode === k} className={`cx-q ${mode === k ? "on" : ""}`} title={m.hint}
+            onClick={() => { savePrefs({ shareMode: k }); setMode(k); }}>{m.label}</button>
+        ))}
+      </div>
+      <div className="cx-picker-note cx-q-hint">{SHARE_MODES[mode].hint}</div>
       {sources === null && <div className="cx-picker-note">Looking for screens and windows…</div>}
       {error && <div className="cx-picker-note err">{error}</div>}
       {sources && !sources.length && !error && (
@@ -1160,6 +1196,13 @@ const CSS = `
 .cx-picker-sub{font-size:12px;font-weight:600;color:var(--t2,#9aa0aa);margin-top:2px}
 .cx-picker-note{font-size:11.5px;color:var(--t2,#9aa0aa)}
 .cx-picker-note.err{color:#fca5a5}
+/* Screen share quality (Added by aura-quality-setup.cjs) */
+.cx-quality{display:flex;gap:4px;padding:3px;border-radius:10px;background:rgba(255,255,255,.06);border:1px solid var(--border,rgba(255,255,255,.14))}
+.cx-q{flex:1;height:30px;border:none;border-radius:7px;background:transparent;color:var(--t2,#9aa0aa);font:600 12px 'DM Sans',sans-serif;cursor:pointer}
+.cx-q:hover{color:var(--t1,#fff);background:rgba(255,255,255,.06)}
+.cx-q.on{background:var(--ac,#FF5722);color:#fff}
+.cx-q:focus-visible{outline:2px solid var(--ac2,var(--ac,#ff8a65));outline-offset:2px}
+.cx-q-hint{margin-top:-6px}
 .cx-src-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .cx-src{display:flex;flex-direction:column;gap:6px;padding:6px;border-radius:10px;border:1px solid var(--border,rgba(255,255,255,.14));background:rgba(255,255,255,.04);color:var(--t1,#fff);cursor:pointer;text-align:left;font:500 12px 'DM Sans',sans-serif;min-width:0}
 .cx-src:hover,.cx-src:focus-visible{border-color:var(--ac,#FF5722);background:rgba(255,255,255,.08)}

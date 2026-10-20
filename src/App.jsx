@@ -140,6 +140,7 @@ const SETTINGS_DEFAULTS = {
   systemDevice: "",
   micVolume: 1,           // 0 – 2
   systemVolume: 1,        // 0 – 2
+  recQuality: "high",     // Standard (30 fps), High (60 fps) or Ultra (60 fps, most detail) (Added by aura-quality-setup.cjs)
   recordSourceId: "",     // screen/window chosen for the AURA Bar and F9
   recordSourceName: "",
   // Camera (Added by aura-camera-setup.cjs)
@@ -241,6 +242,10 @@ const RECORDER_TYPES = [
 ];
 const pickRecorderType = () => RECORDER_TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || "video/webm";
 const isQuickRecording = () => !!quickRec.recorder || quickRec.starting;
+// Recording quality, from Settings > Recording (Added by aura-quality-setup.cjs). Recordings keep your screen's own size.
+const REC_QUALITY = { standard: { fps: 30, bitrate: 8000000 }, high: { fps: 60, bitrate: 16000000 }, ultra: { fps: 60, bitrate: 30000000 } };
+const recQuality = () => REC_QUALITY[SETTINGS.recQuality] || REC_QUALITY.high;
+const recVideo = () => ({ frameRate: { ideal: recQuality().fps, max: recQuality().fps } });
 
 async function findMicStream() {
   if (SETTINGS.micVolume <= 0) return null;
@@ -270,7 +275,7 @@ async function startQuickRecording(game, sourceId) {
     // Screen-share route: main.js answers this request with the chosen screen
     // and audio: "loopback", which is how Electron captures computer sound.
     await window.electronAPI.setCaptureSource(sourceId);
-    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: recVideo(), audio: true });
     const micStream = await findMicStream();
 
     const ctx = new AudioContext();
@@ -292,7 +297,7 @@ async function startQuickRecording(game, sourceId) {
     if (SETTINGS.camInRecordings) camShot = cameraOverlay(screenStream.getVideoTracks()[0], { corner: SETTINGS.camCorner });
     const combined = new MediaStream([...(camShot ? [camShot.track] : screenStream.getVideoTracks()), ...dest.stream.getAudioTracks()]);
     const mimeType = pickRecorderType();
-    const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 8000000 });
+    const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: recQuality().bitrate });
     await window.electronAPI.startFfmpegPipe(game, mimeType);
 
     const pending = [];
@@ -2414,7 +2419,7 @@ function ClipsPage({ nowPlayingGame, toast }) {
       let stream = null;
       try {
         stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { frameRate: 30 },
+          video: recVideo(),
           audio: true,
         });
         console.log("getDisplayMedia succeeded:", stream.getTracks().map(t => `${t.kind}:${t.label}`));
@@ -2504,7 +2509,7 @@ function ClipsPage({ nowPlayingGame, toast }) {
       chunksRef.current = [];
       const mimeType = pickRecorderType();
 
-      const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 8000000 });
+      const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: recQuality().bitrate });
       await window.electronAPI.startFfmpegPipe(game, mimeType);
 
       const pending = [];
@@ -3126,6 +3131,9 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
         <div className="ss-card">
           <div className="sr"><div><div className="sr-l">Recording Screen</div><div className="sr-s">{s.recordSourceName?`AURA Bar and F9 record: ${s.recordSourceName}`:"You'll be asked the first time you record with the bar or F9"}</div></div>
             {s.recordSourceId&&<button className="btn-gh" style={{fontSize:11,padding:"5px 12px"}} onClick={()=>set({recordSourceId:"",recordSourceName:""})}>Choose again</button>}</div>
+          {/* Recording quality (Added by aura-quality-setup.cjs) */}
+          <div className="sr"><div><div className="sr-l">Recording Quality</div><div className="sr-s">{({standard:"30 fps, smaller files (about 600 MB per 10 minutes). Best for older PCs",high:"60 fps and sharp (about 1.2 GB per 10 minutes)",ultra:"60 fps, the most detail (about 2.3 GB per 10 minutes)"})[s.recQuality]||"60 fps and sharp (about 1.2 GB per 10 minutes)"}</div></div>
+            <Seg value={s.recQuality||"high"} options={[["standard","Standard"],["high","High"],["ultra","Ultra"]]} onChange={v=>set({recQuality:v})}/></div>
           <div className="sr"><div><div className="sr-l">Microphone</div><div className="sr-s">{devices===null?"Looking for devices…":"Default mic for clips and the F9 hotkey"}</div></div>
             <select className="fs set-select" value={s.micDevice} onChange={e=>set({micDevice:e.target.value})}>{deviceOptions(s.micDevice)}</select></div>
           <div className="sr"><div><div className="sr-l">System Audio</div><div className="sr-s">Game sound source, usually "Stereo Mix"</div></div>

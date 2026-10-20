@@ -93,6 +93,7 @@ if (fs.existsSync(path.join(__dirname, "new-achievements.cjs"))) add("window", "
 if (fs.existsSync(path.join(__dirname, "controller.cjs"))) add("window", "Playing with a controller", "controller.cjs");
 if (fs.existsSync(path.join(__dirname, "stream-bar.cjs"))) add("window", "Live Streams: the stream's buttons are never covered", "stream-bar.cjs");
 if (fs.existsSync(path.join(__dirname, "camera.cjs"))) add("window", "The camera: preview, settings, recordings", "camera.cjs");
+if (fs.existsSync(path.join(__dirname, "quality.cjs"))) add("window", "Picture quality: screen share, calls and recordings", "quality.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;

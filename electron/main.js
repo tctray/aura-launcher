@@ -1392,7 +1392,7 @@ async function finishPipeRecording({ rawFile, outFile, mime, game }) {
   if (result.code !== 0) {
     // Re-encode (VP9 recordings, or if repackaging failed)
     result = await runFfmpeg(["-y", "-fflags", "+genpts", "-i", rawFile,
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", // (sharper: Added by aura-quality-setup.cjs)
       "-af", "aresample=async=1", "-c:a", "aac", "-b:a", "160k",
       "-movflags", "+faststart", outFile]);
     console.log("convert closed:", result.code, "->", outFile);
@@ -1471,8 +1471,8 @@ ipcMain.handle("trim-clip", async (_e, input = {}) => {
         "-i", filePath,
         "-t", String(duration),
         "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-c:a", "aac",
+        "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", // a trimmed clip keeps its quality (Added by aura-quality-setup.cjs)
+        "-c:a", "aac", "-b:a", "160k",
         "-movflags", "+faststart",
         "-y",
         outFile
