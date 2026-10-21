@@ -25,6 +25,11 @@ const FRIENDLY = [
   [/rate limit|too many requests|only request this after/i, "Too many tries. Wait a minute, then try again."],
   [/unable to validate email|email address .* invalid|invalid email/i, "That email address doesn't look right."],
   [/fetch failed|failed to fetch|network|enotfound|econn|etimedout|timed out/i, "Can't reach AURA's servers. Check your internet connection."],
+  // Forgot password (Added by aura-reset-password-setup.cjs)
+  [/token has expired|otp.*(expired|invalid)|invalid.*otp|expired.*token/i, "That code is wrong or has expired. Check the newest email, or send another code."],
+  [/^code format$/i, "That code doesn't look right. Enter just the numbers from the email."],
+  [/different from the old password/i, "Pick a password you haven't used for AURA before."],
+  [/password should be|weak password|password is too weak/i, "That password is too easy to guess. Try a longer one."],
 ];
 export function friendlyError(message) {
   const text = String(message || "").trim();
@@ -302,7 +307,7 @@ function AuthShell({ covers, calm, children }) {
 }
 
 function AuthScreen({ covers, calm, onSignedIn }) {
-  const [mode, setMode] = useState("login"); // "login" | "signup" | "sent"
+  const [mode, setMode] = useState("login"); // "login" | "signup" | "sent" | "reset"
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -371,6 +376,10 @@ function AuthScreen({ covers, calm, onSignedIn }) {
     setBusy(false);
   };
 
+  if (mode === "reset") {
+    return <ResetScreen covers={covers} calm={calm} startEmail={email.trim()} onSignedIn={onSignedIn}
+      onBack={(mail) => { if (mail) setEmail(mail); switchMode("login"); }} />;
+  }
   if (mode === "sent") {
     return (
       <AuthShell covers={covers} calm={calm}>
@@ -431,6 +440,10 @@ function AuthScreen({ covers, calm, onSignedIn }) {
           </div>
         </div>
 
+        {!signingUp && (
+          <div className="auth-forgot-row"><button type="button" className="auth-link" onClick={() => switchMode("reset")}>Forgot password?</button></div>
+        )}
+
         {error && <div className="auth-msg err" role="alert">{error}</div>}
 
         <button type="submit" className="auth-btn" disabled={busy}>
@@ -443,6 +456,110 @@ function AuthScreen({ covers, calm, onSignedIn }) {
         <button type="button" className="auth-link" onClick={() => switchMode(signingUp ? "login" : "signup")}>
           {signingUp ? "Log in" : "Create an account"}
         </button>
+      </p>
+    </AuthShell>
+  );
+}
+
+// ── Forgot password (Added by aura-reset-password-setup.cjs) ──
+// 1. Your email: Supabase sends a code.  2. The code and a new password: you're logged in.
+function ResetScreen({ covers, calm, startEmail, onBack, onSignedIn }) {
+  const [step, setStep] = useState("email"); // "email" | "code"
+  const [email, setEmail] = useState(startEmail || "");
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [wait, setWait] = useState(0); // seconds until another code can be sent
+  const checked = useRef(false); // the code was right (if setting the password then failed, only that is tried again)
+  const first = useRef(null);
+  useEffect(() => { first.current?.focus(); }, [step]);
+  useEffect(() => { if (!wait) return; const t = setTimeout(() => setWait((w) => w - 1), 1000); return () => clearTimeout(t); }, [wait]);
+
+  const send = async (again) => {
+    const mail = email.trim();
+    setError(""); setNotice("");
+    if (!EMAIL_RULE.test(mail)) { setError("Enter the email you use for AURA."); return; }
+    setBusy(true);
+    try {
+      await cloudCall("sendResetCode", mail);
+      setStep("code"); setWait(60);
+      if (again) setNotice("We sent another code. Use the newest one.");
+    } catch (err) { setError(err.message); }
+    setBusy(false);
+  };
+  const finish = async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    setError(""); setNotice("");
+    const digits = code.replace(/\s+/g, "");
+    if (!checked.current && !/^\d{6,10}$/.test(digits)) { setError("Enter the code from the email (just the numbers)."); return; }
+    if (password.length < 8) { setError("Use at least 8 characters for your new password."); return; }
+    setBusy(true);
+    try {
+      const user = await cloudCall("resetPasswordWithCode", email.trim(), digits, password);
+      await onSignedIn(user);
+      return;
+    } catch (err) {
+      // Setting the password failed after the code was accepted: keep going without the code
+      if (!/code is wrong|code doesn't look right|expired/i.test(err.message)) checked.current = true;
+      setError(err.message);
+    }
+    setBusy(false);
+  };
+  // Leaving halfway: if the code was already accepted, don't stay logged in without a password you know
+  const back = async () => { if (checked.current) { try { await cloudCall("logOut"); } catch {} } onBack(email.trim()); };
+
+  if (step === "email") {
+    return (
+      <AuthShell covers={covers} calm={calm}>
+        <h1 className="auth-title">Reset your password</h1>
+        <p className="auth-text">Enter the email you use for AURA. We'll send you a code to set a new password.</p>
+        <form className="auth-form" onSubmit={(e) => { e.preventDefault(); if (!busy) send(false); }} noValidate>
+          <div className="auth-field">
+            <label className="auth-label" htmlFor="auth-reset-email">Email</label>
+            <input id="auth-reset-email" ref={first} className="auth-input" type="email" value={email}
+              onChange={(e) => setEmail(e.target.value)} autoComplete="email" spellCheck={false} placeholder="you@example.com" />
+          </div>
+          {error && <div className="auth-msg err" role="alert">{error}</div>}
+          <button type="submit" className="auth-btn" disabled={busy}>{busy ? "Sending…" : "Send code"}</button>
+        </form>
+        <p className="auth-alt">Remembered it? <button type="button" className="auth-link" onClick={back}>Log in</button></p>
+      </AuthShell>
+    );
+  }
+  return (
+    <AuthShell covers={covers} calm={calm}>
+      <h1 className="auth-title">Check your email</h1>
+      <p className="auth-text">If <strong>{email.trim()}</strong> has an AURA account, we sent it a code. It can take a minute, so check your spam folder too.</p>
+      <form className="auth-form" onSubmit={finish} noValidate>
+        <div className="auth-field">
+          <label className="auth-label" htmlFor="auth-reset-code">Code</label>
+          <input id="auth-reset-code" ref={first} className="auth-input auth-code" value={code} inputMode="numeric" autoComplete="one-time-code"
+            maxLength={12} spellCheck={false} placeholder="123456" onChange={(e) => setCode(e.target.value.replace(/[^\d\s]/g, ""))} />
+        </div>
+        <div className="auth-field">
+          <label className="auth-label" htmlFor="auth-reset-password">New password</label>
+          <div className="auth-password">
+            <input id="auth-reset-password" className="auth-input" type={showPassword ? "text" : "password"} value={password}
+              onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" placeholder="At least 8 characters" />
+            <button type="button" className="auth-show" onClick={() => setShowPassword((s) => !s)}
+              aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? "Hide" : "Show"}</button>
+          </div>
+        </div>
+        {error && <div className="auth-msg err" role="alert">{error}</div>}
+        {notice && <div className="auth-msg ok" role="status">{notice}</div>}
+        <button type="submit" className="auth-btn" disabled={busy}>{busy ? "Saving…" : "Set new password"}</button>
+      </form>
+      <p className="auth-alt">
+        No code?{" "}
+        <button type="button" className="auth-link" onClick={() => send(true)} disabled={busy || wait > 0}>
+          {wait > 0 ? `Send another in ${wait}s` : "Send another"}
+        </button>
+        {"  ·  "}
+        <button type="button" className="auth-link" onClick={back}>Back to log in</button>
       </p>
     </AuthShell>
   );
@@ -589,6 +706,14 @@ html,body{margin:0;background:var(--bg,#222831)}
   .auth-inner{max-width:360px}
 }
 
+/* Forgot password (Added by aura-reset-password-setup.cjs) */
+.auth .auth-title{color:var(--a-t1)} /* titles on these screens were dark on dark */
+.auth-forgot-row{display:flex;justify-content:flex-end;margin-top:-6px}
+.auth-forgot-row .auth-link{font-size:12px;font-weight:500;color:var(--a-t2)}
+.auth-forgot-row .auth-link:hover{color:var(--a-t1)}
+.auth-code{letter-spacing:6px;font-size:18px;font-variant-numeric:tabular-nums}
+.auth-code::placeholder{letter-spacing:6px}
+
 /* Log out confirmation */
 .auth-dim{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.8);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:20px;animation:auth-in .18s ease}
 .auth-dialog{width:380px;max-width:100%;background:var(--a-panel);border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:26px 26px 22px;box-shadow:0 32px 80px rgba(0,0,0,.7);animation:auth-rise .2s ease}
@@ -606,4 +731,41 @@ html,body{margin:0;background:var(--bg,#222831)}
 /* Keep it clear of the Now Playing bar */
 :root:has(.now-playing) .sb{padding-bottom:72px}
 :root:has(.now-playing) .gm-rail{padding-bottom:88px}
+
+/* ── A softer, rounder look (Added by aura-soft-login-setup.cjs) ── */
+/* Fields: rounded, quiet until you use them */
+.auth-form{gap:14px;text-align:left}
+.auth-label{font-size:12.5px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--a-t2);margin:0 0 7px 4px}
+.auth-input{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:13px 16px;font-size:14px;transition:border-color .2s,background .2s,box-shadow .2s}
+.auth-input::placeholder{color:rgba(255,255,255,.28)}
+.auth-input:hover{background:rgba(255,255,255,.06)}
+.auth-input:focus{background:rgba(255,255,255,.065);border-color:color-mix(in srgb,var(--a-ac) 55%,transparent);box-shadow:0 0 0 4px color-mix(in srgb,var(--a-ac) 14%,transparent)}
+.auth-hint{margin-left:4px}
+.auth-password .auth-input{padding-right:72px}
+.auth-show{right:7px;padding:6px 11px;border-radius:999px;font-size:11.5px;font-weight:500;color:var(--a-t2);background:rgba(255,255,255,.06)}
+.auth-show:hover{background:rgba(255,255,255,.11);color:var(--a-t1)}
+/* Log in / Sign up: a soft pill switch */
+.auth-seg{border-radius:999px;padding:4px;background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.07)}
+.auth-seg button{border-radius:999px;font-weight:500;padding:9px 0}
+.auth-seg button.on{background:rgba(255,255,255,.1);color:var(--a-t1);box-shadow:0 1px 6px rgba(0,0,0,.25)}
+/* Buttons: rounded, plain words (no shouting) */
+.auth-btn{border-radius:999px;padding:13px 18px;font-family:'DM Sans',system-ui,sans-serif;font-size:14.5px;font-weight:600;letter-spacing:.1px;background:linear-gradient(135deg,var(--a-ac),var(--a-ac2))}
+.auth-btn:hover:not(:disabled){filter:brightness(1.06);transform:translateY(-1px);box-shadow:0 8px 22px color-mix(in srgb,var(--a-ac) 30%,transparent)}
+.auth-btn.ghost{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.08)}
+.auth-btn.ghost:hover:not(:disabled){background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.12)}
+.auth-btn.danger{background:#e5484d;border-color:transparent;color:#fff}
+.auth-btn.danger:hover:not(:disabled){background:#ec5d5e;box-shadow:0 8px 22px rgba(229,72,77,.28)}
+.auth-msg{border-radius:14px;padding:11px 14px}
+.auth button:focus-visible,.auth-dim button:focus-visible{outline-offset:3px;border-radius:999px}
+/* The log out question: rounder, and readable */
+.auth-dim{background:rgba(6,6,10,.62);backdrop-filter:blur(14px)}
+.auth-dialog{border-radius:24px;padding:28px 26px 22px;border-color:rgba(255,255,255,.09);text-align:center;box-shadow:0 30px 70px rgba(0,0,0,.55)}
+.auth-dialog .auth-title{color:var(--a-t1);font-family:'DM Sans',system-ui,sans-serif;font-size:19px;font-weight:600;letter-spacing:0}
+.auth-dialog .auth-text{font-size:13.5px}
+.auth-dialog-actions .auth-btn{font-size:14px;padding:11px 14px}
+/* Log out in the side menu: calm and rounded; a warm red only when you point at it */
+.sb-item.aura-logout,.gm-rail-item.aura-logout{color:var(--t3,rgba(255,255,255,.5));border-radius:12px;transition:background .2s,color .2s}
+.sb-item.aura-logout:hover,.gm-rail-item.aura-logout:hover{background:rgba(255,255,255,.05);color:var(--t1,#fff)}
+.sb-item.aura-logout:hover svg,.gm-rail-item.aura-logout:hover svg{color:#ec5d5e}
+.aura-logout:focus-visible{border-radius:12px}
 `;

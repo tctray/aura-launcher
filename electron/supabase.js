@@ -153,6 +153,39 @@ async function resendConfirmation(email) {
   return true;
 }
 
+// ── Forgot password (Added by aura-reset-password-setup.cjs) ──
+// Supabase emails a code (Authentication > Emails > Reset Password must show {{ .Token }}).
+// Typing that code proves the email is yours; then the new password is set and you're logged in.
+const RESET_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+async function sendResetCode(email) {
+  const mail = String(email || "").trim();
+  if (!RESET_EMAIL.test(mail) || mail.length > 254) throw new Error("invalid email");
+  const { error } = await client().auth.resetPasswordForEmail(mail);
+  if (error) throw new Error(error.message);
+  return true; // (the same answer whether or not the email has an account)
+}
+async function resetPasswordWithCode(email, code, newPassword) {
+  const mail = String(email || "").trim();
+  const token = String(code || "").replace(/\s+/g, "");
+  if (!RESET_EMAIL.test(mail) || mail.length > 254) throw new Error("invalid email");
+  if (typeof newPassword !== "string" || newPassword.length < 8 || newPassword.length > 72) throw new Error("Use at least 8 characters for your password.");
+  // Already checked this code (the first try at a new password didn't take)? Then only the password is left to set
+  const { data: now } = await client().auth.getSession();
+  let user = now?.session?.user && String(now.session.user.email || "").toLowerCase() === mail.toLowerCase() ? now.session.user : null;
+  if (!user) {
+    if (!/^\d{6,10}$/.test(token)) throw new Error("code format");
+    const { data, error } = await client().auth.verifyOtp({ email: mail, token, type: "recovery" });
+    if (error) throw new Error(error.message);
+    user = data?.user;
+    if (!user) throw new Error("Token has expired or is invalid");
+  }
+  const { data: changed, error: e2 } = await client().auth.updateUser({ password: newPassword });
+  if (e2) throw new Error(e2.message);
+  const signedIn = toUser(changed?.user || user);
+  await rememberUser(signedIn);
+  return signedIn;
+}
+
 // ── Profiles ──────────────────────────────────────────────────────────────────
 async function getMyProfile() {
   const user = await currentUser();
@@ -340,4 +373,4 @@ async function getAccessToken() {
 }
 
 // social.js (friends and messages) uses the same signed-in connection through these two
-module.exports = { signUp, logIn, logOut, getSession, resendConfirmation, getMyProfile, saveProfile, getProfile, getMyGames, saveMyGames, getMyData, saveMyData, getMySessionIds, getMySessions, saveMySessions, deleteMySessions, getAccessToken, internals: { client, currentUser } };
+module.exports = { signUp, logIn, logOut, getSession, resendConfirmation, sendResetCode, resetPasswordWithCode, getMyProfile, saveProfile, getProfile, getMyGames, saveMyGames, getMyData, saveMyData, getMySessionIds, getMySessions, saveMySessions, deleteMySessions, getAccessToken, internals: { client, currentUser } };

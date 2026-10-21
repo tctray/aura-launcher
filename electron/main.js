@@ -537,6 +537,9 @@ ipcMain.handle("auth:logIn", cloudHandler(auraCloud.logIn));
 ipcMain.handle("auth:logOut", cloudHandler(auraCloud.logOut));
 ipcMain.handle("auth:getSession", cloudHandler(auraCloud.getSession));
 ipcMain.handle("auth:resendConfirmation", cloudHandler(auraCloud.resendConfirmation));
+// Forgot password (Added by aura-reset-password-setup.cjs)
+ipcMain.handle("auth:sendResetCode", cloudHandler(auraCloud.sendResetCode));
+ipcMain.handle("auth:resetPasswordWithCode", cloudHandler(auraCloud.resetPasswordWithCode));
 ipcMain.handle("profile:getMine", cloudHandler(auraCloud.getMyProfile));
 ipcMain.handle("profile:save", cloudHandler(auraCloud.saveProfile));
 ipcMain.handle("profile:get", cloudHandler(auraCloud.getProfile));
