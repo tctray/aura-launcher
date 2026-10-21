@@ -10,6 +10,7 @@ import { achievementStats } from "./achievements"; // Added by aura-achievements
 import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
+import { backgroundForTheme, resolveThemeBackground, forgetThemePicture, themePicture, isWebPicture } from "./components/themebg"; // a saved theme keeps its background (Added by aura-theme-backgrounds-setup.cjs)
 import { CameraButton, CameraPanel, CameraSettings, cameraOverlay } from "./components/camera"; // the camera (Added by aura-camera-setup.cjs)
 import { FOCUSABLE, nextInDirection, isUsable, scopeOf } from "./components/padnav"; // moving around with a controller (Added by aura-controller-setup.cjs)
 import { readPicture, themeFrom, pickAccent } from "./components/bgtheme"; // a theme from your background (Added by aura-look-setup.cjs)
@@ -2066,12 +2067,22 @@ const BGT_CSS = `
 `;
 if (typeof document !== "undefined" && !document.getElementById("aura-bgt-css")) { const el = document.createElement("style"); el.id = "aura-bgt-css"; el.textContent = BGT_CSS; document.head.appendChild(el); }
 
+// A saved theme's background, small (Added by aura-theme-backgrounds-setup.cjs)
+function ThemeBgThumb({ background }) {
+  const [src, setSrc] = useState(background?.kind === "web" && isWebPicture(background.url) ? background.url : "");
+  useEffect(() => { let alive = true; if (background?.kind === "pic") themePicture(background.pic).then((p) => { if (alive && p) setSrc(p); }); return () => { alive = false; }; }, [background?.kind, background?.pic]);
+  if (!src) return null;
+  return <div className="theme-bg-thumb" style={{ position: "absolute", inset: 0, backgroundImage: `url("${src.replace(/"/g, "%22")}")`, backgroundSize: "cover", backgroundPosition: "center", opacity: .85 }} />;
+}
 function Customize({ theme, onThemeChange, accent, onAccentChange, customColors, onCustomColorsChange, bgImage, onBgChange, savedThemes, onSaveTheme, onDeleteTheme, onLoadTheme }) {
   const [local, setLocal] = useState(customColors || {bg:"#222831",panel:"#1a1f26",card:"#2D4059",hover:"#354d6e",ac:"#FF5722",ac2:"#ff8a65"});
   const [tab, setTab] = useState("presets");
   const [ac2color, setAc2color] = useState(customColors?.ac2||"#ff8a65");
   const [saveName, setSaveName] = useState("");
   const [bgInput, setBgInput] = useState(bgImage||"");
+  // A theme was loaded (or synced): the colour boxes and the background box show it (Added by aura-theme-backgrounds-setup.cjs)
+  useEffect(()=>{ if(customColors){ setLocal(customColors); if(customColors.ac2) setAc2color(customColors.ac2); } },[customColors]);
+  useEffect(()=>{ setBgInput(bgImage||""); },[bgImage]);
   const updateLocal = (key, val) => { const updated={...local,[key]:val};setLocal(updated);if(theme==="custom") onCustomColorsChange(updated); };
   const applyCustom = () => { onCustomColorsChange(local);onThemeChange("custom"); };
   // A theme made from the background picture: it becomes your custom theme (Added by aura-look-setup.cjs)
@@ -2198,12 +2209,15 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
         )}
         {tab==="saved"&&(
           <div>
-            <div style={{fontSize:11,color:"var(--t3)",marginBottom:16}}>Save your current theme settings as a named preset.</div>
+            <div style={{fontSize:11,color:"var(--t3)",marginBottom:16}}>Save your current colors and background as a named theme. Loading it brings back both.</div>
             <div style={{display:"flex",gap:8,marginBottom:20}}>
               <input className="fi" value={saveName} onChange={e=>setSaveName(e.target.value)} placeholder="Theme name e.g. My Dark Purple" style={{flex:1,fontSize:12}}/>
-              <button className="btn-p" style={{flexShrink:0}} onClick={()=>{
+              <button className="btn-p" style={{flexShrink:0}} onClick={async()=>{
                 if(!saveName.trim()) return;
-                onSaveTheme({name:saveName.trim(),colors:{...local},accent,ac2:ac2color,themeName:theme});
+                const name=saveName.trim();
+                // The background showing now is saved with it (Added by aura-theme-backgrounds-setup.cjs)
+                const background=await backgroundForTheme(bgImage);
+                onSaveTheme({name,colors:{...local},accent,ac2:ac2color,themeName:theme,...(background?{background}:{})});
                 setSaveName("");
               }}>Save</button>
             </div>
@@ -2217,12 +2231,13 @@ function Customize({ theme, onThemeChange, accent, onAccentChange, customColors,
                     return (
                     <div key={t.name} style={{display:"flex",alignItems:"center",gap:12,background:"var(--card)",borderRadius:12,padding:"12px 14px",border:"1px solid var(--border)"}}>
                       <div style={{width:44,height:44,borderRadius:10,background:swatchBg,border:"1px solid rgba(255,255,255,.08)",flexShrink:0,position:"relative",overflow:"hidden"}}>
+                        <ThemeBgThumb background={t.background}/>{/* (Added by aura-theme-backgrounds-setup.cjs) */}
                         <div style={{position:"absolute",top:6,left:6,width:14,height:14,borderRadius:4,background:`linear-gradient(135deg,${swatchAc},${swatchAc2})`}}/>
                         <div style={{position:"absolute",bottom:5,left:5,right:5,height:4,borderRadius:2,background:`${swatchAc}66`}}/>
                       </div>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:13,fontWeight:700,color:"var(--t1)",fontFamily:"Rajdhani,sans-serif",letterSpacing:.5}}>{t.name}</div>
-                        <div style={{fontSize:10,color:"var(--t3)",marginTop:2}}>{t.themeName||"Custom"} · <span style={{color:swatchAc}}>{swatchAc}</span></div>
+                        <div style={{fontSize:10,color:"var(--t3)",marginTop:2}}>{t.themeName||"Custom"} · <span style={{color:swatchAc}}>{swatchAc}</span>{t.background?.kind==="web"||t.background?.kind==="pic"?" · with background":t.background?.kind==="none"?" · no background":""}</div>
                       </div>
                       <button className="btn-p" style={{fontSize:10,padding:"5px 12px"}} onClick={()=>onLoadTheme(t)}>Load</button>
                       <button className="btn-d" style={{fontSize:10,padding:"5px 10px"}} onClick={()=>onDeleteTheme(t.name)}>✕</button>
@@ -3776,17 +3791,22 @@ function AuraApp(){
   // AURA friends and messages (see components/messages)
   const social=useAuraSocial({view,toast,goTo:(id)=>goTo(id)});
 
+  // A picture kept for a theme that no saved theme uses any more is let go of (Added by aura-theme-backgrounds-setup.cjs)
+  const dropUnusedPicture = (gone, still) => { const id = gone?.background?.kind === "pic" ? gone.background.pic : ""; if (id && !still.some((x) => x.background?.kind === "pic" && x.background.pic === id)) forgetThemePicture(id); };
   const saveCustomTheme2 = useCallback((named) => {
+    const before = savedThemes.find(t=>t.name===named.name);
     const updated = [...savedThemes.filter(t=>t.name!==named.name), named];
+    if (before) dropUnusedPicture(before, updated);
     setSavedThemes(updated);
-    localStorage.setItem("aura_saved_themes", JSON.stringify(updated));
+    try { localStorage.setItem("aura_saved_themes", JSON.stringify(updated)); } catch {}
     toast(`Theme "${named.name}" saved!`);
   }, [savedThemes, toast]);
 
   const deleteCustomTheme2 = useCallback((name) => {
     const updated = savedThemes.filter(t=>t.name!==name);
+    dropUnusedPicture(savedThemes.find(t=>t.name===name), updated);
     setSavedThemes(updated);
-    localStorage.setItem("aura_saved_themes", JSON.stringify(updated));
+    try { localStorage.setItem("aura_saved_themes", JSON.stringify(updated)); } catch {}
   }, [savedThemes]);
 
   const doPlay=useCallback(async(game)=>{
@@ -4132,6 +4152,14 @@ function AuraApp(){
               setAccent(ac); saveAccent(ac);
               setCustomColors(colors); saveCustomTheme(colors);
               applyTheme(themeKey, ac, colors);
+              // Its background too (themes saved before this kept only colours, so those leave it as it is) (Added by aura-theme-backgrounds-setup.cjs)
+              if (t.background) resolveThemeBackground(t.background).then((bg) => {
+                if (bg === null) { toast(`"${t.name}" loaded. Its background picture is on another PC, so yours stayed the same.`); return; }
+                try { localStorage.setItem("aura_bg_theme_for", bgKey(bg)); } catch {} // the saved colours stay (not re-matched to the picture)
+                setBgImage(bg); try { localStorage.setItem("aura_bg", bg || ""); } catch {}
+                toast(`"${t.name}" loaded`);
+              });
+              else toast(`"${t.name}" loaded`);
             }}
           /></PageBoundary>}
 

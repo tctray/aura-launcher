@@ -98,6 +98,7 @@ if (fs.existsSync(path.join(__dirname, "camera-backgrounds.cjs"))) add("window",
 if (fs.existsSync(path.join(__dirname, "call-camera.cjs"))) add("window", "Your camera in calls", "call-camera.cjs");
 if (fs.existsSync(path.join(__dirname, "call-screen.cjs"))) add("window", "The call screen", "call-screen.cjs");
 if (fs.existsSync(path.join(__dirname, "reset-password.cjs"))) add("window", "Forgot password", "reset-password.cjs");
+if (fs.existsSync(path.join(__dirname, "theme-backgrounds.cjs"))) add("window", "Saved themes keep their background", "theme-backgrounds.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;
