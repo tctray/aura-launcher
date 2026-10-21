@@ -171,7 +171,7 @@ async function person(browser, world, base, id, name) {
     };
     const sv = st.querySelector(".cx-stage-screen video");
     const r = st.getBoundingClientRect();
-    return { them: tile("them"), me: tile("me"), screen: sv ? sv.videoWidth : -1, full: document.fullscreenElement === st, w: Math.round(r.width), h: Math.round(r.height), bar: getComputedStyle(document.querySelector(".cx-bar") || document.body).display, top: st.querySelector(".cx-stage-top")?.innerText || "" };
+    return { them: tile("them"), me: tile("me"), screen: sv ? sv.videoWidth : -1, full: !!document.fullscreenElement && document.fullscreenElement.contains(st), w: Math.round(r.width), h: Math.round(r.height), bar: getComputedStyle(document.querySelector(".cx-bar") || document.body).display, top: st.querySelector(".cx-stage-top")?.innerText || "" };
   });
   const sbtn = (p, label) => p.locator(`.cx-stage-bar button[aria-label="${label}"]`);
 

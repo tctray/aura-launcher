@@ -1109,17 +1109,22 @@ function StageTile({ who, person, stream, rev, mirror, muted, sharing }) {
     </div>
   );
 }
+// Full screen has to be asked for in the click itself (a moment later, Windows and newer browsers say no),
+// so the call layer (which the call screen is drawn into) goes full screen as the button is pressed
+function fullCallLayer() {
+  const host = document.getElementById("aura-call-layer");
+  try { if (host && document.fullscreenElement !== host) host.requestFullscreen?.({ navigationUI: "hide" })?.catch?.(() => {}); } catch {}
+}
 function CallStage() {
   const call = useCall();
   const box = useRef(null);
   const [picker, setPicker] = useState(false);
   const open = !!call && !!call.stage && (call.phase === "live" || call.phase === "reconnecting");
-  // Opening it fills the whole monitor (if Windows won't, it still fills AURA's window)
+  // It fills the whole monitor (asked for right at the click, see fullCallLayer); if Windows won't, it still fills AURA's window
   useEffect(() => {
     if (!open) { setPicker(false); return; }
-    const el = box.current;
-    try { el?.requestFullscreen?.({ navigationUI: "hide" })?.catch?.(() => {}); } catch {}
-    let wasFull = false;
+    const el = document.getElementById("aura-call-layer");
+    let wasFull = !!el && document.fullscreenElement === el;
     const changed = () => { if (document.fullscreenElement === el) wasFull = true; else if (wasFull) callActions.closeStage(); };
     const esc = (e) => { if (e.key === "Escape") callActions.closeStage(); };
     document.addEventListener("fullscreenchange", changed);
@@ -1309,7 +1314,7 @@ function CallBar() {
             title={!call.canCam ? "Camera needs both of you on the latest AURA" : call.camOn ? "Turn your camera off" : "Turn your camera on"}
             aria-label={!call.canCam ? "Camera isn't available on this call" : call.camOn ? "Turn your camera off" : "Turn your camera on"}><IconCam /></button>
           <button type="button" className={`cx-round ${devices ? "on" : ""}`} data-cx-devices onClick={() => { setPicker(false); setDevices((v) => !v); }} aria-expanded={devices} title="Microphone, speakers and volume" aria-label="Microphone, speakers and volume"><IconSliders /></button>
-          <button type="button" className="cx-round stage" onClick={() => { setDevices(false); setPicker(false); callActions.openStage(); }} title="Open the call screen" aria-label="Open the call screen"><IconExpand /></button>{/* (Added by aura-call-screen-setup.cjs) */}
+          <button type="button" className="cx-round stage" onClick={() => { setDevices(false); setPicker(false); fullCallLayer(); callActions.openStage(); }} title="Open the call screen" aria-label="Open the call screen"><IconExpand /></button>{/* (Added by aura-call-screen-setup.cjs) */}
           <button type="button" className="cx-round end" onClick={callActions.hangUp} title="Hang up" aria-label="Hang up"><IconHangUp /></button>
         </div>
       )}
@@ -1399,6 +1404,7 @@ const CSS = `
 :root:has(.stream-full-bar) .cx-devices{top:42px}
 /* The call screen (Added by aura-call-screen-setup.cjs) */
 .cx-round.stage.on{background:rgba(255,255,255,.16)}
+#aura-call-layer:fullscreen{background:#0b0b0e}
 .cx-stage{position:fixed;inset:0;z-index:9620;display:flex;flex-direction:column;background:radial-gradient(120% 90% at 50% 0%,color-mix(in srgb,var(--ac,#FF5722) 10%,#111116) 0%,#0b0b0e 70%);color:var(--t1,#fff);font-family:'DM Sans',sans-serif;--cx-me:0;--cx-peer:0}
 .cx-stage *{box-sizing:border-box}
 .cx-stage-top{display:flex;align-items:center;gap:10px;padding:16px 22px;flex-shrink:0}
