@@ -123,7 +123,8 @@ for (const step of steps.filter((s) => wants(s.group))) {
   // The messaging checks wait on timers (a notice that shows after a pause, for example). On a
   // very busy machine one can miss its moment, so a failed part gets one more go before it counts.
   let again = false;
-  if (step.group === "messages" && run.status !== 0 && run.status !== 3 && !tooLong(run)) { again = true; run = go(); }
+  // (the window checks too: calls and cameras run on timers, and GitHub's machines are slower; Added by aura-ci-fix-setup.cjs)
+  if ((step.group === "messages" || step.group === "window") && run.status !== 0 && run.status !== 3 && !tooLong(run)) { again = true; run = go(); }
   const out = String(run.stdout || "") + (run.status === 0 || run.status === 3 ? "" : String(run.stderr || "").split("\n").slice(-30).join("\n"));
   // Passing lines are counted, not printed: only what needs attention is shown
   const lines = out.split("\n");
@@ -134,6 +135,11 @@ for (const step of steps.filter((s) => wants(s.group))) {
   if (again && run.status === 0) console.log("  note  this part failed once and passed when run again (a timing hiccup, not a problem with AURA)");
   const state = run.status === 0 ? "passed" : run.status === 3 ? "skipped" : "FAILED";
   console.log(`  ${state === "passed" ? "✓" : state === "skipped" ? "–" : "✗"} ${passed} check${passed === 1 ? "" : "s"} passed${state === "FAILED" ? ", some FAILED (listed above)" : state === "skipped" ? ", the rest skipped" : ""}  (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+  // On GitHub, a failed part is also written into the build's notes, so it can be read without the full log (Added by aura-ci-fix-setup.cjs)
+  if (state === "FAILED" && process.env.GITHUB_ACTIONS) {
+    const say = (tooLong(run) ? [`this part didn't finish within ${STEP_MINUTES} minutes`] : []).concat(shown.slice(0, 25)).join("\n").slice(0, 4000);
+    console.log("::error title=" + step.title.replace(/[,:\r\n%]/g, " ") + "::" + say.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A"));
+  }
   results.push({ title: step.title, state, passed });
 }
 

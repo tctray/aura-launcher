@@ -6,7 +6,7 @@ on:
 jobs:
   # AURA's checks (the tests folder). If any fail, the builds below don't run and no release is made.
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # pinned: GitHub is moving ubuntu-latest to a new Ubuntu (Added by aura-ci-fix-setup.cjs)
     timeout-minutes: 15   # GitHub stops the job after this, instead of waiting for hours
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +41,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # pinned: GitHub is moving ubuntu-latest to a new Ubuntu (Added by aura-ci-fix-setup.cjs)
     timeout-minutes: 45   # GitHub stops the job after this, instead of waiting for hours
     needs: test
     permissions:
