@@ -1,7 +1,7 @@
 {
   "name": "aura",
   "private": true,
-  "version": "1.29.0",
+  "version": "1.29.1",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
