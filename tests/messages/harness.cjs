@@ -82,8 +82,8 @@ async function createWorld(socialPath) {
       if (seen.rows.length) sub.cb({ eventType, new: row, old: {} });
     }
   }
-  const SETS = new Set(["list_friends", "list_conversations", "list_conversations_v2", "list_blocked", "current_call"]);
-  const ROWS = new Set(["start_call", "answer_call", "end_call"]); // answer with one whole row
+  const SETS = new Set(["list_friends", "list_conversations", "list_conversations_v2", "list_blocked", "current_call", "join_group"]);
+  const ROWS = new Set(["start_call", "answer_call", "end_call", "add_to_call"]); // answer with one whole row
   const callsNow = async () => (process.env.NO_VOICE_SQL ? new Map() : new Map((await run(null, "select * from public.voice_calls")).rows.map((r) => [r.id, r])));
   const reactionsNow = async () => (!hasReactions ? new Map() : new Map((await run(null, "select * from public.message_reactions")).rows.map((r) => [String(r.id), r])));
   const messageIds = async () => new Set((await run(null, "select id from public.messages")).rows.map((r) => r.id));
@@ -200,14 +200,14 @@ async function createWorld(socialPath) {
           const keys = Object.keys(args);
           const call = `public.${name}(${keys.map((k, i) => `${k} => $${i + 1}`).join(", ")})`;
           const before = /friend|block/.test(name) ? await snapshot() : null;
-          const voice = /call|friend|block/.test(name) ? { calls: await callsNow(), messages: await messageIds() } : null;
+          const voice = /call|friend|block|join_group/.test(name) ? { calls: await callsNow(), messages: await messageIds() } : null;
           const liked = /react_to_message|delete_message/.test(name) ? await reactionsNow() : null;
           const res = await run(uid, SETS.has(name) || ROWS.has(name) ? `select * from ${call}` : `select ${call} as r`, keys.map((k) => args[k]));
           if (voice) {
             // Calls starting, being answered and ending arrive live, as do the details the PCs swap
             // and the note a missed call leaves in the conversation
             const after = await callsNow();
-            for (const [cid, row] of after) { const was = voice.calls.get(cid); if (!was) await broadcast("voice_calls", "INSERT", plain(row)); else if (was.status !== row.status) await broadcast("voice_calls", "UPDATE", plain(row)); }
+            for (const [cid, row] of after) { const was = voice.calls.get(cid); if (!was) await broadcast("voice_calls", "INSERT", plain(row)); else if (was.status !== row.status || (was.group_id || null) !== (row.group_id || null)) await broadcast("voice_calls", "UPDATE", plain(row)); }
             if (name === "send_call_signal") { const row = (await run(null, "select * from public.voice_signals where id = $1", [res.rows[0].r])).rows[0]; if (row) await broadcast("voice_signals", "INSERT", plain(row)); }
             for (const row of (await run(null, "select * from public.messages order by created_at")).rows) if (!voice.messages.has(row.id)) await broadcast("messages", "INSERT", plain(row));
           }

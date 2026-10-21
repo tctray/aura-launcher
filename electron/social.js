@@ -43,6 +43,7 @@ const BACKGROUND_SETUP = "Shared chat backgrounds aren't set up in Supabase yet.
 // Voice calls. Supabase only carries the ringing and the details two PCs need to find each other;
 // the sound goes straight from one PC to the other.
 const VOICE_SETUP = "Voice calls aren't set up in Supabase yet. Run aura-messages-voice.sql first.";
+const GROUP_SETUP = "Calls with 3 people aren't set up in Supabase yet. Run aura-calls-group.sql first."; // (Added by aura-group-calls-setup.cjs)
 const SIGNAL_KINDS = ["offer", "answer", "ice"];
 const SIGNAL_MAX = 20000;
 // Free public servers that tell a PC its own internet address, so two PCs can connect directly.
@@ -107,6 +108,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   let backgroundsReady = true;       // same, for shared chat backgrounds
   let deleteReady = true;            // same, for deleted messages
   let liveCall = null;               // id of the call you started or answered on this PC, if any
+  const groupLive = new Set();      // in a call with 3 people, the other calls it is made of // (Added by aura-group-calls-setup.cjs)
   let ringing = null;                // { id, note } while a call is ringing and AURA isn't in front
   let relays = null;                 // { at, servers, relay } what callConfig last worked out
   let hangingUp = null;              // a hang-up on its way to Supabase (so closing AURA can wait for it)
@@ -128,6 +130,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     const msg = String(error?.message || error || "Something went wrong");
     const code = String(error?.code || "");
     if (/fetch failed|network|timeout|ENOTFOUND|ECONN|EAI_AGAIN/i.test(msg)) return new Error("You're offline. Check your connection and try again.");
+    if (/add_to_call|join_group|group_id/.test(msg) && (code === "PGRST202" || code === "42883" || code === "42703" || /schema cache|does not exist/i.test(msg))) return new Error(GROUP_SETUP); // (Added by aura-group-calls-setup.cjs)
     if (/start_call|answer_call|end_call|call_heartbeat|send_call_signal|current_call|voice_calls|voice_signals/.test(msg) && (code === "PGRST202" || code === "PGRST205" || code === "42883" || code === "42P01" || /schema cache|does not exist/i.test(msg))) return new Error(VOICE_SETUP);
     if (/react_to_message|message_reactions/.test(msg) && (code === "PGRST202" || code === "PGRST205" || code === "42883" || code === "42P01" || /schema cache|does not exist/i.test(msg))) return new Error(REACTIONS_SETUP);
     if (/set_conversation_background|conversation_backgrounds/.test(msg) && (code === "PGRST202" || code === "PGRST205" || code === "42883" || code === "42P01" || /schema cache|does not exist/i.test(msg))) return new Error(BACKGROUND_SETUP);
@@ -512,7 +515,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   // here runs as the signed-in user, so the rules in aura-messages-voice.sql always apply.
   const shapeCall = (c, me) => ({
     id: c.id, callerId: c.caller_id, calleeId: c.callee_id, peerId: c.caller_id === me ? c.callee_id : c.caller_id, outgoing: c.caller_id === me,
-    status: c.status, reason: c.end_reason || null, createdAt: c.created_at, answeredAt: c.answered_at || null, endedAt: c.ended_at || null,
+    groupId: c.group_id || null, status: c.status, reason: c.end_reason || null, createdAt: c.created_at, answeredAt: c.answered_at || null, endedAt: c.ended_at || null,
   });
   const shapeSignal = (s) => ({ id: Number(s.id), kind: s.kind, payload: String(s.payload || "") });
   const one = (data) => (Array.isArray(data) ? data[0] || null : data || null);
@@ -538,12 +541,29 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
       stopRinging(cid);
       const row = await rpc("end_call", { the_call: cid, why: reason === "missed" || reason === "failed" ? reason : null });
       if (liveCall === cid) liveCall = null; // only once Supabase has it
+      groupLive.delete(cid);
       return shapeCall(one(row), user.id);
     })();
     // Noted straight away, so that if AURA is closing it can wait for this to arrive first
     const settled = work.then(() => {}, () => {}).then(() => { if (hangingUp === settled) hangingUp = null; });
     hangingUp = settled;
     return work;
+  }
+  // Calls with 3 people (Added by aura-group-calls-setup.cjs). A call of three is three calls of two, tied together
+  // in Supabase (aura-calls-group.sql): anyone in a call can add a friend, and the friend's AURA, once
+  // they've answered, connects to the rest of the call.
+  async function addToCall(callId, userId) {
+    const user = await currentUser();
+    const call = shapeCall(one(await rpc("add_to_call", { the_call: id(callId, "call"), target: id(userId, "user") })), user.id);
+    groupLive.add(call.id);
+    return call;
+  }
+  async function joinGroup(callId) {
+    const user = await currentUser();
+    const rows = await rpc("join_group", { the_call: id(callId, "call") });
+    const calls = (Array.isArray(rows) ? rows : rows ? [rows] : []).map((r) => shapeCall(r, user.id));
+    for (const c of calls) groupLive.add(c.id);
+    return calls;
   }
   // Passes connection details to the other PC. Supabase refuses them until the call is accepted.
   async function callSignal(callId, kind, payload) {
@@ -658,7 +678,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   try {
     let leaving = false;
     if (typeof app.on === "function") app.on("will-quit", (event) => {
-      if (leaving || (!liveCall && !hangingUp)) return;
+      if (leaving || (!liveCall && !hangingUp && !groupLive.size)) return;
       leaving = true;
       const cid = liveCall;
       liveCall = null;
@@ -667,6 +687,10 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
       // Either the window has already sent the hang-up (wait for it to arrive), or it is sent now
       let hungUp = hangingUp || Promise.resolve();
       try { if (!hangingUp && cid) hungUp = Promise.resolve(sb().rpc("end_call", { the_call: cid, why: null })).then(() => {}, () => {}); } catch {}
+      // and the rest of a call with 3 people // (Added by aura-group-calls-setup.cjs)
+      const rest = [...groupLive].filter((g) => g !== cid);
+      groupLive.clear();
+      for (const g of rest) { try { hungUp = Promise.all([hungUp, Promise.resolve(sb().rpc("end_call", { the_call: g, why: null })).then(() => {}, () => {})]); } catch {} }
       Promise.race([hungUp, new Promise((resolve) => setTimeout(resolve, 1000))]).then(carryOn, carryOn);
     });
   } catch {}
@@ -678,7 +702,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     for (const q of quiet.values()) clearTimeout(q.timer);
     quiet.clear(); names.clear(); friendshipIds.clear();
     stopRinging();
-    liveCall = null; relays = null; callsWereDown = false; // (a relay's login isn't kept for the next account)
+    liveCall = null; groupLive.clear(); relays = null; callsWereDown = false; // (a relay's login isn't kept for the next account)
     gifKey = null; gifPages.clear();
     const old = [channel, bgChannel, callChannel, reactChannel];
     channel = null; bgChannel = null; callChannel = null; reactChannel = null; channelUser = null; live = false;
@@ -746,6 +770,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
       if (call.status === "ringing" && !call.outgoing && payload.eventType === "INSERT") ring(call);
       else if (call.status !== "ringing") stopRinging(call.id);
       if (call.status === "ended" && liveCall === call.id) liveCall = null;
+      if (call.groupId && call.status === "active") groupLive.add(call.id); else if (call.status === "ended") groupLive.delete(call.id); // (Added by aura-group-calls-setup.cjs)
     };
     callChannel = sb().channel("aura-social-calls:" + userId)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "voice_calls" }, onCall)
@@ -834,7 +859,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   } catch {}
 
   // ── What the window may ask for ─────────────────────────────────────────────
-  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, deleteMessage, blockUser, unblockUser, listBlocked, reportUser, markRead, react, gifSearch, startCall, answerCall, endCall, callSignal, callState, callBeat, currentCall, callConfig };
+  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, deleteMessage, blockUser, unblockUser, listBlocked, reportUser, markRead, react, gifSearch, startCall, answerCall, endCall, callSignal, callState, callBeat, currentCall, callConfig, addToCall, joinGroup };
   for (const [name, fn] of Object.entries(api)) ipcMain.handle("social:" + name, cloudHandler(fn));
   return api;
 }

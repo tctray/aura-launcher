@@ -72,9 +72,15 @@ async function ask(name, ...args) {
 export const callsAvailable = () =>
   typeof window.auraSocial?.startCall === "function" && typeof window.RTCPeerConnection === "function" && !!navigator.mediaDevices?.getUserMedia;
 
+
 // ── The call in progress ──────────────────────────────────────────────────────
-// call: { id, peer: { userId, username, avatarUrl }, outgoing, phase, since, muted, peerMuted, note, busy }
+// call: { id, peer: { userId, username, avatarUrl }, outgoing, phase, since, muted, peerMuted, note, busy, ...,
+//         groupId, others: [{ id, peer, outgoing, phase, peerMuted, peerSharing, peerCamOn, oldApp }] }
 // phase: starting -> ringing -> connecting -> live (<-> reconnecting) -> over
+// A call can have up to 3 people (Added by aura-group-calls-setup.cjs). Each other person is a "link": a
+// call of two in Supabase and a connection of its own between your PC and theirs. `peer` and the
+// peer... fields are the first person's; `others` is everyone else.
+export const MAX_PEOPLE = 3;
 let state = { call: null };
 const listeners = new Set();
 const emit = () => listeners.forEach((l) => l());
@@ -86,9 +92,43 @@ export const callHooks = { toast: null, person: null }; // set by components/mes
 const toast = (text, kind) => callHooks.toast?.(text, kind);
 
 let session = 0;   // goes up whenever a call starts or ends, so late answers to old questions are ignored
-let rtc = null;    // the working parts of the call in progress
-const newRtc = () => ({ pc: null, dc: null, mic: null, audio: null, screen: null, remoteVideo: null, cam: null, remoteCam: null, peerCam: false, config: null, queue: Promise.resolve(), seen: new Set(), polled: 0, early: [], pendingIce: [], outIce: [], restarts: 0, wasLive: false, accepting: false, saidBye: false, timers: {} });
+let rtc = null;    // the working parts of the call in progress: what you send (shared by everyone) and the links
+const newRtc = () => ({ mic: null, screen: null, cam: null, camRaw: null, config: null, links: [], wasLive: false, timers: {} });
+// One person you're in the call with
+const newLink = ({ id = null, peer, outgoing, groupId = null, phase = "starting", invited = false, joined = false }) => ({
+  id, peer, outgoing, groupId, invited, joined, oldApp: false,
+  pc: null, dc: null, audio: null, boost: null, remoteVideo: null, remoteCam: null, peerCam: false, peerGroup: false,
+  queue: Promise.resolve(), seen: new Set(), polled: 0, early: [], pendingIce: [], outIce: [], restarts: 0, wasLive: false, accepting: false, saidBye: false, timers: {},
+  v: { phase, peerMuted: false, peerSharing: false, peerCamOn: false, canShare: false, canCam: false },
+});
+const links = () => rtc?.links || [];
+const first = () => rtc?.links[0] || null;
+const alive = (L) => !!L && !!rtc && rtc.links.includes(L);
+const linkById = (id) => (id ? links().find((l) => l.id === id) || null : null);
+const ringingPhase = (p) => p === "starting" || p === "ringing";
+// Everyone you're actually talking with (not anyone still being rung)
+export const callPeople = (call) => (call ? [call.peer, ...(call.others || []).filter((o) => !ringingPhase(o.phase)).map((o) => o.peer)] : []);
+const namesOf = (people) => people.map((p) => p.username).join(" & ");
 
+// The call as the window sees it, from the links
+function compose(extra) {
+  if (!state.call) return;
+  const all = links();
+  const L0 = all[0];
+  if (!L0) { if (extra) patch(extra); return; }
+  const rest = all.slice(1);
+  setCall({
+    ...state.call, ...extra,
+    id: L0.id, peer: L0.peer, outgoing: L0.outgoing, phase: L0.v.phase === "over" ? state.call.phase : L0.v.phase,
+    peerMuted: L0.v.peerMuted, peerSharing: L0.v.peerSharing, peerCamOn: L0.v.peerCamOn,
+    canShare: all.some((l) => l.v.canShare), canCam: all.some((l) => l.v.canCam),
+    groupId: all.find((l) => l.groupId)?.groupId || null,
+    others: rest.map((l) => ({ id: l.id, peer: l.peer, outgoing: l.outgoing, phase: l.v.phase, peerMuted: l.v.peerMuted, peerSharing: l.v.peerSharing, peerCamOn: l.v.peerCamOn, oldApp: l.oldApp })),
+  });
+}
+const setLink = (L, p) => { if (!alive(L)) return; Object.assign(L.v, p); compose(); };
+const bump = (key) => patch({ [key]: (state.call?.[key] || 0) + 1 });
+const rememberAll = () => remember(links().map((l) => l.id));
 // ── Your microphone, speakers and volume ──────────────────────────────────────
 function loadPrefs() {
   try {
@@ -130,11 +170,23 @@ function micProblem(e) {
   if (name === "NotReadableError" || name === "AbortError") return "Windows couldn't open your microphone. Another app may be using it.";
   return "AURA couldn't use your microphone" + (e?.message ? " (" + e.message + ")." : ".");
 }
-// Remembers which call this PC joined, so a call cut off by a crash can be closed when AURA next
-// starts (without touching a call you are having in AURA on another PC)
+// Remembers which calls this PC joined, so a call cut off by a crash can be closed when AURA next
+// starts (without touching a call you are having in AURA on another PC). A call with 3 people is
+// several calls of two, so it is a list.
 const LIVE_KEY = "aura_call_live";
-const remember = (id) => { try { if (id) localStorage.setItem(LIVE_KEY, id); else localStorage.removeItem(LIVE_KEY); } catch {} };
-const remembered = () => { try { return localStorage.getItem(LIVE_KEY) || ""; } catch { return ""; } };
+const remember = (ids) => {
+  const list = (Array.isArray(ids) ? ids : [ids]).filter((x) => typeof x === "string" && x);
+  try { if (list.length) localStorage.setItem(LIVE_KEY, list.length === 1 ? list[0] : JSON.stringify(list)); else localStorage.removeItem(LIVE_KEY); } catch {}
+};
+const remembered = () => {
+  try {
+    const raw = localStorage.getItem(LIVE_KEY) || "";
+    if (!raw) return [];
+    if (raw[0] !== "[") return [raw];
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.filter((x) => typeof x === "string" && x).slice(0, 4) : [];
+  } catch { return []; }
+};
 const stopStream = (stream) => { try { stream?.getTracks().forEach((t) => { t.onended = null; t.stop(); }); } catch {} };
 // A headset pulled out mid-call: carry on with whichever microphone Windows falls back to
 function watchMic(stream) {
@@ -205,11 +257,16 @@ const tones = {
   },
 };
 
-// ── Who is speaking: how loud each side is, a few times a second ──────────────
+
+// ── Who is speaking: how loud each person is, a few times a second ────────────
+// levels: { me, <link id>: ... }. Watchers get (you, the first person, everyone).
 const meter = {
-  taps: {}, timer: null, levels: { me: 0, peer: 0 }, watchers: new Set(),
+  taps: {}, timer: null, levels: { me: 0 }, watchers: new Set(),
   watch(fn) { meter.watchers.add(fn); return () => meter.watchers.delete(fn); },
-  tell() { meter.watchers.forEach((w) => { try { w(meter.levels.me, meter.levels.peer); } catch {} }); },
+  tell() {
+    const lead = meter.levels[first()?.id] || 0;
+    meter.watchers.forEach((w) => { try { w(meter.levels.me || 0, lead, meter.levels); } catch {} });
+  },
   listen(side, stream) {
     meter.drop(side);
     const ctx = sound();
@@ -224,7 +281,7 @@ const meter = {
     if (!meter.timer) meter.timer = setInterval(meter.read, 90);
   },
   read() {
-    for (const side of ["me", "peer"]) {
+    for (const side of Object.keys(meter.taps)) {
       const tap = meter.taps[side];
       let level = 0;
       if (tap && !(side === "me" && state.call?.muted)) {
@@ -233,40 +290,48 @@ const meter = {
         for (let i = 0; i < tap.data.length; i++) sum += tap.data[i] * tap.data[i];
         level = Math.min(1, Math.sqrt(sum / tap.data.length) * 7); // speech sits around 0.05-0.15
       }
-      const was = meter.levels[side];
+      const was = meter.levels[side] || 0;
       meter.levels[side] = level > was ? level : was * 0.72; // jump up, ease down
       if (meter.levels[side] < 0.02) meter.levels[side] = 0;
     }
     meter.tell();
   },
-  drop(side) { const tap = meter.taps[side]; if (tap) { try { tap.source.disconnect(); } catch {} delete meter.taps[side]; } },
-  stop() { clearInterval(meter.timer); meter.timer = null; meter.drop("me"); meter.drop("peer"); meter.levels = { me: 0, peer: 0 }; meter.tell(); },
+  drop(side) { const tap = meter.taps[side]; if (tap) { try { tap.source.disconnect(); } catch {} delete meter.taps[side]; } delete meter.levels[side]; },
+  stop() { clearInterval(meter.timer); meter.timer = null; for (const side of Object.keys(meter.taps)) meter.drop(side); meter.levels = { me: 0 }; meter.tell(); },
 };
 
 // ── Ending and tidying up ─────────────────────────────────────────────────────
+// One link: its connection closes and its sound stops. What you send (microphone, camera, screen) is shared.
+function closeLink(L) {
+  if (!L || L.closed) return;
+  L.closed = true;
+  dropBoost(L);
+  meter.drop(L.id || "");
+  Object.values(L.timers).forEach((t) => { clearTimeout(t); clearInterval(t); });
+  try { if (L.dc) { L.dc.onmessage = null; L.dc.onopen = null; } } catch {}
+  try { if (L.pc) { L.pc.onicecandidate = null; L.pc.ontrack = null; L.pc.ondatachannel = null; L.pc.oniceconnectionstatechange = null; } } catch {}
+  // After "bye" the connection is given a moment before it closes, so the word gets out
+  const close = () => { try { L.dc?.close(); } catch {} try { L.pc?.close(); } catch {} };
+  if (L.saidBye) setTimeout(close, 250); else close();
+  if (L.audio) { try { L.audio.pause(); L.audio.srcObject = null; } catch {} }
+}
 function cleanup() {
-  dropBoost();
   const r = rtc;
   rtc = null;
-  remember("");
+  remember([]);
   tones.stop();
   meter.stop();
   if (!r) return;
   Object.values(r.timers).forEach((t) => { clearTimeout(t); clearInterval(t); });
-  try { if (r.dc) { r.dc.onmessage = null; r.dc.onopen = null; } } catch {}
-  try { if (r.pc) { r.pc.onicecandidate = null; r.pc.ontrack = null; r.pc.ondatachannel = null; r.pc.oniceconnectionstatechange = null; } } catch {}
-  // After "bye" the connection is given a moment before it closes, so the word gets out
-  const close = () => { try { r.dc?.close(); } catch {} try { r.pc?.close(); } catch {} };
-  if (r.saidBye) setTimeout(close, 250); else close();
-  stopStream(r.mic); // the microphone goes off straight away either way
+  for (const L of r.links) closeLink(L);
+  stopStream(r.mic); // the microphone goes off straight away
   stopStream(r.screen); // and so does your screen, if you were sharing it
   stopStream(r.cam); // and your camera (Added by aura-call-camera-setup.cjs)
   stopStream(r.camRaw); // (the camera itself: Added by aura-camera-backgrounds-setup.cjs)
-  if (r.audio) { try { r.audio.pause(); r.audio.srcObject = null; } catch {} }
   rest();
 }
-function sayBye() {
-  try { if (rtc?.dc?.readyState === "open") { rtc.dc.send('{"t":"bye"}'); rtc.saidBye = true; } } catch {}
+function sayBye(L) {
+  for (const l of L ? [L] : links()) { try { if (l.dc?.readyState === "open") { l.dc.send('{"t":"bye"}'); l.saidBye = true; } } catch {} }
 }
 // The call is finished. With a note ("Alex declined"), the bar stays a moment to say so.
 function over(note) {
@@ -275,186 +340,222 @@ function over(note) {
   if (!state.call) return;
   tones.ended();
   if (!note) return setCall(null);
-  patch({ phase: "over", note, busy: false });
+  patch({ phase: "over", note, busy: false, others: [] });
   setTimeout(() => { if (session === shown) setCall(null); }, NOTE_MS);
 }
-// The two PCs couldn't reach each other, or lost each other
-function fail(lost) {
-  const c = state.call;
-  if (!c) return;
-  if (c.id) ask("endCall", c.id, "failed").catch(() => {});
-  toast(lost ? `Your call with ${c.peer.username} dropped. Check your connection and call again.` : `Couldn't connect your call with ${c.peer.username}. One of your networks may be blocking direct calls.`, "err");
+// Is anyone else still in the call (connected, or connecting)?
+const othersBesides = (L) => links().filter((l) => l !== L && !ringingPhase(l.v.phase));
+// One person has left a call with 3 people: carry on with the rest. If nobody is left, the call is over.
+function dropLink(L, note) {
+  if (!alive(L)) return;
+  const wasFirst = first() === L;
+  rtc.links = rtc.links.filter((l) => l !== L);
+  closeLink(L);
+  const talking = rtc.links.filter((l) => !ringingPhase(l.v.phase));
+  if (!talking.length) {
+    // Only someone still being rung is left (you added them, then the others left): stop ringing them too
+    for (const l of rtc.links) { if (l.id) ask("endCall", l.id).catch(() => {}); }
+    return over(note || "Call ended");
+  }
+  // Whoever is first now is the one the call box is named after
+  if (wasFirst) rtc.links = [...talking, ...rtc.links.filter((l) => ringingPhase(l.v.phase))];
+  rememberAll();
+  compose();
+}
+// That person's PC and yours couldn't reach each other, or lost each other
+function fail(L, lost) {
+  if (!alive(L) || !state.call) return;
+  const name = L.peer.username;
+  if (L.id) ask("endCall", L.id, "failed").catch(() => {});
+  if (othersBesides(L).length) {
+    toast(lost ? `Your connection with ${name} dropped.` : L.joined || L.invited ? `Couldn't connect you to ${name}. They may need to update AURA, or a network is blocking direct calls.` : `Couldn't connect you to ${name}.`, "err");
+    return dropLink(L);
+  }
+  toast(lost ? `Your call with ${name} dropped. Check your connection and call again.` : `Couldn't connect your call with ${name}. One of your networks may be blocking direct calls.`, "err");
   over(lost ? "Call lost" : "Couldn't connect");
 }
 
-// ── Connecting the two PCs ────────────────────────────────────────────────────
-async function send(kind, data) {
-  const c = state.call, mine = session;
-  if (!c?.id) return;
+// ── Connecting the PCs ────────────────────────────────────────────────────────
+async function send(L, kind, data) {
+  const mine = session;
+  if (!alive(L) || !L.id) return;
   const body = JSON.stringify(data);
   // A hiccup on the way to Supabase shouldn't cost the call: try a few times. If Supabase
   // refuses it (the call has just ended, say), trying again won't help, and the next check-in says so.
   for (let attempt = 0; attempt < 3; attempt++) {
-    try { await ask("callSignal", c.id, kind, body); return; }
+    try { await ask("callSignal", L.id, kind, body); return; }
     catch (e) { if (/isn't connected|isn't your call|valid call message|too long|Too many|not logged in/i.test(e?.message || "")) return; }
     await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
-    if (mine !== session) return;
+    if (mine !== session || !alive(L)) return;
   }
 }
-function queueIce(candidate) {
-  if (!rtc) return;
-  rtc.outIce.push(candidate);
-  if (rtc.timers.ice) return;
+function queueIce(L, candidate) {
+  if (!alive(L)) return;
+  L.outIce.push(candidate);
+  if (L.timers.ice) return;
   const mine = session;
   // A PC finds several routes within moments of each other: send them together
-  rtc.timers.ice = setTimeout(function flush() {
-    if (mine !== session || !rtc) return;
-    rtc.timers.ice = null;
-    const batch = rtc.outIce.splice(0, 20);
-    if (batch.length) send("ice", batch);
-    if (rtc.outIce.length) rtc.timers.ice = setTimeout(flush, 120);
+  L.timers.ice = setTimeout(function flush() {
+    if (mine !== session || !alive(L)) return;
+    L.timers.ice = null;
+    const batch = L.outIce.splice(0, 20);
+    if (batch.length) send(L, "ice", batch);
+    if (L.outIce.length) L.timers.ice = setTimeout(flush, 120);
   }, 120);
 }
-function playRemote(stream) {
-  if (!rtc) return;
-  if (!rtc.audio) { rtc.audio = new Audio(); rtc.audio.autoplay = true; }
-  rtc.audio.srcObject = stream;
-  if (prefs.speaker && typeof rtc.audio.setSinkId === "function") rtc.audio.setSinkId(prefs.speaker).catch(() => {});
-  applyVolume();
-  rtc.audio.play().catch(() => {});
-  meter.listen("peer", stream);
+function playRemote(L, stream) {
+  if (!alive(L)) return;
+  if (!L.audio) { L.audio = new Audio(); L.audio.autoplay = true; }
+  L.audio.srcObject = stream;
+  if (prefs.speaker && typeof L.audio.setSinkId === "function") L.audio.setSinkId(prefs.speaker).catch(() => {});
+  applyVolume(L);
+  L.audio.play().catch(() => {});
+  meter.listen(L.id, stream);
 }
 
 // Their volume. Up to 100% the call plays as it is. Above that it is made louder on the way to
 // your speakers, with a limiter so loud moments don't crackle. (The <audio> element still has to
 // play the call, muted, or the sound stops arriving.)
-function applyVolume() {
-  const a = rtc?.audio;
+function applyVolume(L) {
+  if (!L) { links().forEach(applyVolume); return; }
+  const a = L.audio;
   if (!a) return;
   const v = prefs.volume;
   const stream = a.srcObject;
-  const plain = (level) => { dropBoost(); a.muted = false; a.volume = Math.min(1, Math.max(0, level)); };
+  const plain = (level) => { dropBoost(L); a.muted = false; a.volume = Math.min(1, Math.max(0, level)); };
   if (v <= 1 || !stream) return plain(v);
   const ctx = sound();
   if (!ctx) return plain(1);
   try {
-    if (!rtc.boost || rtc.boost.stream !== stream) {
-      dropBoost();
+    if (!L.boost || L.boost.stream !== stream) {
+      dropBoost(L);
       const source = ctx.createMediaStreamSource(stream);
       const gain = ctx.createGain();
       const limiter = ctx.createDynamicsCompressor();
       limiter.threshold.value = -3; limiter.knee.value = 4; limiter.ratio.value = 20; limiter.attack.value = 0.002; limiter.release.value = 0.12;
       source.connect(gain); gain.connect(limiter); limiter.connect(ctx.destination);
-      rtc.boost = { stream, source, gain, limiter };
+      L.boost = { stream, source, gain, limiter };
     }
-    rtc.boost.gain.gain.setTargetAtTime(v, ctx.currentTime, 0.03);
+    L.boost.gain.gain.setTargetAtTime(v, ctx.currentTime, 0.03);
     a.volume = 1;
     a.muted = true;
   } catch { plain(1); }
 }
-function dropBoost() {
-  const b = rtc?.boost;
+function dropBoost(L) {
+  const b = L?.boost;
   if (!b) return;
-  rtc.boost = null;
+  L.boost = null;
   for (const node of [b.source, b.gain, b.limiter]) { try { node.disconnect(); } catch {} }
 }
-function wireChannel(dc) {
-  // Says whether you're muted, and that this AURA can share screens (an older AURA ignores that).
-  // The PC that answers gets the channel already open, so it says so straight away.
-  const hello = () => { try { dc.send(JSON.stringify({ t: "mute", on: !!state.call?.muted })); dc.send('{"t":"hello","screen":1,"cam":1}'); } catch {} };
+function wireChannel(L, dc) {
+  // Says whether you're muted, and what this AURA can do: share screens, cameras, calls with 3 people
+  // (an older AURA ignores what it doesn't know). The PC that answers gets the channel already open,
+  // so it says so straight away.
+  const hello = () => { try { dc.send(JSON.stringify({ t: "mute", on: !!state.call?.muted })); dc.send('{"t":"hello","screen":1,"cam":1,"group":1}'); } catch {} };
   dc.onopen = hello;
   if (dc.readyState === "open") hello();
   dc.onmessage = (e) => {
+    if (!alive(L)) return;
     let m = null;
     try { m = JSON.parse(e.data); } catch { return; }
-    if (m?.t === "mute") patch({ peerMuted: !!m.on });
-    else if (m?.t === "hello" && m.screen) { if (m.cam && rtc) rtc.peerCam = true; addScreenLane(); } // (camera: Added by aura-call-camera-setup.cjs)
-    else if (m?.t === "screen") patch({ peerSharing: !!m.on });
-    else if (m?.t === "cam") patch({ peerCamOn: !!m.on });
+    if (m?.t === "mute") setLink(L, { peerMuted: !!m.on });
+    else if (m?.t === "hello" && m.screen) {
+      if (m.cam) L.peerCam = true; // (camera: Added by aura-call-camera-setup.cjs)
+      L.peerGroup = !!m.group;
+      // Someone you added on an older AURA only connects to you: say so
+      if (L.invited && !L.peerGroup && !L.oldApp) { L.oldApp = true; compose(); toast(`${L.peer.username} is on an older AURA, so only you can hear them. Ask them to update.`, "err"); }
+      addScreenLane(L);
+    }
+    else if (m?.t === "hello" && L.invited && !L.oldApp) { L.oldApp = true; compose(); toast(`${L.peer.username} is on an older AURA, so only you can hear them. Ask them to update.`, "err"); }
+    else if (m?.t === "screen") { setLink(L, { peerSharing: !!m.on }); bump("screenRev"); }
+    else if (m?.t === "cam") { setLink(L, { peerCamOn: !!m.on }); bump("camRev"); }
     else if (m?.t === "bye" && state.call && state.call.phase !== "over") {
       // They hung up. No need to wait for Supabase to say so, and in case their hang-up never
       // reached it, say it from this side too (ending a call twice does no harm).
-      if (state.call.id) ask("endCall", state.call.id).catch(() => {});
-      over("Call ended");
+      if (L.id) ask("endCall", L.id).catch(() => {});
+      if (othersBesides(L).length) { toast(`${L.peer.username} left the call`); dropLink(L); }
+      else over("Call ended");
     }
   };
 }
-function buildPeer() {
+function buildPeer(L) {
   const mine = session;
   let pc = null;
   try { pc = new RTCPeerConnection({ iceServers: rtc.config?.iceServers?.length ? rtc.config.iceServers : FALLBACK_SERVERS, bundlePolicy: "max-bundle" }); }
   catch { pc = new RTCPeerConnection({ iceServers: FALLBACK_SERVERS, bundlePolicy: "max-bundle" }); } // a server address this PC won't take: use the standard ones
-  rtc.pc = pc;
+  L.pc = pc;
   for (const track of rtc.mic.getAudioTracks()) pc.addTrack(track, rtc.mic);
-  meter.listen("me", rtc.mic);
-  watchMic(rtc.mic);
-  pc.onicecandidate = (e) => { if (mine === session && e.candidate) queueIce(e.candidate.toJSON()); };
+  if (!meter.taps.me) meter.listen("me", rtc.mic);
+  pc.onicecandidate = (e) => { if (mine === session && e.candidate) queueIce(L, e.candidate.toJSON()); };
   pc.ontrack = (e) => {
-    if (mine !== session) return;
+    if (mine !== session || !alive(L)) return;
     if (e.track.kind === "video") {
-      if (!rtc) return;
       // The second picture lane is their camera; the first is their screen (Added by aura-call-camera-setup.cjs)
-      if (videoLanes()[1] && e.transceiver === videoLanes()[1]) { rtc.remoteCam = new MediaStream([e.track]); patch({ camRev: (state.call?.camRev || 0) + 1 }); return; }
-      rtc.remoteVideo = new MediaStream([e.track]); patch({ screenRev: (state.call?.screenRev || 0) + 1 }); return; // their screen
+      const lanes = videoLanes(L);
+      if (lanes[1] && e.transceiver === lanes[1]) { L.remoteCam = new MediaStream([e.track]); bump("camRev"); return; }
+      L.remoteVideo = new MediaStream([e.track]); bump("screenRev"); return; // their screen
     }
-    playRemote(e.streams[0] || new MediaStream([e.track]));
+    playRemote(L, e.streams[0] || new MediaStream([e.track]));
   };
-  pc.ondatachannel = (e) => { if (mine === session && rtc) { rtc.dc = e.channel; wireChannel(e.channel); } };
-  pc.oniceconnectionstatechange = () => { if (mine === session) onLink(pc.iceConnectionState); };
+  pc.ondatachannel = (e) => { if (mine === session && alive(L)) { L.dc = e.channel; wireChannel(L, e.channel); } };
+  pc.oniceconnectionstatechange = () => { if (mine === session) onLink(L, pc.iceConnectionState); };
   // Anything the other PC sent before this one was ready
-  const early = rtc.early.splice(0);
-  for (const signal of early) rtc.queue = rtc.queue.then(() => handle(signal)).catch(() => {});
+  const early = L.early.splice(0);
+  for (const signal of early) L.queue = L.queue.then(() => handle(L, signal)).catch(() => {});
 }
-function onLink(link) {
+function onLink(L, link) {
   const c = state.call;
-  if (!c || !rtc) return;
+  if (!c || !alive(L)) return;
   if (link === "connected" || link === "completed") {
-    clearTimeout(rtc.timers.connect); clearTimeout(rtc.timers.reconnect); clearTimeout(rtc.timers.nudge);
-    rtc.timers.reconnect = null;
-    rtc.restarts = 0;
-    if (c.phase !== "live") patch({ phase: "live", since: c.since || Date.now() });
-    if (!rtc.wasLive) { rtc.wasLive = true; tones.connected(); }
+    clearTimeout(L.timers.connect); clearTimeout(L.timers.reconnect); clearTimeout(L.timers.nudge);
+    L.timers.reconnect = null;
+    L.restarts = 0;
+    const joining = !L.wasLive && first() !== L;
+    if (L.v.phase !== "live") setLink(L, { phase: "live" });
+    if (!state.call.since) patch({ since: Date.now() });
+    if (!L.wasLive) { L.wasLive = true; if (!rtc.wasLive || joining) tones.connected(); rtc.wasLive = true; }
+    if (joining) toast(`${L.peer.username} joined the call`);
     return;
   }
   if (link !== "disconnected" && link !== "failed") return;
-  if (c.phase === "live") {
-    patch({ phase: "reconnecting" });
-    if (!rtc.timers.reconnect) { const mine = session; rtc.timers.reconnect = setTimeout(() => { if (mine === session) fail(true); }, RECONNECT_MS); }
+  if (L.v.phase === "live") {
+    setLink(L, { phase: "reconnecting" });
+    if (!L.timers.reconnect) { const mine = session; L.timers.reconnect = setTimeout(() => { if (mine === session) fail(L, true); }, RECONNECT_MS); }
   }
   // The caller's PC proposes a fresh route. Straight away if the old one is dead, after a pause if it may recover.
-  if (!c.outgoing) return;
+  if (!L.outgoing) return;
   const mine = session;
-  clearTimeout(rtc.timers.nudge);
-  rtc.timers.nudge = setTimeout(() => {
-    if (mine !== session || !rtc?.pc || rtc.restarts >= 3) return;
-    const now = rtc.pc.iceConnectionState;
+  clearTimeout(L.timers.nudge);
+  L.timers.nudge = setTimeout(() => {
+    if (mine !== session || !alive(L) || !L.pc || L.restarts >= 3) return;
+    const now = L.pc.iceConnectionState;
     if (now !== "disconnected" && now !== "failed") return;
-    rtc.restarts++;
-    offer(true);
+    L.restarts++;
+    offer(L, true);
   }, link === "failed" ? 0 : 4000);
 }
-async function offer(restart) {
-  const mine = session, pc = rtc?.pc;
+async function offer(L, restart) {
+  const mine = session, pc = L?.pc;
   if (!pc) return;
   try {
     const made = await pc.createOffer(restart ? { iceRestart: true } : undefined);
-    if (mine !== session) return;
+    if (mine !== session || !alive(L)) return;
     await pc.setLocalDescription(made);
-    if (mine !== session) return;
-    await send("offer", { sdp: pc.localDescription.sdp });
-  } catch { if (mine === session && !restart) fail(false); }
+    if (mine !== session || !alive(L)) return;
+    await send(L, "offer", { sdp: pc.localDescription.sdp });
+  } catch { if (mine === session && !restart) fail(L, false); }
 }
 // Something the other PC sent: its side of the connection, or a route to reach it.
 // It comes from the other person's PC, so it is checked before it is used.
-async function handle(signal) {
-  const mine = session, c = state.call;
-  if (!rtc || !c) return;
-  const pc = rtc.pc;
-  if (!pc) { rtc.early.push(signal); return; }
+async function handle(L, signal) {
+  const mine = session;
+  if (!alive(L) || !state.call) return;
+  const pc = L.pc;
+  if (!pc) { L.early.push(signal); return; }
   let data = null;
   try { data = JSON.parse(signal.payload); } catch { return; }
-  const drain = async () => { for (const cand of rtc.pendingIce.splice(0)) { try { await pc.addIceCandidate(cand); } catch {} } };
-  if (signal.kind === "offer" && !c.outgoing) {
+  const drain = async () => { for (const cand of L.pendingIce.splice(0)) { try { await pc.addIceCandidate(cand); } catch {} } };
+  if (signal.kind === "offer" && !L.outgoing) {
     if (typeof data?.sdp !== "string") return;
     await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
     if (mine !== session) return;
@@ -466,20 +567,20 @@ async function handle(signal) {
     if (mine !== session) return;
     await pc.setLocalDescription(answer);
     if (mine !== session) return;
-    await send("answer", { sdp: pc.localDescription.sdp });
-    screenReady();
-  } else if (signal.kind === "answer" && c.outgoing) {
+    await send(L, "answer", { sdp: pc.localDescription.sdp });
+    screenReady(L);
+  } else if (signal.kind === "answer" && L.outgoing) {
     if (typeof data?.sdp !== "string" || pc.signalingState !== "have-local-offer") return;
     await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
     if (mine !== session) return;
     await drain();
-    screenReady();
+    screenReady(L);
   } else if (signal.kind === "ice") {
     for (const cand of (Array.isArray(data) ? data : [data]).slice(0, 40)) {
       if (!cand || typeof cand.candidate !== "string" || cand.candidate.length > 1000) continue;
       const route = { candidate: cand.candidate, sdpMid: typeof cand.sdpMid === "string" ? cand.sdpMid : null, sdpMLineIndex: Number.isInteger(cand.sdpMLineIndex) ? cand.sdpMLineIndex : null };
       if (typeof cand.usernameFragment === "string") route.usernameFragment = cand.usernameFragment;
-      if (pc.remoteDescription) { try { await pc.addIceCandidate(route); } catch {} } else rtc.pendingIce.push(route);
+      if (pc.remoteDescription) { try { await pc.addIceCandidate(route); } catch {} } else L.pendingIce.push(route);
     }
   }
 }
@@ -487,114 +588,174 @@ async function handle(signal) {
 // Calls start with sound only, so they work with friends on an older AURA. Once both PCs say
 // they can share screens, the caller's PC adds a lane for a picture, in both directions. After
 // that, starting and stopping a share just puts a picture on the lane or takes it off.
-const videoLanes = () => rtc?.pc?.getTransceivers().filter((tr) => tr.receiver?.track?.kind === "video" && !tr.stopped && tr.currentDirection !== "stopped") || [];
-const videoLane = () => videoLanes()[0] || null;
-const camLane = () => videoLanes()[1] || null; // your camera and theirs (Added by aura-call-camera-setup.cjs)
-function screenReady() {
-  const lane = videoLane();
-  const ok = !!lane && lane.currentDirection === "sendrecv";
-  if (ok && state.call && !state.call.canShare) patch({ canShare: true });
-  const cam = camLane();
-  if (cam && cam.currentDirection === "sendrecv" && state.call && !state.call.canCam) patch({ canCam: true });
+const videoLanes = (L) => L?.pc?.getTransceivers().filter((tr) => tr.receiver?.track?.kind === "video" && !tr.stopped && tr.currentDirection !== "stopped") || [];
+const videoLane = (L) => videoLanes(L)[0] || null;
+const camLane = (L) => videoLanes(L)[1] || null; // your camera and theirs (Added by aura-call-camera-setup.cjs)
+const ready = (lane) => !!lane && lane.currentDirection === "sendrecv";
+function screenReady(L) {
+  if (!alive(L)) return;
+  const p = {};
+  if (ready(videoLane(L)) && !L.v.canShare) p.canShare = true;
+  if (ready(camLane(L)) && !L.v.canCam) p.canCam = true;
+  if (p.canShare || p.canCam) setLink(L, p);
+  sendMine(L);
 }
-async function addScreenLane() {
-  const c = state.call, mine = session;
-  if (!rtc?.pc || !c?.outgoing || videoLane()) return;
-  // Wait for any connection change already under way to finish
-  for (let i = 0; i < 40 && rtc?.pc && rtc.pc.signalingState !== "stable"; i++) { await new Promise((r) => setTimeout(r, 250)); if (mine !== session) return; }
-  if (!rtc?.pc || rtc.pc.signalingState !== "stable" || videoLane()) return;
+// Someone who joins while you're sharing your screen or your camera gets it too
+async function sendMine(L) {
+  if (!alive(L)) return;
+  const screen = rtc.screen?.getVideoTracks()[0], cam = rtc.cam?.getVideoTracks()[0];
+  const lane = videoLane(L), camL = camLane(L);
+  if (screen && ready(lane) && lane.sender.track !== screen) {
+    try { await lane.sender.replaceTrack(screen); await tune(lane, SHARE_MODES[prefs.shareMode] || SHARE_MODES.auto); tell(L, { t: "screen", on: true }); } catch {}
+  }
+  if (cam && ready(camL) && camL.sender.track !== cam) {
+    try { await camL.sender.replaceTrack(cam); await tune(camL, null); tell(L, { t: "cam", on: true }); } catch {}
+  }
+}
+// How much picture a lane may send: a screen share's quality, or the camera's
+async function tune(lane, mode) {
   try {
-    rtc.pc.addTransceiver("video", { direction: "sendrecv" });
-    if (rtc.peerCam) rtc.pc.addTransceiver("video", { direction: "sendrecv" }); // a second lane for cameras, when both can (Added by aura-call-camera-setup.cjs)
-    preferCodecs(rtc.pc); // (Added by aura-quality-setup.cjs)
-    const made = await rtc.pc.createOffer();
-    if (mine !== session) return;
-    await rtc.pc.setLocalDescription(made);
-    if (mine !== session) return;
-    await send("offer", { sdp: rtc.pc.localDescription.sdp });
-  } catch {} // no screen share on this call, but the call itself carries on
+    const p = lane.sender.getParameters();
+    if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+    p.encodings[0].maxBitrate = mode ? mode.bitrate : CAM_MAX_BITRATE;
+    p.encodings[0].maxFramerate = mode ? mode.fps : 30;
+    p.degradationPreference = mode ? mode.prefer : "balanced";
+    await lane.sender.setParameters(p);
+  } catch {}
 }
-function tell(message) { try { if (rtc?.dc?.readyState === "open") rtc.dc.send(JSON.stringify(message)); } catch {} }
+async function addScreenLane(L) {
+  const mine = session;
+  if (!alive(L) || !L.pc || !L.outgoing || videoLane(L)) return;
+  // Wait for any connection change already under way to finish
+  for (let i = 0; i < 40 && alive(L) && L.pc.signalingState !== "stable"; i++) { await new Promise((r) => setTimeout(r, 250)); if (mine !== session) return; }
+  if (!alive(L) || L.pc.signalingState !== "stable" || videoLane(L)) return;
+  try {
+    L.pc.addTransceiver("video", { direction: "sendrecv" });
+    if (L.peerCam) L.pc.addTransceiver("video", { direction: "sendrecv" }); // a second lane for cameras, when both can (Added by aura-call-camera-setup.cjs)
+    preferCodecs(L.pc); // (Added by aura-quality-setup.cjs)
+    const made = await L.pc.createOffer();
+    if (mine !== session || !alive(L)) return;
+    await L.pc.setLocalDescription(made);
+    if (mine !== session || !alive(L)) return;
+    await send(L, "offer", { sdp: L.pc.localDescription.sdp });
+  } catch {} // no screen share with them, but the call itself carries on
+}
+function tell(L, message) {
+  for (const l of L ? [L] : links()) { try { if (l.dc?.readyState === "open") l.dc.send(JSON.stringify(message)); } catch {} }
+}
 
 function onSignal(callId, signal) {
-  const c = state.call;
-  if (!c || !rtc || c.id !== callId || !signal || !(signal.id > 0) || rtc.seen.has(signal.id)) return;
-  rtc.seen.add(signal.id);
-  rtc.queue = rtc.queue.then(() => handle(signal)).catch(() => {}); // one at a time, in the order they came
+  const L = linkById(callId);
+  if (!L || !state.call || !signal || !(signal.id > 0) || L.seen.has(signal.id)) return;
+  L.seen.add(signal.id);
+  L.queue = L.queue.then(() => handle(L, signal)).catch(() => {}); // one at a time, in the order they came
 }
 
-// Where the call stands, according to Supabase
-function applyStatus(call) {
+// Where one link stands, according to Supabase
+function applyStatus(L, call) {
   const c = state.call;
-  if (!c || c.id !== call.id || c.phase === "over") return;
-  if (call.status === "active" && c.outgoing && c.phase === "ringing") return void connect();
-  if (call.status === "active" && !c.outgoing && c.phase === "ringing" && !rtc?.accepting) return over(""); // you answered it in AURA on another PC
+  if (!c || !alive(L) || c.phase === "over") return;
+  if (call.groupId && L.groupId !== call.groupId) { L.groupId = call.groupId; compose(); }
+  if (call.status === "active" && L.outgoing && L.v.phase === "ringing") return void connect(L);
+  if (call.status === "active" && !L.outgoing && L.v.phase === "ringing" && !L.accepting) return othersBesides(L).length ? dropLink(L) : over(""); // you answered it in AURA on another PC
   if (call.status !== "ended") return;
-  const name = c.peer.username;
-  const note = call.reason === "declined" ? (c.outgoing ? `${name} declined` : "")
-    : call.reason === "missed" || call.reason === "cancelled" ? (c.outgoing ? `${name} didn't answer` : `Missed call from ${name}`)
+  const name = L.peer.username;
+  const ringing = L.v.phase === "ringing" || L.v.phase === "starting";
+  if (othersBesides(L).length) {
+    // One person in a call with 3: the rest carry on
+    toast(call.reason === "declined" && ringing ? `${name} declined` : ringing && L.outgoing ? `${name} didn't answer` : call.reason === "failed" ? `${name}'s connection dropped` : `${name} left the call`);
+    return dropLink(L);
+  }
+  const note = call.reason === "declined" ? (L.outgoing ? `${name} declined` : "")
+    : call.reason === "missed" || call.reason === "cancelled" ? (L.outgoing ? `${name} didn't answer` : `Missed call from ${name}`)
     : call.reason === "failed" ? "Call lost" : "Call ended";
   over(note);
 }
-// While a call rings or connects, ask how it stands every few seconds. Live updates normally get
+// While a link rings or connects, ask how it stands every few seconds. Live updates normally get
 // there first; this makes sure a call can't be stuck ringing if one goes missing.
-function startChecking() {
+function startChecking(L) {
   const mine = session;
-  clearInterval(rtc.timers.poll);
-  rtc.timers.poll = setInterval(async () => {
-    const c = state.call;
-    if (mine !== session || !rtc || !c?.id || c.phase === "live" || c.phase === "over") return;
+  clearInterval(L.timers.poll);
+  L.timers.poll = setInterval(async () => {
+    if (mine !== session || !alive(L) || !L.id || L.v.phase === "live") return;
     try {
-      const { call, signals } = await ask("callState", c.id, rtc.polled);
-      if (mine !== session || !rtc) return;
-      if (!call) return over("Call ended");
-      for (const s of signals || []) { rtc.polled = Math.max(rtc.polled, s.id); onSignal(c.id, s); }
-      applyStatus(call);
+      const { call, signals } = await ask("callState", L.id, L.polled);
+      if (mine !== session || !alive(L)) return;
+      if (!call) return applyStatus(L, { id: L.id, status: "ended", reason: "hangup" });
+      for (const s of signals || []) { L.polled = Math.max(L.polled, s.id); onSignal(L.id, s); }
+      applyStatus(L, call);
     } catch {}
   }, POLL_MS);
 }
+// While talking, tell Supabase "still here" for each person you're talking with
 function startBeating() {
   const mine = session;
-  clearInterval(rtc.timers.beat);
-  rtc.timers.beat = setInterval(async () => {
-    const c = state.call;
-    if (mine !== session || !c?.id) return;
-    try { if ((await ask("callBeat", c.id)) === "ended" && mine === session && state.call?.phase !== "over") over("Call ended"); } catch {}
+  if (rtc.timers.beat) return;
+  rtc.timers.beat = setInterval(() => {
+    if (mine !== session || !rtc) return;
+    for (const L of links()) {
+      if (!L.id || ringingPhase(L.v.phase)) continue;
+      ask("callBeat", L.id).then((now) => { if (now === "ended" && mine === session && alive(L) && state.call?.phase !== "over") applyStatus(L, { id: L.id, status: "ended", reason: "hangup" }); }).catch(() => {});
+    }
   }, BEAT_MS);
 }
-const armConnect = () => { const mine = session; clearTimeout(rtc.timers.connect); rtc.timers.connect = setTimeout(() => { if (mine === session) fail(false); }, CONNECT_MS); };
-
-// Your friend accepted: this PC (the caller's) proposes the connection
-async function connect() {
+const armConnect = (L) => { const mine = session; clearTimeout(L.timers.connect); L.timers.connect = setTimeout(() => { if (mine === session) fail(L, false); }, CONNECT_MS); };
+const findPerson = (userId) => {
+  const known = callHooks.person?.(userId);
+  return known ? { userId, username: known.username || "AURA friend", avatarUrl: known.avatarUrl || "" } : { userId, username: "AURA friend", avatarUrl: "" };
+};
+// A name and picture for someone AURA doesn't know yet (a friend's friend, in a call with 3)
+function lookUp(L) {
   const mine = session;
-  clearTimeout(rtc.timers.ring);
-  tones.stop();
-  patch({ phase: "connecting" });
-  armConnect();
+  if (callHooks.person?.(L.peer.userId)) return;
+  ask("getProfile", L.peer.userId).then((p) => { if (mine === session && alive(L) && p?.username) { L.peer = { userId: L.peer.userId, username: p.username, avatarUrl: p.avatarUrl || "" }; compose(); } }).catch(() => {});
+}
+
+// They accepted: this PC (the caller's) proposes the connection
+async function connect(L) {
+  const mine = session;
+  clearTimeout(L.timers.ring);
+  if (first() === L) tones.stop();
+  setLink(L, { phase: "connecting" });
+  armConnect(L);
   startBeating();
-  if (!rtc.config) { try { rtc.config = await ask("callConfig"); } catch {} if (mine !== session) return; }
-  buildPeer();
-  rtc.dc = rtc.pc.createDataChannel("aura");
-  wireChannel(rtc.dc);
-  await offer(false);
+  if (!rtc.config) { try { rtc.config = await ask("callConfig"); } catch {} if (mine !== session || !alive(L)) return; }
+  buildPeer(L);
+  L.dc = L.pc.createDataChannel("aura");
+  wireChannel(L, L.dc);
+  await offer(L, false);
+}
+// Someone joined the call you're in (they were added by the other person): their PC proposes the
+// connection, this one answers. Nothing rings: you're already in the call.
+function joinedBy(call) {
+  if (!rtc || links().length >= MAX_PEOPLE - 1 || linkById(call.id)) return;
+  const L = newLink({ id: call.id, peer: findPerson(call.peerId), outgoing: false, groupId: call.groupId, phase: "connecting", joined: true });
+  rtc.links.push(L);
+  compose();
+  rememberAll();
+  lookUp(L);
+  buildPeer(L);
+  armConnect(L);
+  startChecking(L); // picks up anything their PC sent before this one knew about the call
 }
 
 // A call is ringing for you
 function incoming(call) {
   const mine = ++session;
   cleanup();
-  const known = callHooks.person?.(call.peerId);
-  setCall({ id: call.id, peer: known || { userId: call.peerId, username: "AURA friend", avatarUrl: "" }, outgoing: false, phase: "ringing", since: 0, muted: false, peerMuted: false, note: "", busy: false });
   rtc = newRtc();
+  const L = newLink({ id: call.id, peer: findPerson(call.peerId), outgoing: false, groupId: call.groupId || null, phase: "ringing" });
+  rtc.links.push(L);
+  setCall({ id: call.id, peer: L.peer, outgoing: false, phase: "ringing", since: 0, muted: false, peerMuted: false, note: "", busy: false, groupId: call.groupId || null, others: [] });
   tones.ring();
-  if (!known) ask("getProfile", call.peerId).then((p) => { if (mine === session && p?.username) patch({ peer: { userId: call.peerId, username: p.username, avatarUrl: p.avatarUrl || "" } }); }).catch(() => {});
+  lookUp(L);
   ask("callConfig").then((cfg) => { if (mine === session && rtc) rtc.config = cfg; }).catch(() => {});
-  rtc.timers.ring = setTimeout(() => {
+  L.timers.ring = setTimeout(() => {
     if (mine !== session || state.call?.phase !== "ringing") return;
-    over(`Missed call from ${state.call.peer.username}`);
+    over(`Missed call from ${L.peer.username}`);
     ask("currentCall").catch(() => {}); // lets Supabase close the call and leave the missed-call note
   }, RING_IN_MS);
-  startChecking();
+  startChecking(L);
 }
 
 export const callActions = {
@@ -603,17 +764,21 @@ export const callActions = {
     if (!person?.userId) return;
     if (!callsAvailable()) return toast("Voice calls only work in the AURA desktop app.", "err");
     const busy = state.call && state.call.phase !== "over" ? state.call : null;
-    if (busy) return toast(busy.peer.userId === person.userId ? `You're already in a call with ${busy.peer.username}` : `Hang up your call with ${busy.peer.username} first`, "err");
+    if (busy) return toast(callPeople(busy).some((p) => p.userId === person.userId) ? `You're already in a call with ${person.username || busy.peer.username}` : `Hang up your call with ${namesOf(callPeople(busy)) || busy.peer.username} first`, "err");
     const mine = ++session;
     cleanup();
-    setCall({ id: null, peer: { userId: person.userId, username: person.username || "AURA friend", avatarUrl: person.avatarUrl || "" }, outgoing: true, phase: "starting", since: 0, muted: false, peerMuted: false, note: "", busy: false });
+    const peer = { userId: person.userId, username: person.username || "AURA friend", avatarUrl: person.avatarUrl || "" };
     rtc = newRtc();
+    const L = newLink({ peer, outgoing: true, phase: "starting" });
+    rtc.links.push(L);
+    setCall({ id: null, peer, outgoing: true, phase: "starting", since: 0, muted: false, peerMuted: false, note: "", busy: false, groupId: null, others: [] });
     // The microphone first, so a friend's AURA never rings for a call that can't happen
     let mic = null;
     try { mic = await openMic(); }
     catch (e) { if (mine === session) { cleanup(); setCall(null); toast(micProblem(e), "err"); } return; }
     if (mine !== session) return stopStream(mic); // cancelled while Windows was opening the microphone
     rtc.mic = mic;
+    watchMic(mic);
     let call = null;
     try { call = await ask("startCall", person.userId); }
     catch (e) {
@@ -622,55 +787,118 @@ export const callActions = {
       callActions.resume(); // if it was refused because someone is ringing you, show their call
       return;
     }
-    if (mine !== session) { ask("endCall", call.id).catch(() => {}); return; }
-    patch({ id: call.id, phase: "ringing" });
-    remember(call.id);
+    if (mine !== session || !alive(L)) { ask("endCall", call.id).catch(() => {}); return; }
+    L.id = call.id;
+    setLink(L, { phase: "ringing" });
+    rememberAll();
     tones.ringback();
-    rtc.timers.ring = setTimeout(() => {
-      if (mine !== session || state.call?.phase !== "ringing") return;
+    L.timers.ring = setTimeout(() => {
+      if (mine !== session || !alive(L) || L.v.phase !== "ringing") return;
       ask("endCall", call.id, "missed").catch(() => {});
-      over(`${state.call.peer.username} didn't answer`);
+      over(`${L.peer.username} didn't answer`);
     }, RING_OUT_MS);
-    startChecking();
+    startChecking(L);
     ask("callConfig").then((cfg) => { if (mine === session && rtc) rtc.config = cfg; }).catch(() => {});
   },
 
   async accept() {
-    const c = state.call;
-    if (!c || c.outgoing || c.phase !== "ringing" || !rtc || rtc.accepting) return;
+    const c = state.call, L = first();
+    if (!c || !L || L.outgoing || c.phase !== "ringing" || L.accepting) return;
     const mine = session;
-    rtc.accepting = true;
+    L.accepting = true;
     patch({ busy: true });
     let mic = null;
     try { mic = await openMic(); }
     catch (e) {
       // Keeps ringing: you can sort the microphone out and accept again, or decline
-      if (mine === session && rtc) { rtc.accepting = false; patch({ busy: false }); toast(micProblem(e), "err"); }
+      if (mine === session && alive(L)) { L.accepting = false; patch({ busy: false }); toast(micProblem(e), "err"); }
       return;
     }
-    if (mine !== session || !rtc) return stopStream(mic);
+    if (mine !== session || !alive(L)) return stopStream(mic);
     rtc.mic = mic;
-    if (!rtc.config) { try { rtc.config = await ask("callConfig"); } catch {} if (mine !== session || !rtc) return; }
+    watchMic(mic);
+    if (!rtc.config) { try { rtc.config = await ask("callConfig"); } catch {} if (mine !== session || !alive(L)) return; }
     tones.stop();
-    clearTimeout(rtc.timers.ring);
-    buildPeer(); // ready for the caller's side before telling them the call is accepted
-    try { await ask("answerCall", c.id); }
+    clearTimeout(L.timers.ring);
+    buildPeer(L); // ready for the caller's side before telling them the call is accepted
+    let answered = null;
+    try { answered = await ask("answerCall", L.id); }
     catch (e) { if (mine === session) { toast(e.message, "err"); over(""); } return; }
-    if (mine !== session || !rtc) return;
-    remember(c.id);
+    if (mine !== session || !alive(L)) return;
+    rememberAll();
     startBeating();
     // On a fast network the two PCs may already be connected by the time Supabase answers
-    if (state.call.phase === "ringing") { patch({ phase: "connecting", busy: false }); armConnect(); }
-    else patch({ busy: false });
+    if (L.v.phase === "ringing") { setLink(L, { phase: "connecting" }); armConnect(L); }
+    patch({ busy: false });
+    // You were added to a call with someone else in it too: connect to them (Added by aura-group-calls-setup.cjs)
+    const group = answered?.groupId || L.groupId;
+    if (!group) return;
+    L.groupId = group;
+    let more = [];
+    try { more = (await ask("joinGroup", L.id)) || []; } catch {}
+    if (mine !== session || !rtc) return;
+    for (const call of more) {
+      if (!call?.id || linkById(call.id) || links().length >= MAX_PEOPLE - 1) continue;
+      const other = newLink({ id: call.id, peer: findPerson(call.peerId), outgoing: true, groupId: call.groupId || group, phase: "connecting", joined: true });
+      rtc.links.push(other);
+      lookUp(other);
+      connect(other);
+    }
+    rememberAll();
+    compose();
   },
 
-  // Decline a call that is ringing, cancel one you are making, or hang up
+  // Add a friend to the call you're in (Added by aura-group-calls-setup.cjs). It rings for them; once
+  // they answer, their AURA connects to everyone in the call.
+  async addPerson(person) {
+    const c = state.call;
+    if (!person?.userId || !c || !rtc || (c.phase !== "live" && c.phase !== "reconnecting")) return;
+    if (links().some((l) => l.peer.userId === person.userId)) return toast(`${person.username} is already in the call.`, "err");
+    if (links().length >= MAX_PEOPLE - 1) return toast(`Calls can have up to ${MAX_PEOPLE} people.`, "err");
+    const base = links().find((l) => l.v.phase === "live") || links().find((l) => !ringingPhase(l.v.phase));
+    if (!base?.id) return;
+    const mine = session;
+    const L = newLink({ peer: { userId: person.userId, username: person.username || "AURA friend", avatarUrl: person.avatarUrl || "" }, outgoing: true, phase: "starting", invited: true });
+    rtc.links.push(L);
+    compose();
+    let call = null;
+    try { call = await ask("addToCall", base.id, person.userId); }
+    catch (e) {
+      if (mine === session && alive(L)) { rtc.links = rtc.links.filter((l) => l !== L); compose(); toast(e.message, "err"); }
+      return;
+    }
+    if (mine !== session || !alive(L)) { ask("endCall", call.id).catch(() => {}); return; }
+    L.id = call.id; L.groupId = call.groupId || null;
+    for (const l of links()) if (!l.groupId) l.groupId = L.groupId;
+    setLink(L, { phase: "ringing" });
+    rememberAll();
+    // Someone on an older AURA can't connect to the person you're adding
+    const behind = links().filter((l) => l !== L && l.wasLive && !l.peerGroup);
+    if (behind.length) toast(`${namesOf(behind.map((l) => l.peer))} ${behind.length > 1 ? "are" : "is"} on an older AURA and won't hear ${L.peer.username}. Ask them to update.`, "err");
+    L.timers.ring = setTimeout(() => {
+      if (mine !== session || !alive(L) || L.v.phase !== "ringing") return;
+      ask("endCall", L.id, "missed").catch(() => {});
+      toast(`${L.peer.username} didn't answer`);
+      dropLink(L);
+    }, RING_OUT_MS);
+    startChecking(L);
+  },
+  // Stop ringing someone you were adding
+  cancelAdd(callId) {
+    const L = linkById(callId) || links().find((l) => !l.id && l.invited);
+    if (!L || !ringingPhase(L.v.phase)) return;
+    if (L.id) ask("endCall", L.id).catch(() => {});
+    dropLink(L);
+  },
+
+  // Decline a call that is ringing, cancel one you are making, or hang up (on everyone)
   hangUp() {
     const c = state.call;
     if (!c) return;
     if (c.phase === "over") { ++session; return setCall(null); }
     sayBye();
-    if (c.id) ask("endCall", c.id).catch(() => {});
+    for (const L of links()) if (L.id) ask("endCall", L.id).catch(() => {});
+    if (!rtc && c.id) ask("endCall", c.id).catch(() => {});
     over(""); // if the call was still being set up, start() sees the new session number and stops
   },
   decline() { callActions.hangUp(); },
@@ -681,16 +909,16 @@ export const callActions = {
     const muted = !c.muted;
     rtc.mic.getAudioTracks().forEach((t) => { t.enabled = !muted; });
     patch({ muted });
-    try { if (rtc.dc?.readyState === "open") rtc.dc.send(JSON.stringify({ t: "mute", on: muted })); } catch {}
+    tell(null, { t: "mute", on: muted });
   },
 
-  // Share your screen, or one window. `sourceId` comes from the picker (see ScreenPicker).
+  // Share your screen, or one window, with everyone in the call. `sourceId` comes from the picker (see ScreenPicker).
   // Sharing another one while sharing switches to it. (Added by aura-screen-share-setup.cjs)
   async shareScreen(sourceId) {
     const c = state.call;
     if (!c || !rtc || (c.phase !== "live" && c.phase !== "reconnecting")) return;
-    const lane = videoLane();
-    if (!lane || !c.canShare) return toast(`Screen share needs both of you on the latest AURA. Ask ${c.peer.username} to update.`, "err");
+    const lanes = links().map(videoLane).filter(ready);
+    if (!lanes.length || !c.canShare) return toast(`Screen share needs everyone on the latest AURA. Ask ${c.peer.username} to update.`, "err");
     const mine = session;
     const mode = SHARE_MODES[prefs.shareMode] || SHARE_MODES.auto; // (Added by aura-quality-setup.cjs)
     let stream = null;
@@ -708,39 +936,31 @@ export const callActions = {
     // Tell the encoder what it's showing: motion (games) or detail (text)
     try { if (mode.content) track.contentHint = mode.content; } catch {}
     track.applyConstraints?.(mode.video)?.catch?.(() => {});
-    try { await lane.sender.replaceTrack(track); }
-    catch { stopStream(stream); return toast("Your screen couldn't be sent. Try again.", "err"); }
+    const now = links().map((l) => videoLane(l)).filter(ready);
+    const sent = await Promise.all(now.map((lane) => lane.sender.replaceTrack(track).then(() => true, () => false)));
+    if (!sent.some(Boolean)) { stopStream(stream); return toast("Your screen couldn't be sent. Try again.", "err"); }
     if (mine !== session || !rtc) return stopStream(stream);
     const before = rtc.screen;
     rtc.screen = stream;
     if (before && before !== stream) stopStream(before);
-    try {
-      const p = lane.sender.getParameters();
-      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-      p.encodings[0].maxBitrate = mode.bitrate;
-      p.encodings[0].maxFramerate = mode.fps;
-      p.degradationPreference = mode.prefer;
-      await lane.sender.setParameters(p);
-    } catch {}
+    await Promise.all(now.map((lane) => tune(lane, mode)));
     // The window you shared was closed: stop sharing
     track.onended = () => { if (rtc?.screen === stream) callActions.stopScreen(); };
     patch({ sharing: true });
-    tell({ t: "screen", on: true });
+    tell(null, { t: "screen", on: true });
   },
   stopScreen() {
-    const lane = videoLane();
-    if (lane) lane.sender.replaceTrack(null).catch(() => {});
+    for (const l of links()) { const lane = videoLane(l); if (lane) lane.sender.replaceTrack(null).catch(() => {}); }
     if (rtc?.screen) { stopStream(rtc.screen); rtc.screen = null; }
     if (state.call?.sharing) patch({ sharing: false });
-    tell({ t: "screen", on: false });
+    tell(null, { t: "screen", on: false });
   },
 
-  // Your camera, for the other person to see (Added by aura-call-camera-setup.cjs)
+  // Your camera, for everyone in the call to see (Added by aura-call-camera-setup.cjs)
   async startCamera() {
     const c = state.call;
     if (!c || !rtc || (c.phase !== "live" && c.phase !== "reconnecting") || c.camOn || c.camStarting) return;
-    const lane = camLane();
-    if (!lane || !c.canCam) return toast(`Camera needs both of you on the latest AURA. Ask ${c.peer.username} to update.`, "err");
+    if (!links().some((l) => ready(camLane(l))) || !c.canCam) return toast(`Camera needs everyone on the latest AURA. Ask ${c.peer.username} to update.`, "err");
     const mine = session;
     patch({ camStarting: true });
     // The camera picked in Settings > Camera, if there is one
@@ -761,39 +981,39 @@ export const callActions = {
     const fx = cameraEffects(raw);
     if (fx) stream = fx.stream;
     const track = stream.getVideoTracks()[0];
-    try { await lane.sender.replaceTrack(track); }
-    catch { stopStream(stream); stopStream(raw); patch({ camStarting: false }); return toast("Your camera couldn't be sent. Try again.", "err"); }
+    const now = links().map((l) => camLane(l)).filter(ready);
+    const sent = await Promise.all(now.map((lane) => lane.sender.replaceTrack(track).then(() => true, () => false)));
+    if (!sent.some(Boolean)) { stopStream(stream); stopStream(raw); patch({ camStarting: false }); return toast("Your camera couldn't be sent. Try again.", "err"); }
     if (mine !== session || !rtc) { stopStream(raw); return stopStream(stream); }
     rtc.cam = stream; rtc.camRaw = raw;
-    try {
-      const p = lane.sender.getParameters();
-      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-      p.encodings[0].maxBitrate = CAM_MAX_BITRATE;
-      p.encodings[0].maxFramerate = 30;
-      p.degradationPreference = "balanced";
-      await lane.sender.setParameters(p);
-    } catch {}
+    await Promise.all(now.map((lane) => tune(lane, null)));
     // Unplugged mid-call: turn it off and say so
     const camTrack = raw.getVideoTracks()[0];
     if (camTrack) camTrack.onended = () => { if (rtc?.camRaw === raw) { callActions.stopCamera(); toast("Your camera was disconnected.", "err"); } };
     patch({ camOn: true, camStarting: false, camRev: (state.call?.camRev || 0) + 1 });
-    tell({ t: "cam", on: true });
+    tell(null, { t: "cam", on: true });
   },
   stopCamera() {
-    const lane = camLane();
-    if (lane) lane.sender.replaceTrack(null).catch(() => {});
+    for (const l of links()) { const lane = camLane(l); if (lane) lane.sender.replaceTrack(null).catch(() => {}); }
     if (rtc?.cam) { stopStream(rtc.cam); rtc.cam = null; }
     if (rtc?.camRaw) { stopStream(rtc.camRaw); rtc.camRaw = null; } // the camera itself
     if (state.call?.camOn || state.call?.camStarting) patch({ camOn: false, camStarting: false });
-    tell({ t: "cam", on: false });
+    tell(null, { t: "cam", on: false });
   },
 
   // The call screen (Added by aura-call-screen-setup.cjs)
   openStage() { const c = state.call; if (c && (c.phase === "live" || c.phase === "reconnecting")) patch({ stage: true }); },
   closeStage() { if (state.call?.stage) patch({ stage: false }); },
 
-  // Ends the call if it is with this person (used when you block them)
-  endWith(userId) { if (state.call?.peer.userId === userId && state.call.phase !== "over") callActions.hangUp(); },
+  // Ends the call with this person (used when you block them). In a call with 3, the other two carry on.
+  endWith(userId) {
+    const L = links().find((l) => l.peer.userId === userId);
+    if (!L || state.call?.phase === "over") return;
+    if (!othersBesides(L).length) return callActions.hangUp();
+    sayBye(L);
+    if (L.id) ask("endCall", L.id).catch(() => {});
+    dropLink(L);
+  },
 
   // Devices, from the call bar's settings
   async useMic(deviceId) {
@@ -806,8 +1026,10 @@ export const callActions = {
     if (mine !== session || !rtc) return stopStream(fresh);
     const track = fresh.getAudioTracks()[0];
     track.enabled = !state.call?.muted;
-    const sender = rtc.pc?.getSenders().find((s) => s.track?.kind === "audio");
-    try { if (sender) await sender.replaceTrack(track); } catch {}
+    for (const l of links()) {
+      const sender = l.pc?.getSenders().find((s) => s.track?.kind === "audio");
+      try { if (sender) await sender.replaceTrack(track); } catch {}
+    }
     if (mine !== session || !rtc) return stopStream(fresh); // the call ended while the microphones were being swapped
     stopStream(rtc.mic);
     rtc.mic = fresh;
@@ -816,8 +1038,10 @@ export const callActions = {
   },
   useSpeaker(deviceId) {
     savePrefs({ speaker: deviceId || "" });
-    if (rtc?.audio && typeof rtc.audio.setSinkId === "function") rtc.audio.setSinkId(deviceId || "").catch(() => toast("AURA couldn't switch to those speakers.", "err"));
-    if (rtc?.boost) sound(); // the louder-than-100% sound follows the speakers too
+    for (const l of links()) {
+      if (l.audio && typeof l.audio.setSinkId === "function") l.audio.setSinkId(deviceId || "").catch(() => toast("AURA couldn't switch to those speakers.", "err"));
+    }
+    if (links().some((l) => l.boost)) sound(); // the louder-than-100% sound follows the speakers too
   },
   setVolume(volume) {
     savePrefs({ volume: Math.min(MAX_VOLUME, Math.max(0, Number(volume) || 0)) });
@@ -829,7 +1053,16 @@ export const callActions = {
     if (event?.type === "signal") return onSignal(event.callId, event.signal);
     if (event?.type !== "call" || !event.call?.id) return;
     const call = event.call, c = state.call;
-    if (c && c.id === call.id) return applyStatus(call);
+    const L = linkById(call.id);
+    if (L) return applyStatus(L, call);
+    // Someone the other person added has joined: connect to them (Added by aura-group-calls-setup.cjs)
+    if (call.status === "active" && call.groupId && !call.outgoing && c && c.phase !== "over" && rtc) {
+      if (links().some((l) => l.groupId === call.groupId)) return joinedBy(call);
+      // (the news that your call became a group may not have arrived: ask)
+      const mine = session, lead = first();
+      if (lead?.id) ask("callState", lead.id, 0).then((st) => { if (mine === session && alive(lead) && st?.call?.groupId === call.groupId) { lead.groupId = call.groupId; joinedBy(call); } }).catch(() => {});
+      return;
+    }
     if (call.status !== "ringing" || call.outgoing) return; // not a new call for you
     if (c && c.phase !== "over") return;                    // you're busy (Supabase normally refuses the call before this)
     incoming(call);
@@ -841,9 +1074,13 @@ export const callActions = {
     if (!callsAvailable() || state.call) return;
     try {
       const call = await ask("currentCall");
-      if (!call || state.call) return;
-      if (call.status === "ringing" && !call.outgoing) incoming(call);
-      else if (call.id === remembered()) { remember(""); ask("endCall", call.id).catch(() => {}); }
+      if (state.call) return;
+      const old = remembered();
+      if (call && call.status === "ringing" && !call.outgoing) incoming(call);
+      if (call && old.includes(call.id)) {
+        if (!state.call) remember([]);
+        for (const id of old) if (!linkById(id)) ask("endCall", id).catch(() => {});
+      }
     } catch {}
   },
 
@@ -853,14 +1090,16 @@ export const callActions = {
     if (c?.id && c.phase !== "over") {
       sayBye();
       // A call still ringing for you is left to ring out (unless you had just pressed Accept)
-      if (c.outgoing || c.phase !== "ringing" || rtc?.accepting) ask("endCall", c.id).catch(() => {});
+      for (const L of links()) {
+        if (!L.id) continue;
+        if (L.outgoing || L.v.phase !== "ringing" || L.accepting) ask("endCall", L.id).catch(() => {});
+      }
     }
     ++session;
     cleanup();
     setCall(null);
   },
 };
-
 // ── What you see ──────────────────────────────────────────────────────────────
 const Svg = ({ children, size = 17 }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width={size} height={size} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
@@ -996,14 +1235,17 @@ function ScreenPicker({ onClose }) {
 
 // ── Screen share: their screen, in a corner or full screen (Added by aura-screen-share-setup.cjs, screen-share v2) ──
 // Full screen fills your whole monitor. Esc, the button or double-click goes back to the corner.
+// In a call with 3, it shows whoever is sharing (the first, if two are).
+const sharer = () => links().find((l) => l.v.peerSharing && l.remoteVideo && !ringingPhase(l.v.phase)) || null;
 function ScreenView() {
   const call = useCall();
   const box = useRef(null);
   const video = useRef(null);
   const [mode, setMode] = useState("dock"); // dock | full | hidden
   const [idle, setIdle] = useState(false);  // full screen, mouse still: the top strip fades away
-  const showing = !!call && !!call.peerSharing && (call.phase === "live" || call.phase === "reconnecting");
-  const stream = showing ? rtc?.remoteVideo || null : null;
+  const who = call && (call.phase === "live" || call.phase === "reconnecting") ? sharer() : null;
+  const showing = !!who;
+  const stream = who ? who.remoteVideo : null;
   useEffect(() => { if (showing) setMode("dock"); }, [showing]);
   useEffect(() => {
     const v = video.current;
@@ -1037,7 +1279,7 @@ function ScreenView() {
     return () => { clearTimeout(timer); window.removeEventListener("mousemove", wake); window.removeEventListener("keydown", esc); };
   }, [mode]);
   if (!showing) return null;
-  const name = call.peer.username;
+  const name = who.peer.username;
   if (mode === "hidden") return (
     <button type="button" className="cx-screen-pill" onClick={() => setMode("dock")} aria-label={`Show ${name}'s screen`}><IconScreen /> {name} is sharing their screen <b>Show</b></button>
   );
@@ -1055,40 +1297,111 @@ function ScreenView() {
 }
 
 // ── Cameras, in the call box (Added by aura-call-camera-setup.cjs) ──
-// Their camera, big, with yours small in its corner (mirrored, like a mirror). It hangs under the
-// call box and moves with it. The arrows make it bigger; the dash tucks it away.
+// Their camera, big, with yours small in its corner (mirrored, like a mirror). With 3 people, the two
+// other cameras sit side by side. It hangs under the call box and moves with it. The arrows make it
+// bigger; the dash tucks it away.
 function CamVideo({ stream, rev, mirror, className }) {
   const v = useRef(null);
   useEffect(() => { const el = v.current; if (!el) return; if (el.srcObject !== stream) el.srcObject = stream || null; if (stream) el.play().catch(() => {}); }, [stream, rev]);
   return <video ref={v} className={className} autoPlay playsInline muted style={mirror ? { transform: "scaleX(-1)" } : undefined} />;
 }
+const camsOf = () => links().filter((l) => l.v.peerCamOn && l.remoteCam && !ringingPhase(l.v.phase));
 function CallCams({ call }) {
   const [big, setBig] = useState(false);
   const [hidden, setHidden] = useState(false);
-  const theirs = call.peerCamOn ? rtc?.remoteCam || null : null;
+  const theirs = camsOf();
   const mine = call.camOn ? rtc?.cam || null : null;
-  if (!theirs && !mine) return null;
-  const name = call.peer.username;
+  if (!theirs.length && !mine) return null;
   if (hidden) return (
-    <button type="button" className="cx-cams-pill" onClick={() => setHidden(false)} aria-label="Show the cameras">{theirs ? `${name}'s camera` : "Your camera"} <b>Show</b></button>
+    <button type="button" className="cx-cams-pill" onClick={() => setHidden(false)} aria-label="Show the cameras">{theirs.length > 1 ? "Cameras" : theirs.length ? `${theirs[0].peer.username}'s camera` : "Your camera"} <b>Show</b></button>
   );
+  const duo = theirs.length > 1;
   return (
-    <div className={`cx-cams ${theirs ? "two" : "solo"} ${big ? "big" : ""}`} role="region" aria-label="Cameras">
-      {theirs
-        ? <><CamVideo className="cx-cam-theirs" stream={theirs} rev={call.camRev} /><span className="cx-cam-name">{name}</span>{mine && <CamVideo className="cx-cam-mine small" stream={mine} rev={call.camRev} mirror />}</>
+    <div className={`cx-cams ${theirs.length ? "two" : "solo"} ${duo ? "duo" : ""} ${big ? "big" : ""}`} role="region" aria-label="Cameras">
+      {duo
+        ? <div className="cx-cam-pair">{theirs.map((l) => <div className="cx-cam-cell" key={l.id}><CamVideo className="cx-cam-theirs" stream={l.remoteCam} rev={call.camRev} /><span className="cx-cam-name">{l.peer.username}</span></div>)}</div>
+        : theirs.length ? <><CamVideo className="cx-cam-theirs" stream={theirs[0].remoteCam} rev={call.camRev} /><span className="cx-cam-name">{theirs[0].peer.username}</span></> : null}
+      {theirs.length
+        ? mine && <CamVideo className="cx-cam-mine small" stream={mine} rev={call.camRev} mirror />
         : <><CamVideo className="cx-cam-mine" stream={mine} rev={call.camRev} mirror /><span className="cx-cam-name">You</span></>}
       <div className="cx-cam-tools">
-        {theirs && <button type="button" onClick={() => setBig((b) => !b)} title={big ? "Smaller" : "Bigger"} aria-label={big ? "Make the camera smaller" : "Make the camera bigger"}><IconExpandCam /></button>}
+        {theirs.length > 0 && <button type="button" onClick={() => setBig((b) => !b)} title={big ? "Smaller" : "Bigger"} aria-label={big ? "Make the camera smaller" : "Make the camera bigger"}><IconExpandCam /></button>}
         <button type="button" onClick={() => setHidden(true)} title="Hide the cameras" aria-label="Hide the cameras">–</button>
       </div>
     </div>
   );
 }
 
+// ── Adding someone to the call (Added by aura-group-calls-setup.cjs) ──
+// Your friends, online first. Picking one rings them; while it rings you can cancel.
+function AddPeople({ call, onClose }) {
+  const box = useRef(null);
+  const [friends, setFriends] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    ask("listFriends").then((all) => {
+      if (!alive) return;
+      const list = (Array.isArray(all) ? all : []).filter((f) => f && f.userId && (f.state === "friend" || f.state === undefined));
+      setFriends([...list.filter((f) => f.online), ...list.filter((f) => !f.online)]);
+    }).catch((e) => { if (alive) { setError(e?.message || "AURA couldn't load your friends."); setFriends([]); } });
+    const away = (e) => { if (box.current && !box.current.contains(e.target) && !e.target.closest?.("[data-cx-add]")) onClose(); };
+    const esc = (e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } }; // (only this closes, not the call screen behind it)
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => { alive = false; document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [onClose]);
+  const inCall = new Set([call.peer.userId, ...(call.others || []).map((o) => o.peer.userId)]);
+  const ringing = (call.others || []).find((o) => ringingPhase(o.phase));
+  const full = (call.others || []).length >= MAX_PEOPLE - 2; // (you, the first person and the others)
+  const free = (friends || []).filter((f) => !inCall.has(f.userId));
+  return (
+    <div className="cx-devices cx-adder" ref={box} role="dialog" aria-label="Add someone to the call">
+      <div className="cx-picker-h">Add someone</div>
+      {ringing
+        ? <div className="cx-add-ringing" role="status"><Face person={ringing.peer} size={30} /><span>Calling {ringing.peer.username}…</span>
+            <button type="button" className="cx-btn no" onClick={() => callActions.cancelAdd(ringing.id)}>Cancel</button></div>
+        : full
+          ? <div className="cx-picker-note">This call is full. Calls can have up to {MAX_PEOPLE} people.</div>
+          : <>
+              <div className="cx-picker-note">Calls can have up to {MAX_PEOPLE} people. Everyone in the call will hear them.</div>
+              {friends === null && <div className="cx-picker-note">Loading your friends…</div>}
+              {error && <div className="cx-picker-note err">{error}</div>}
+              {friends && !error && !free.length && <div className="cx-picker-note">No other friends to add yet.</div>}
+              {free.length > 0 && (
+                <div className="cx-add-list" role="list">
+                  {free.map((f) => {
+                    const person = { userId: f.userId, username: f.username || "AURA friend", avatarUrl: f.avatarUrl || "" };
+                    return (
+                      <button key={f.userId} type="button" role="listitem" className={`cx-add-row ${f.online ? "" : "off"}`} onClick={() => { callActions.addPerson(person); }} title={`Add ${person.username} to the call`}>
+                        <Face person={person} size={30} />
+                        <span className="cx-add-name">{person.username}<small>{f.online ? "Online" : "Offline"}</small></span>
+                        <span className="cx-add-go">Add</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </>}
+    </div>
+  );
+}
+const IconAddPerson = () => <Svg><circle cx="10" cy="8" r="3.6" /><path d="M3.5 19.5a6.5 6.5 0 0 1 13 0M18.5 8v6M15.5 11h6" /></Svg>;
+function AddButton({ call, open, onToggle }) {
+  const full = (call.others || []).length >= MAX_PEOPLE - 2; // (you, the first person and the others)
+  const ringing = (call.others || []).some((o) => ringingPhase(o.phase));
+  const say = ringing ? "Calling someone…" : full ? `Calls can have up to ${MAX_PEOPLE} people` : "Add someone to the call";
+  return (
+    <button type="button" className={`cx-round add ${open ? "on" : ""} ${ringing ? "ringing" : ""}`} data-cx-add onClick={onToggle} aria-expanded={open} title={say} aria-label={say}>
+      <IconAddPerson />
+    </button>
+  );
+}
+
 // ── The call screen (Added by aura-call-screen-setup.cjs) ──
-// The whole monitor for a call: a big tile for each of you, showing the camera when it's on and
-// the profile picture when it isn't (with a green ring while that person talks). When they share
-// their screen it takes the middle, with both of you at the side. The call buttons are along the
+// The whole monitor for a call: a big tile for each person, showing the camera when it's on and
+// the profile picture when it isn't (with a green ring while that person talks). When someone shares
+// their screen it takes the middle, with everyone at the side. The call buttons are along the
 // bottom. Esc, or the button, goes back to the call box.
 function myself() {
   try { const p = JSON.parse(localStorage.getItem("aura_profile") || "null") || {}; return { userId: p.userId || "me", username: p.username || "You", avatarUrl: p.avatarUrl || p.avatar || "" }; }
@@ -1099,13 +1412,14 @@ function StageVideo({ stream, rev, mirror, contain }) {
   useEffect(() => { const el = v.current; if (!el) return; if (el.srcObject !== stream) el.srcObject = stream || null; if (stream) el.play().catch(() => {}); }, [stream, rev]);
   return <video ref={v} autoPlay playsInline muted style={{ transform: mirror ? "scaleX(-1)" : undefined, objectFit: contain ? "contain" : "cover" }} />;
 }
-function StageTile({ who, person, stream, rev, mirror, muted, sharing }) {
+function StageTile({ who, person, stream, rev, mirror, muted, sharing, lv, calling, oldApp }) {
   return (
-    <div className={`cx-tile ${who} ${stream ? "cam" : ""}`} role="group" aria-label={who === "me" ? "You" : person.username}>
+    <div className={`cx-tile ${who} ${stream ? "cam" : ""} ${calling ? "calling" : ""}`} role="group" aria-label={who === "me" ? "You" : person.username} data-lv={lv || undefined}>
       {stream ? <StageVideo stream={stream} rev={rev} mirror={mirror} /> : <Face person={person} size={128} />}
+      {calling && <span className="cx-tile-calling">Calling…</span>}
       <span className="cx-tile-name">
         {muted && <span className="cx-tile-muted" title={who === "me" ? "You're muted" : `${person.username} is muted`}><IconMicOff /></span>}
-        {who === "me" ? "You" : person.username}{sharing && <span className="cx-tile-sharing"> · sharing</span>}
+        {who === "me" ? "You" : person.username}{sharing && <span className="cx-tile-sharing"> · sharing</span>}{oldApp && <span className="cx-tile-old"> · only you can hear them</span>}
       </span>
     </div>
   );
@@ -1118,18 +1432,29 @@ function openCallScreen() {
   const el = document.querySelector(".cx-stage");
   try { if (el && document.fullscreenElement !== el) el.requestFullscreen?.({ navigationUI: "hide" })?.catch?.(() => {}); } catch {}
 }
+// The green rings: each person's tile (marked data-lv) follows their own voice
+function watchLevels(box) {
+  return meter.watch((me, lead, levels) => {
+    const el = box.current;
+    if (!el) return;
+    el.style.setProperty("--cx-me", me.toFixed(2));
+    el.style.setProperty("--cx-peer", lead.toFixed(2));
+    el.querySelectorAll("[data-lv]").forEach((t) => t.style.setProperty("--cx-lv", (levels?.[t.dataset.lv] || 0).toFixed(2)));
+  });
+}
 function CallStage() {
   const call = useCall();
   const box = useRef(null);
   const [picker, setPicker] = useState(false);
+  const [adder, setAdder] = useState(false);
   const open = !!call && !!call.stage && (call.phase === "live" || call.phase === "reconnecting");
   // It fills the whole monitor (asked for in the click, see openCallScreen); if Windows won't, it still fills AURA's window
   useEffect(() => {
-    if (!open) { setPicker(false); return; }
+    if (!open) { setPicker(false); setAdder(false); return; }
     const el = box.current;
     let wasFull = !!el && document.fullscreenElement === el;
     const changed = () => { if (document.fullscreenElement === el) wasFull = true; else if (wasFull) callActions.closeStage(); };
-    const esc = (e) => { if (e.key === "Escape") callActions.closeStage(); };
+    const esc = (e) => { if (e.key === "Escape" && !e.defaultPrevented) callActions.closeStage(); };
     document.addEventListener("fullscreenchange", changed);
     window.addEventListener("keydown", esc);
     return () => {
@@ -1138,20 +1463,16 @@ function CallStage() {
       if (document.fullscreenElement === el) document.exitFullscreen().catch(() => {});
     };
   }, [open]);
-  // The green rings follow your voices
-  useEffect(() => meter.watch((me, peer) => {
-    const el = box.current;
-    if (!el) return;
-    el.style.setProperty("--cx-me", me.toFixed(2));
-    el.style.setProperty("--cx-peer", peer.toFixed(2));
-  }), [open]);
+  useEffect(() => watchLevels(box), [open]);
   if (!open) return null;
-  const name = call.peer.username;
-  const theirCam = call.peerCamOn ? rtc?.remoteCam || null : null;
+  const people = callPeople(call);
+  const name = namesOf(people);
   const myCam = call.camOn ? rtc?.cam || null : null;
-  const screen = call.peerSharing ? rtc?.remoteVideo || null : null;
+  const showing = sharer();
+  const screen = showing ? showing.remoteVideo : null;
+  const tiles = links().filter((l) => l.v.phase !== "starting");
   return (
-    <div ref={box} className={`cx-stage ${screen ? "with-screen" : ""}`} role="dialog" aria-label={`Call with ${name}`}>
+    <div ref={box} className={`cx-stage ${screen ? "with-screen" : ""}`} role="dialog" aria-label={`Call with ${people.map((p) => p.username).join(" and ")}`}>
       <div className="cx-stage-top">
         <span className="cx-stage-dot" />
         <span className="cx-stage-name">{name}</span>
@@ -1159,9 +1480,12 @@ function CallStage() {
         <span className="cx-stage-hint">Press Esc to go back</span>
       </div>
       <div className="cx-stage-main">
-        {screen && <div className="cx-stage-screen" aria-label={`${name}'s screen`}><StageVideo stream={screen} rev={call.screenRev} contain /></div>}
-        <div className="cx-tiles">
-          <StageTile who="them" person={call.peer} stream={theirCam} rev={call.camRev} muted={call.peerMuted} sharing={!!screen} />
+        {screen && <div className="cx-stage-screen" aria-label={`${showing.peer.username}'s screen`}><StageVideo stream={screen} rev={call.screenRev} contain /></div>}
+        <div className={`cx-tiles n${tiles.length + 1}`}>
+          {tiles.map((l) => (
+            <StageTile key={l.id || "new"} who="them" lv={l.id} person={l.peer} stream={l.v.peerCamOn && !ringingPhase(l.v.phase) ? l.remoteCam : null} rev={call.camRev}
+              muted={l.v.peerMuted} sharing={showing === l} calling={ringingPhase(l.v.phase)} oldApp={l.oldApp} />
+          ))}
           <StageTile who="me" person={myself()} stream={myCam} rev={call.camRev} mirror muted={call.muted} sharing={!!call.sharing} />
         </div>
       </div>
@@ -1169,20 +1493,21 @@ function CallStage() {
         <button type="button" className={`cx-round mic ${call.muted ? "on" : ""}`} onClick={callActions.toggleMute} aria-pressed={call.muted} title={call.muted ? "Unmute your microphone" : "Mute your microphone"} aria-label={call.muted ? "Unmute your microphone" : "Mute your microphone"}>{call.muted ? <IconMicOff /> : <IconMic />}</button>
         <button type="button" className={`cx-round cam ${call.camOn ? "on" : ""}`} disabled={!call.canCam || call.camStarting} aria-pressed={!!call.camOn}
           onClick={() => (call.camOn ? callActions.stopCamera() : callActions.startCamera())}
-          title={!call.canCam ? "Camera needs both of you on the latest AURA" : call.camOn ? "Turn your camera off" : "Turn your camera on"}
+          title={!call.canCam ? "Camera needs everyone on the latest AURA" : call.camOn ? "Turn your camera off" : "Turn your camera on"}
           aria-label={!call.canCam ? "Camera isn't available on this call" : call.camOn ? "Turn your camera off" : "Turn your camera on"}><IconCam /></button>
         {call.sharing
           ? <button type="button" className="cx-round share on" onClick={() => { setPicker(false); callActions.stopScreen(); }} title="Stop sharing your screen" aria-label="Stop sharing your screen"><IconScreen /></button>
-          : <button type="button" className={`cx-round share ${picker ? "open" : ""}`} data-cx-share disabled={!call.canShare} onClick={() => setPicker((v) => !v)} aria-expanded={picker}
-              title={call.canShare ? "Share your screen" : "Screen share needs both of you on the latest AURA"} aria-label={call.canShare ? "Share your screen" : "Screen share isn't available on this call"}><IconScreen /></button>}
+          : <button type="button" className={`cx-round share ${picker ? "open" : ""}`} data-cx-share disabled={!call.canShare} onClick={() => { setAdder(false); setPicker((v) => !v); }} aria-expanded={picker}
+              title={call.canShare ? "Share your screen" : "Screen share needs everyone on the latest AURA"} aria-label={call.canShare ? "Share your screen" : "Screen share isn't available on this call"}><IconScreen /></button>}
+        <AddButton call={call} open={adder} onToggle={() => { setPicker(false); setAdder((v) => !v); }} />{/* (Added by aura-group-calls-setup.cjs) */}
         <button type="button" className="cx-round end" onClick={callActions.hangUp} title="Hang up" aria-label="Hang up"><IconHangUp /></button>
         <button type="button" className="cx-round leave" onClick={callActions.closeStage} title="Back to the call box (Esc)" aria-label="Leave the call screen"><IconShrink /></button>
         {picker && !call.sharing && <ScreenPicker onClose={() => setPicker(false)} />}
+        {adder && <AddPeople call={call} onClose={() => setAdder(false)} />}
       </div>
     </div>
   );
 }
-
 // The call bar: sits at the top of the window for as long as a call is ringing or going on
 // Where the call bar sits. Left alone it is at the top in the middle; dragged, it stays where you
 // put it (remembered as a share of the window, so it lands in the same place if the window changes
@@ -1208,15 +1533,11 @@ function CallBar() {
   const drag = useRef(null);
   const [devices, setDevices] = useState(false);
   const [picker, setPicker] = useState(false); // choosing what to share
+  const [adder, setAdder] = useState(false);   // adding someone (Added by aura-group-calls-setup.cjs)
   const active = !!call && (call.phase === "live" || call.phase === "reconnecting");
-  useEffect(() => { if (!active) { setDevices(false); setPicker(false); } }, [active]);
-  // The ring around your friend's picture follows their voice; the microphone button follows yours
-  useEffect(() => meter.watch((me, peer) => {
-    const el = bar.current;
-    if (!el) return;
-    el.style.setProperty("--cx-me", me.toFixed(2));
-    el.style.setProperty("--cx-peer", peer.toFixed(2));
-  }), []);
+  useEffect(() => { if (!active) { setDevices(false); setPicker(false); setAdder(false); } }, [active]);
+  // The ring around each picture follows that person's voice; the microphone button follows yours
+  useEffect(() => watchLevels(bar), []);
   // Keep it where you put it as the window, or the bar itself, changes size
   const showing = !!call;
   useLayoutEffect(() => {
@@ -1277,23 +1598,32 @@ function CallBar() {
   };
 
   if (!call) return null;
-  const name = call.peer.username;
+  // Everyone you're talking with; someone being added shows as "Calling…" (Added by aura-group-calls-setup.cjs)
+  const people = callPeople(call);
+  const extra = (call.others || []).filter((o) => !ringingPhase(o.phase));
+  const adding = (call.others || []).find((o) => ringingPhase(o.phase));
+  const name = namesOf(people) || call.peer.username;
   const ringingIn = !call.outgoing && call.phase === "ringing";
   const status = call.phase === "over" ? call.note
     : call.phase === "starting" ? "Starting call…"
-    : call.phase === "ringing" ? (call.outgoing ? "Calling…" : "Incoming voice call")
+    : call.phase === "ringing" ? (call.outgoing ? "Calling…" : call.groupId ? "Incoming group call" : "Incoming voice call")
     : call.phase === "connecting" ? "Connecting…"
     : call.phase === "reconnecting" ? "Reconnecting…"
     : null;
   return (
-    <div ref={bar} className={`cx-bar ${call.phase} ${call.outgoing ? "out" : "in"} ${call.muted ? "muted" : ""}`} role="region" aria-label={`Voice call with ${name}`}
+    <div ref={bar} className={`cx-bar ${call.phase} ${call.outgoing ? "out" : "in"} ${call.muted ? "muted" : ""} ${extra.length ? "group" : ""}`} role="region" aria-label={`Voice call with ${people.map((p) => p.username).join(" and ")}`}
       onPointerDown={onPointerDown}>
       <button type="button" className="cx-grip" onDoubleClick={putBack} onKeyDown={onGripKey} title="Drag to move. Double-click to put it back at the top." aria-label="Move the call bar. Arrow keys move it, Home puts it back at the top."><IconGrip /></button>
       {/* Until you accept, only the caller's initial shows: their picture isn't fetched for a call you haven't taken */}
-      <Face person={ringingIn ? { ...call.peer, avatarUrl: "" } : call.peer} size={34} />
+      {extra.length
+        ? <span className="cx-faces">
+            <span data-lv={call.id || undefined}><Face person={call.peer} size={30} /></span>
+            {extra.map((o) => <span key={o.id} className="cx-face-more" data-lv={o.id || undefined}><Face person={o.peer} size={30} /></span>)}
+          </span>
+        : <Face person={ringingIn ? { ...call.peer, avatarUrl: "" } : call.peer} size={34} />}
       <div className="cx-who">
-        <div className="cx-name">{name}{active && call.peerMuted && <span className="cx-peer-muted" title={`${name} is muted`}><IconMicOff /><span className="cx-sr">{name} is muted</span></span>}</div>
-        <div className="cx-status" role="status" aria-live="polite">{status ?? <><Clock since={call.since} />{call.sharing ? <span className="cx-sharing"> · Sharing your screen</span> : call.camOn ? <span className="cx-sharing"> · Camera on</span> : call.muted && <span> · You're muted</span>}</>}</div>
+        <div className="cx-name">{name}{active && !extra.length && call.peerMuted && <span className="cx-peer-muted" title={`${name} is muted`}><IconMicOff /><span className="cx-sr">{name} is muted</span></span>}</div>
+        <div className="cx-status" role="status" aria-live="polite">{status ?? <><Clock since={call.since} />{adding ? <span className="cx-adding"> · Calling {adding.peer.username}…</span> : call.sharing ? <span className="cx-sharing"> · Sharing your screen</span> : call.camOn ? <span className="cx-sharing"> · Camera on</span> : call.muted && <span> · You're muted</span>}</>}</div>
       </div>
       {ringingIn && (
         <div className="cx-acts">
@@ -1309,21 +1639,23 @@ function CallBar() {
           <button type="button" className={`cx-round mic ${call.muted ? "on" : ""}`} onClick={callActions.toggleMute} aria-pressed={call.muted} title={call.muted ? "Unmute your microphone" : "Mute your microphone"} aria-label={call.muted ? "Unmute your microphone" : "Mute your microphone"}>{call.muted ? <IconMicOff /> : <IconMic />}</button>
           {call.sharing
             ? <button type="button" className="cx-round share on" onClick={() => { setPicker(false); callActions.stopScreen(); }} title="Stop sharing your screen" aria-label="Stop sharing your screen"><IconScreen /></button>
-            : <button type="button" className={`cx-round share ${picker ? "open" : ""}`} data-cx-share disabled={!call.canShare} onClick={() => { setDevices(false); setPicker((v) => !v); }} aria-expanded={picker}
-                title={call.canShare ? "Share your screen" : `Screen share needs both of you on the latest AURA`} aria-label={call.canShare ? "Share your screen" : "Screen share isn't available on this call"}><IconScreen /></button>}
+            : <button type="button" className={`cx-round share ${picker ? "open" : ""}`} data-cx-share disabled={!call.canShare} onClick={() => { setDevices(false); setAdder(false); setPicker((v) => !v); }} aria-expanded={picker}
+                title={call.canShare ? "Share your screen" : `Screen share needs everyone on the latest AURA`} aria-label={call.canShare ? "Share your screen" : "Screen share isn't available on this call"}><IconScreen /></button>}
           {/* Your camera (Added by aura-call-camera-setup.cjs) */}
           <button type="button" className={`cx-round cam ${call.camOn ? "on" : ""}`} disabled={!call.canCam || call.camStarting} aria-pressed={!!call.camOn}
             onClick={() => (call.camOn ? callActions.stopCamera() : callActions.startCamera())}
-            title={!call.canCam ? "Camera needs both of you on the latest AURA" : call.camOn ? "Turn your camera off" : "Turn your camera on"}
+            title={!call.canCam ? "Camera needs everyone on the latest AURA" : call.camOn ? "Turn your camera off" : "Turn your camera on"}
             aria-label={!call.canCam ? "Camera isn't available on this call" : call.camOn ? "Turn your camera off" : "Turn your camera on"}><IconCam /></button>
-          <button type="button" className={`cx-round ${devices ? "on" : ""}`} data-cx-devices onClick={() => { setPicker(false); setDevices((v) => !v); }} aria-expanded={devices} title="Microphone, speakers and volume" aria-label="Microphone, speakers and volume"><IconSliders /></button>
-          <button type="button" className="cx-round stage" onClick={() => { setDevices(false); setPicker(false); openCallScreen(); }} title="Open the call screen" aria-label="Open the call screen"><IconExpand /></button>{/* (Added by aura-call-screen-setup.cjs) */}
+          <AddButton call={call} open={adder} onToggle={() => { setDevices(false); setPicker(false); setAdder((v) => !v); }} />{/* (Added by aura-group-calls-setup.cjs) */}
+          <button type="button" className={`cx-round ${devices ? "on" : ""}`} data-cx-devices onClick={() => { setPicker(false); setAdder(false); setDevices((v) => !v); }} aria-expanded={devices} title="Microphone, speakers and volume" aria-label="Microphone, speakers and volume"><IconSliders /></button>
+          <button type="button" className="cx-round stage" onClick={() => { setDevices(false); setPicker(false); setAdder(false); openCallScreen(); }} title="Open the call screen" aria-label="Open the call screen"><IconExpand /></button>{/* (Added by aura-call-screen-setup.cjs) */}
           <button type="button" className="cx-round end" onClick={callActions.hangUp} title="Hang up" aria-label="Hang up"><IconHangUp /></button>
         </div>
       )}
       {active && <CallCams call={call} />}
       {devices && active && <Devices onClose={() => setDevices(false)} />}
       {picker && active && !call.sharing && <ScreenPicker onClose={() => setPicker(false)} />}
+      {adder && active && <AddPeople call={call} onClose={() => setAdder(false)} />}
     </div>
   );
 }
@@ -1334,7 +1666,7 @@ export function CallButton({ person, className = "", children, label }) {
   useEffect(() => { ensureStyles(); }, []);
   if (!callsAvailable()) return null;
   const busy = !!call && call.phase !== "over";
-  const withThem = busy && call.peer.userId === person.userId;
+  const withThem = busy && callPeople(call).some((p) => p.userId === person.userId);
   const say = withThem ? `You're in a call with ${person.username}` : busy ? "You're already in a call" : label || `Call ${person.username}`;
   return (
     <button type="button" className={`${className} cx-call ${withThem ? "in-call" : ""}`} disabled={busy} onClick={(e) => { e.stopPropagation(); callActions.start(person); }} title={say} aria-label={say}>
@@ -1362,7 +1694,7 @@ const CSS = `
 @keyframes cx-drop{from{opacity:0;transform:translate(-50%,-14px)}to{opacity:1;transform:translate(-50%,0)}}
 .cx-bar.ringing.in{border-color:color-mix(in srgb,var(--ac,#FF5722) 75%,transparent);animation:cx-drop .2s ease-out,cx-glow 1.3s ease-in-out .2s infinite alternate}
 @keyframes cx-glow{from{box-shadow:0 10px 34px rgba(0,0,0,.5),0 0 0 0 color-mix(in srgb,var(--ac,#FF5722) 50%,transparent)}to{box-shadow:0 10px 34px rgba(0,0,0,.5),0 0 0 7px color-mix(in srgb,var(--ac,#FF5722) 0%,transparent)}}
-.cx-face{position:relative;display:inline-flex;flex-shrink:0;border-radius:50%;transition:box-shadow .09s linear;box-shadow:0 0 0 calc(var(--cx-peer) * 5px) rgba(61,220,132,.8)}
+.cx-face{position:relative;display:inline-flex;flex-shrink:0;border-radius:50%;transition:box-shadow .09s linear;box-shadow:0 0 0 calc(var(--cx-lv,var(--cx-peer)) * 5px) rgba(61,220,132,.8)}
 .cx-face img,.cx-face>span{width:100%;height:100%;border-radius:50%;object-fit:cover}
 .cx-face>span{display:flex;align-items:center;justify-content:center;font-family:'Rajdhani',sans-serif;font-weight:700;color:#fff;background:linear-gradient(135deg,var(--ac,#FF5722),var(--ac2,#ff8a65))}
 .cx-who{min-width:96px;max-width:210px;display:flex;flex-direction:column;justify-content:center}
@@ -1421,10 +1753,10 @@ const CSS = `
 .cx-stage-screen{flex:1;min-width:0;height:100%;border-radius:16px;overflow:hidden;background:#000;border:1px solid rgba(255,255,255,.1)}
 .cx-stage-screen video{width:100%;height:100%;display:block;background:#000}
 .cx-tile{position:relative;aspect-ratio:16/9;border-radius:18px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#20202a,#131319);border:1px solid rgba(255,255,255,.08)}
-.cx-tile.them{box-shadow:0 0 0 calc(var(--cx-peer) * 4px) rgba(61,220,132,.85)}
+.cx-tile.them{box-shadow:0 0 0 calc(var(--cx-lv,var(--cx-peer)) * 4px) rgba(61,220,132,.85)}
 .cx-tile.me{box-shadow:0 0 0 calc(var(--cx-me) * 4px) rgba(61,220,132,.85)}
 .cx-tile video{position:absolute;inset:0;width:100%;height:100%;background:#000}
-.cx-tile .cx-face{box-shadow:0 0 0 calc(var(--cx-peer) * 10px) rgba(61,220,132,.8)}
+.cx-tile .cx-face{box-shadow:0 0 0 calc(var(--cx-lv,var(--cx-peer)) * 10px) rgba(61,220,132,.8)}
 .cx-tile.me .cx-face{box-shadow:0 0 0 calc(var(--cx-me) * 10px) rgba(61,220,132,.8)}
 .cx-stage.with-screen .cx-tile .cx-face{width:72px!important;height:72px!important;font-size:30px!important}
 .cx-tile-name{position:absolute;left:12px;bottom:12px;display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:rgba(0,0,0,.6);font-size:13px;font-weight:600}
@@ -1504,6 +1836,41 @@ const CSS = `
 .cx-screen.full.idle .cx-screen-top{opacity:0}
 .cx-screen.full.idle{cursor:none}
 .cx-screen-hint{font-weight:400;color:var(--t2,#9aa0aa);margin-left:6px}
+/* Calls with 3 people (Added by aura-group-calls-setup.cjs) */
+.cx-faces{display:flex;align-items:center;flex-shrink:0;padding-left:2px}
+.cx-faces>span{display:inline-flex;border-radius:50%}
+.cx-face-more{margin-left:-8px}
+.cx-face-more .cx-face img,.cx-face-more .cx-face>span{outline:2px solid var(--panel,#1a1f26)}
+.cx-adding{color:var(--t2,#9aa0aa)}
+.cx-round.add.ringing{border-color:#3ddc84;color:#3ddc84}
+.cx-adder{width:300px}
+.cx-adder .cx-picker-note{line-height:1.45}
+.cx-add-list{display:flex;flex-direction:column;gap:2px;max-height:min(320px,calc(100vh - 200px));overflow-y:auto;margin:0 -6px}
+.cx-add-row{display:flex;align-items:center;gap:10px;width:100%;padding:6px;border:none;border-radius:10px;background:transparent;color:var(--t1,#fff);cursor:pointer;text-align:left;font:500 13px 'DM Sans',sans-serif}
+.cx-add-row .cx-face{box-shadow:none}
+.cx-add-row:hover,.cx-add-row:focus-visible{background:rgba(255,255,255,.08)}
+.cx-add-row.off{opacity:.62}
+.cx-add-name{flex:1;min-width:0;display:flex;flex-direction:column;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cx-add-name small{font-size:11px;font-weight:400;color:var(--t2,#9aa0aa)}
+.cx-add-go{padding:4px 12px;border-radius:999px;background:#15803d;color:#fff;font-size:12px;font-weight:600}
+.cx-add-row:hover .cx-add-go{background:#16934a}
+.cx-add-ringing{display:flex;align-items:center;gap:10px;font-size:13px}
+.cx-add-ringing .cx-face{box-shadow:none}
+.cx-add-ringing span{flex:1}
+.cx-add-row:focus-visible,.cx-add-ringing button:focus-visible{outline:2px solid var(--ac2,var(--ac,#ff8a65));outline-offset:2px}
+.cx-tiles.n3{grid-template-columns:repeat(3,minmax(0,1fr));max-width:min(1800px,calc((100vh - 190px) * 48 / 9 + 32px))}
+.cx-stage.with-screen .cx-tiles.n3{grid-template-columns:1fr}
+.cx-stage.with-screen .cx-tiles.n3 .cx-face{width:56px!important;height:56px!important;font-size:24px!important}
+.cx-tile.calling>.cx-face{opacity:.45}
+.cx-tile-calling{position:absolute;top:12px;left:12px;padding:3px 10px;border-radius:999px;background:rgba(0,0,0,.55);font-size:12px;color:var(--t2,#cfd3da)}
+.cx-tile-old{color:#fbbf24;font-weight:500}
+.cx-stage .cx-adder{position:absolute;top:auto;right:auto;bottom:84px;left:50%;transform:translateX(-50%)}
+.cx-cams.duo{width:480px;aspect-ratio:32/9}
+.cx-cams.duo.big{width:min(960px,calc(100vw - 24px))}
+.cx-cam-pair{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;gap:2px;background:#000}
+.cx-cam-cell{position:relative;overflow:hidden}
+.cx-cams.duo video.small{width:16%}
+@media (max-width:760px){.cx-tiles.n3{grid-template-columns:1fr 1fr}}
 .reduce-motion .cx-bar,.reduce-motion .cx-bar.ringing.in,.reduce-motion .cx-bar.moved{animation:none}
 @media (prefers-reduced-motion:reduce){.cx-bar,.cx-bar.ringing.in,.cx-bar.moved{animation:none}}
 `;

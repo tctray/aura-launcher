@@ -202,6 +202,9 @@ contextBridge.exposeInMainWorld("auraSocial", {
   callBeat: (callId) => ipcRenderer.invoke("social:callBeat", callId),
   currentCall: () => ipcRenderer.invoke("social:currentCall"),
   callConfig: () => ipcRenderer.invoke("social:callConfig"),
+  // Calls with 3 people // (Added by aura-group-calls-setup.cjs)
+  addToCall: (callId, userId) => ipcRenderer.invoke("social:addToCall", callId, userId),
+  joinGroup: (callId) => ipcRenderer.invoke("social:joinGroup", callId),
   // Likes and dislikes on messages, and GIF search (answered by the main process, never the window)
   react: (messageId, reaction) => ipcRenderer.invoke("social:react", messageId, reaction),
   gifSearch: (words, more) => ipcRenderer.invoke("social:gifSearch", words, more),

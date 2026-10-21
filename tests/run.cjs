@@ -51,6 +51,10 @@ if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safe
     if (hasCalls) {
       add("messages", "Voice calls: ringing, accepting, hanging up, missed calls", "messages/app-voice.cjs", [social]);
       add("messages", "Voice calls on a database missing the voice update", "messages/app-before-voice-sql.cjs", [social]);
+      if (fs.existsSync(path.join(sqlDir, "aura-calls-group.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-group-calls.mjs"))) { // (Added by aura-group-calls-setup.cjs)
+        add("messages", "Database rules: calls with 3 people", "messages/sql-group-calls.mjs");
+        add("messages", "Calls with 3 people: adding, joining, leaving", "messages/app-group-calls.cjs", [social]);
+      }
     }
   }
 }
@@ -99,6 +103,7 @@ if (fs.existsSync(path.join(__dirname, "call-camera.cjs"))) add("window", "Your 
 if (fs.existsSync(path.join(__dirname, "call-screen.cjs"))) add("window", "The call screen", "call-screen.cjs");
 if (fs.existsSync(path.join(__dirname, "reset-password.cjs"))) add("window", "Forgot password", "reset-password.cjs");
 if (fs.existsSync(path.join(__dirname, "theme-backgrounds.cjs"))) add("window", "Saved themes keep their background", "theme-backgrounds.cjs");
+if (fs.existsSync(path.join(__dirname, "group-calls.cjs"))) add("window", "Calls with 3 people", "group-calls.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;
