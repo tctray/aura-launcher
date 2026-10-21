@@ -16,6 +16,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom"; // the call screen opens in the click (Added by aura-call-screen-setup.cjs)
 import { ringtone, soundPrefs } from "./sounds"; // your ringtone (Settings > Calls and messages)
 import { cameraEffects } from "./camfx"; // your camera background in calls (Added by aura-camera-backgrounds-setup.cjs)
 
@@ -1109,21 +1110,23 @@ function StageTile({ who, person, stream, rev, mirror, muted, sharing }) {
     </div>
   );
 }
-// Full screen has to be asked for in the click itself (a moment later, Windows and newer browsers say no),
-// so the call layer (which the call screen is drawn into) goes full screen as the button is pressed
-function fullCallLayer() {
-  const host = document.getElementById("aura-call-layer");
-  try { if (host && document.fullscreenElement !== host) host.requestFullscreen?.({ navigationUI: "hide" })?.catch?.(() => {}); } catch {}
+// Full screen has to be asked for in the click itself, for something already on screen (a moment later, or
+// for something not drawn yet, Windows and newer browsers say no). So the click draws the call screen at once
+// and asks for full screen straight away, like the camera preview's button does.
+function openCallScreen() {
+  try { flushSync(() => callActions.openStage()); } catch { callActions.openStage(); }
+  const el = document.querySelector(".cx-stage");
+  try { if (el && document.fullscreenElement !== el) el.requestFullscreen?.({ navigationUI: "hide" })?.catch?.(() => {}); } catch {}
 }
 function CallStage() {
   const call = useCall();
   const box = useRef(null);
   const [picker, setPicker] = useState(false);
   const open = !!call && !!call.stage && (call.phase === "live" || call.phase === "reconnecting");
-  // It fills the whole monitor (asked for right at the click, see fullCallLayer); if Windows won't, it still fills AURA's window
+  // It fills the whole monitor (asked for in the click, see openCallScreen); if Windows won't, it still fills AURA's window
   useEffect(() => {
     if (!open) { setPicker(false); return; }
-    const el = document.getElementById("aura-call-layer");
+    const el = box.current;
     let wasFull = !!el && document.fullscreenElement === el;
     const changed = () => { if (document.fullscreenElement === el) wasFull = true; else if (wasFull) callActions.closeStage(); };
     const esc = (e) => { if (e.key === "Escape") callActions.closeStage(); };
@@ -1314,7 +1317,7 @@ function CallBar() {
             title={!call.canCam ? "Camera needs both of you on the latest AURA" : call.camOn ? "Turn your camera off" : "Turn your camera on"}
             aria-label={!call.canCam ? "Camera isn't available on this call" : call.camOn ? "Turn your camera off" : "Turn your camera on"}><IconCam /></button>
           <button type="button" className={`cx-round ${devices ? "on" : ""}`} data-cx-devices onClick={() => { setPicker(false); setDevices((v) => !v); }} aria-expanded={devices} title="Microphone, speakers and volume" aria-label="Microphone, speakers and volume"><IconSliders /></button>
-          <button type="button" className="cx-round stage" onClick={() => { setDevices(false); setPicker(false); fullCallLayer(); callActions.openStage(); }} title="Open the call screen" aria-label="Open the call screen"><IconExpand /></button>{/* (Added by aura-call-screen-setup.cjs) */}
+          <button type="button" className="cx-round stage" onClick={() => { setDevices(false); setPicker(false); openCallScreen(); }} title="Open the call screen" aria-label="Open the call screen"><IconExpand /></button>{/* (Added by aura-call-screen-setup.cjs) */}
           <button type="button" className="cx-round end" onClick={callActions.hangUp} title="Hang up" aria-label="Hang up"><IconHangUp /></button>
         </div>
       )}
