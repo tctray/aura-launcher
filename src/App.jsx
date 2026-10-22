@@ -3084,7 +3084,7 @@ function Seg({value,options,onChange}){
   );
 }
 
-function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetchCovers}){
+function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetchCovers,coverProgress}){
   const s=useSettings();
   const set=(patch)=>updateSettings(patch);
   const pct=(v)=>`${Math.round(v*100)}%`;
@@ -3164,7 +3164,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       <div className="ss">
         <div className="ss-t">LIBRARY</div>
         <div className="ss-card">
-          <div className="sr"><div><div className="sr-l">Fetch Missing Cover Art</div><div className="sr-s">Auto-fetch covers for games without images</div></div><button className="btn-p" onClick={()=>{const missing=games.filter(g=>!g.cover);if(missing.length===0) return;onFetchCovers(missing);}} style={{fontSize:11,padding:"6px 14px"}}>Fetch</button></div>
+          <div className="sr"><div><div className="sr-l">Fetch Missing Cover Art</div><div className="sr-s">Auto-fetch covers for games without images</div></div><button className="btn-p" disabled={!!coverProgress} onClick={()=>{const missing=games.filter(g=>!g.cover);onFetchCovers(missing);}} style={{fontSize:11,padding:"6px 14px",opacity:coverProgress?.7:1}}>{coverProgress?`${coverProgress.done||0} of ${coverProgress.total}`:"Fetch"}</button></div>
           <div className="sr"><div><div className="sr-l">Import Steam Games</div><div className="sr-s">Auto-import all installed Steam games</div></div><button className="btn-p" onClick={onImportSteam} style={{fontSize:11,padding:"6px 14px",display:"flex",alignItems:"center",gap:"5px"}}><Ic.Steam/> Import</button></div>
           <div className="sr"><div><div className="sr-l">Import Epic Games</div><div className="sr-s">Auto-import all installed Epic Games</div></div><button className="btn-p" onClick={onImportEpic} style={{fontSize:11,padding:"6px 14px"}}>Import</button></div>
           <div className="sr"><div><div className="sr-l">Import Xbox Game Pass</div><div className="sr-s">Auto-import all installed Xbox games</div></div><button className="btn-p" onClick={onImportXbox} style={{fontSize:11,padding:"6px 14px"}}>Import</button></div>
@@ -3858,22 +3858,45 @@ function AuraApp(){
     toast(`"${delT.title}" removed`,"err");setModal(null);setDelT(null);
   },[delT,toast]);
 
+  // Imported games get their covers straight away (Added by aura-covers-setup.cjs)
+  const [autoCovers,setAutoCovers]=useState(0);
+  const [coverProgress,setCoverProgress]=useState(null); // { done, found, total } while covers are being fetched
+  const coversBusy=useRef(false);
   const doImportSteam=useCallback(async()=>{
     if(!window.electronAPI?.isElectron){toast("Steam import only works in the desktop app","err");return;}
     const result=await window.electronAPI.importSteam();
     if(result.success){
       const newGames=result.games.map(g=>({id:uid(),title:g.title,exePath:g.exePath,cover:"",category:"Other",favorite:false,playCount:0,lastPlayed:null,addedAt:Date.now()}));
       setGames(gs=>{const existing=gs.map(g=>g.title.toLowerCase());const toAdd=newGames.filter(g=>!existing.includes(g.title.toLowerCase()));if(toAdd.length===0){toast("All Steam games already in library");return gs;}toast(`${toAdd.length} Steam games imported!`);return [...toAdd,...gs];});
+      setTimeout(()=>setAutoCovers(n=>n+1),300); // then their covers (Added by aura-covers-setup.cjs)
     } else toast("Could not find Steam library","err");
   },[toast]);
 
-  const doFetchCovers=useCallback(async(gamesToFetch)=>{
+  // Covers for games without one. Covers that turn up are put in as they're found, and it says how many were found (Added by aura-covers-setup.cjs)
+  const doFetchCovers=useCallback(async(gamesToFetch,{quiet=false}={})=>{
     if(!window.electronAPI?.isElectron) return;
-    if(gamesToFetch.length===0){toast("All games already have cover art");return;}
-    toast(`Fetching cover art for ${gamesToFetch.length} games...`);
-    const result=await window.electronAPI.fetchCoversBulk(gamesToFetch);
-    if(result.success){const covers=result.covers;setGames(gs=>gs.map(g=>covers[g.id]?{...g,cover:covers[g.id]}:g));toast("Cover art updated!");}
+    if(coversBusy.current){ if(!quiet) toast("Already fetching cover art. It can take a minute for a big library."); return; }
+    if(gamesToFetch.length===0){ if(!quiet) toast("All games already have cover art"); return; }
+    coversBusy.current=true;
+    const total=gamesToFetch.length;
+    setCoverProgress({done:0,found:0,total});
+    toast(`Fetching cover art for ${total} game${total===1?"":"s"}…`);
+    const off=window.electronAPI.onCoversProgress?.((p)=>{ if(p&&p.total) setCoverProgress(p); });
+    let result=null;
+    try{ result=await window.electronAPI.fetchCoversBulk(gamesToFetch); }catch(e){ result={success:false,error:e?.message}; }
+    try{ off?.(); }catch{}
+    coversBusy.current=false;
+    setCoverProgress(null);
+    if(!result?.success){ toast(result?.error||"Couldn't fetch cover art. Try again in a moment.","err"); return; }
+    const covers=result.covers||{};
+    setGames(gs=>gs.map(g=>covers[g.id]&&!g.cover?{...g,cover:covers[g.id]}:g));
+    const found=Object.keys(covers).length, missed=total-found;
+    if(missed<=0) toast(total===1?"Cover art found":`Cover art found for all ${total} games`);
+    else if(found) toast(`Cover art found for ${found} of ${total}. For the rest, open Edit and press Auto, or try a shorter title.`);
+    else toast(`No cover art found for ${total===1?"that game":"those games"}. Open Edit and try Auto with a shorter title.`,"err");
+    if(result.error) toast(result.error,"err");
   },[toast]);
+  useEffect(()=>{ if(!autoCovers) return; const missing=games.filter(g=>!g.cover); if(missing.length) doFetchCovers(missing,{quiet:true}); },[autoCovers]); // (Added by aura-covers-setup.cjs)
 
   const doImportEpic=useCallback(async()=>{
     if(!window.electronAPI?.isElectron){toast("Epic import only works in the desktop app","err");return;}
@@ -3881,6 +3904,7 @@ function AuraApp(){
     if(result.success){
       const newGames=result.games.map(g=>({id:uid(),title:g.title,exePath:g.exePath,cover:"",category:"Other",favorite:false,playCount:0,lastPlayed:null,addedAt:Date.now()}));
       setGames(gs=>{const existing=gs.map(g=>g.title.toLowerCase());const toAdd=newGames.filter(g=>!existing.includes(g.title.toLowerCase()));if(toAdd.length===0){toast("All Epic games already in library");return gs;}toast(`${toAdd.length} Epic games imported!`);return [...toAdd,...gs];});
+      setTimeout(()=>setAutoCovers(n=>n+1),300); // then their covers (Added by aura-covers-setup.cjs)
     } else toast("Could not find Epic Games","err");
   },[toast]);
 
@@ -3890,6 +3914,7 @@ function AuraApp(){
     if(result.success){
       const newGames=result.games.map(g=>({id:uid(),title:g.title,exePath:g.exePath,cover:g.cover||"",category:"Other",favorite:false,playCount:0,lastPlayed:null,addedAt:Date.now()}));
       setGames(gs=>{const existing=gs.map(g=>g.title.toLowerCase());const toAdd=newGames.filter(g=>!existing.includes(g.title.toLowerCase()));if(toAdd.length===0){toast("All Xbox games already in library");return gs;}toast(`${toAdd.length} Xbox games imported!`);return [...toAdd,...gs];});
+      setTimeout(()=>setAutoCovers(n=>n+1),300); // and covers for any the Xbox app had none for (Added by aura-covers-setup.cjs)
     } else toast(result.error||"Could not find Xbox Game Pass","err");
   },[toast]);
 
@@ -4165,7 +4190,7 @@ function AuraApp(){
 
           {view==="messages"&&<PageBoundary name="messages"><MessagesPage nowPlaying={nowPlaying}/></PageBoundary>}
 
-          {view==="settings"&&<PageBoundary name="settings"><Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames(DEMO_GAMES);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers}/></PageBoundary>}
+          {view==="settings"&&<PageBoundary name="settings"><Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames(DEMO_GAMES);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers} coverProgress={coverProgress}/></PageBoundary>}
         </div>
 
         <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onToggle={()=>setFriendsOpen(o=>!o)}/>

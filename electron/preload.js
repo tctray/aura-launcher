@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // ── Cover art (IGDB) ────────────────────────────────────────────────────────
   fetchCoverArt:   (title)  => ipcRenderer.invoke("fetch-cover-art", title),
   fetchCoversBulk: (games)  => ipcRenderer.invoke("fetch-covers-bulk", games),
+  onCoversProgress: (cb) => { const h = (_e, p) => cb(p); ipcRenderer.on("covers-progress", h); return () => ipcRenderer.removeListener("covers-progress", h); }, // how far a cover fetch has got (Added by aura-covers-setup.cjs)
 
   // ── Twitch live streams ──────────────────────────────────────────────────────
   searchTwitch:       (opts) => ipcRenderer.invoke("search-twitch", opts),

@@ -112,6 +112,7 @@ if (fs.existsSync(path.join(__dirname, "stream-room.cjs"))) add("window", "A liv
 if (fs.existsSync(path.join(__dirname, "cams-full.cjs"))) add("window", "Call cameras full screen", "cams-full.cjs");
 if (fs.existsSync(path.join(__dirname, "camera-busy.cjs"))) add("window", "One camera for the preview and calls", "camera-busy.cjs");
 if (fs.existsSync(path.join(__dirname, "group-chats.cjs"))) add("window", "Group chats", "group-chats.cjs");
+if (fs.existsSync(path.join(__dirname, "covers.cjs"))) add("window", "Cover art: none skipped", "covers.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;

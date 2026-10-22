@@ -1062,17 +1062,12 @@ ipcMain.handle("import-xbox", async () => {
 // ── IGDB cover art ────────────────────────────────────────────────────────────
 ipcMain.handle("fetch-cover-art", async (_e, title) => auraServer("/api/covers/one", { title }));
 
-ipcMain.handle("fetch-covers-bulk", async (_e, games) => {
-  // Sent in small groups so a big library doesn't make one very long request
-  const list = (Array.isArray(games) ? games : []).filter((g) => g && g.title).map((g) => ({ id: g.id, title: g.title }));
-  const covers = {};
-  for (let i = 0; i < list.length; i += 20) {
-    const res = await auraServer("/api/covers/bulk", { games: list.slice(i, i + 20) });
-    if (!res.success) return Object.keys(covers).length ? { success: true, covers } : res;
-    Object.assign(covers, res.covers || {});
-  }
-  return { success: true, covers };
-});
+ipcMain.handle("fetch-covers-bulk", async (_e, games) =>
+  // Small groups, slowly, then one at a time for any game still missing, so none are skipped (see covers.js) (Added by aura-covers-setup.cjs)
+  require("./covers").fetchCovers(games, {
+    server: (route, body) => auraServer(route, body),
+    progress: (p) => { try { if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send("covers-progress", p); } catch {} },
+  }));
 
 // ── Twitch live streams ────────────────────────────────────────────────────────
 ipcMain.handle("fetch-twitch-streams", async (_e, opts = {}) =>
