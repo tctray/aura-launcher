@@ -207,7 +207,13 @@ contextBridge.exposeInMainWorld("auraSocial", {
   addToCall: (callId, userId) => ipcRenderer.invoke("social:addToCall", callId, userId),
   joinGroup: (callId) => ipcRenderer.invoke("social:joinGroup", callId),
   // Likes and dislikes on messages, and GIF search (answered by the main process, never the window)
-  react: (messageId, reaction) => ipcRenderer.invoke("social:react", messageId, reaction),
+  react: (messageId, reaction, conversationId) => ipcRenderer.invoke("social:react", messageId, reaction, conversationId),
+  // Group chats // (Added by aura-messages-groups-setup.cjs)
+  createGroup: (title, userIds) => ipcRenderer.invoke("social:createGroup", title, userIds),
+  addGroupMembers: (conversationId, userIds) => ipcRenderer.invoke("social:addGroupMembers", conversationId, userIds),
+  removeGroupMember: (conversationId, userId) => ipcRenderer.invoke("social:removeGroupMember", conversationId, userId),
+  leaveGroup: (conversationId) => ipcRenderer.invoke("social:leaveGroup", conversationId),
+  renameGroup: (conversationId, title) => ipcRenderer.invoke("social:renameGroup", conversationId, title),
   gifSearch: (words, more) => ipcRenderer.invoke("social:gifSearch", words, more),
   markRead: (conversationId) => ipcRenderer.invoke("social:markRead", conversationId),
   // New messages and friend changes pushed from the main process

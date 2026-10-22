@@ -75,6 +75,15 @@ let gifService = ""; // which one this AURA searches, known after the first sear
 
 // ── Likes and dislikes ────────────────────────────────────────────────────────
 const reactionsAvailable = () => typeof window.auraSocial?.react === "function";
+// Group chats (Added by aura-messages-groups-setup.cjs)
+const GROUP_NOTE = "👥 "; // a line in a group saying what happened ("added Cam"), sent as the person who did it
+const GROUP_MAX = 10;
+export const groupsAvailable = () => typeof window.auraSocial?.createGroup === "function";
+const isNote = (conversation, content) => !!conversation?.isGroup && typeof content === "string" && content.startsWith(GROUP_NOTE);
+// Someone in a group, by id: from its members, or your friends
+const memberName = (conversation, userId) => conversation?.members?.find((m) => m.userId === userId)?.username || state.friends.find((f) => f.userId === userId)?.username || "Someone";
+const blockedId = (userId) => state.blocked.some((b) => b.userId === userId);
+let pendingAdd = null; // a group call: { first, then } — once the call with `first` is live, `then` is added
 const reactQueue = {};   // message id -> the request in flight, so yours arrive in the order you clicked
 const reactWaiting = {}; // message id -> how many of yours haven't been answered yet
 // Someone's 👍 or 👎 on a message changed (reaction is null when they took it back)
@@ -115,6 +124,30 @@ const actions = {
     const t = thread(conversationId);
     if (!t.loaded && !t.loading) await actions.loadThread(conversationId);
     actions.markRead(conversationId);
+  },
+
+  // ── Group chats (Added by aura-messages-groups-setup.cjs) ──
+  async createGroup(title, userIds) {
+    const id = await call("createGroup", title, userIds);
+    await actions.refreshConversations();
+    hooks.goToMessages?.();
+    await actions.open(id);
+    return id;
+  },
+  async addToGroup(conversationId, userIds) { const n = await call("addGroupMembers", conversationId, userIds); await actions.refreshConversations(); return n; },
+  async removeFromGroup(conversationId, userId) { await call("removeGroupMember", conversationId, userId); await actions.refreshConversations(); },
+  async renameGroup(conversationId, title) { const t = await call("renameGroup", conversationId, title); await actions.refreshConversations(); return t; },
+  async leaveGroup(conversationId) {
+    await call("leaveGroup", conversationId);
+    if (state.activeId === conversationId) set({ activeId: null });
+    await actions.refreshConversations();
+  },
+  // Calls with people from a group: the first is called, the second added once that call is going (calls have up to 3 people)
+  callGroup(people) {
+    const [first, then] = people;
+    if (!first) return;
+    pendingAdd = then ? { first: first.userId, then, at: Date.now() } : null;
+    callActions.start(first);
   },
 
   // Open (or start) the conversation with a friend, and go to the Messages page
@@ -226,7 +259,7 @@ const actions = {
     const was = thread(conversationId).items.find((m) => m.id === messageId)?.reactions?.find((r) => r.userId === me)?.reaction || null;
     applyReaction({ conversationId, messageId, userId: me, reaction });
     reactWaiting[messageId] = (reactWaiting[messageId] || 0) + 1;
-    const sent = (reactQueue[messageId] || Promise.resolve()).then(() => call("react", messageId, reaction));
+    const sent = (reactQueue[messageId] || Promise.resolve()).then(() => call("react", messageId, reaction, conversationId)); // (which conversation: for groups, Added by aura-messages-groups-setup.cjs)
     reactQueue[messageId] = sent.then(() => {}, () => {});
     sent.then(() => true, (e) => { hooks.toast?.(e.message, "err"); return false; }).then((ok) => {
       const last = --reactWaiting[messageId] <= 0;
@@ -286,6 +319,7 @@ const actions = {
     if (event.type === "message") return onMessage(event.message);
     if (event.type === "call" || event.type === "signal") return callActions.onEvent(event); // voice calls
     if (event.type === "friends") { actions.refreshFriends(); actions.refreshConversations(); actions.refreshBlocked(); return; }
+    if (event.type === "groups") { actions.refreshConversations(); return; } // added to or removed from a group (Added by aura-messages-groups-setup.cjs)
     if (event.type === "deleted") { if (event.message?.id) applyDeleted(event.message); return; }
     if (event.type === "reaction") return onReaction(event);
     if (event.type === "open") { hooks.goToMessages?.(); actions.open(event.conversationId); return; }
@@ -337,8 +371,9 @@ function onReaction(event) {
   const now = Date.now();
   if (now - (lastNotice["r-" + message.conversationId] || 0) < 4000) return;
   lastNotice["r-" + message.conversationId] = now;
-  const name = state.conversations.find((c) => c.id === message.conversationId)?.username;
-  if (name) hooks.toast?.(`${name} ${event.reaction === "like" ? "liked" : "disliked"} your message`);
+  const where = state.conversations.find((c) => c.id === message.conversationId);
+  const name = where?.isGroup ? memberName(where, event.userId) : where?.username; // (in a group, who it was: Added by aura-messages-groups-setup.cjs)
+  if (name) hooks.toast?.(`${name} ${event.reaction === "like" ? "liked" : "disliked"} your message${where?.isGroup ? " in " + where.title : ""}`);
 }
 
 function applyBackground(conversationId, background) {
@@ -426,6 +461,13 @@ function touchConversation(message, countUnread) {
 function onMessage(message) {
   const mine = message.senderId === state.me.id;
   const conversation = state.conversations.find((c) => c.id === message.conversationId);
+  // In a group: a line like "added Cam" may mean the name or the people changed; someone you blocked stays quiet (Added by aura-messages-groups-setup.cjs)
+  if (isNote(conversation, message.content)) setTimeout(() => actions.refreshConversations(), 150);
+  if (conversation?.isGroup && !mine && blockedId(message.senderId)) {
+    const t0 = state.threads[message.conversationId];
+    if (t0?.loaded && !t0.items.some((m) => m.id === message.id)) setThread(message.conversationId, (cur) => ({ items: mergeMessage(cur.items, message) }));
+    return;
+  }
   const t = state.threads[message.conversationId];
   if (t?.loaded) {
     if (t.items.some((m) => m.id === message.id)) return; // already have it (our own send, confirmed)
@@ -449,6 +491,12 @@ function onMessage(message) {
   if (now - (lastNotice[message.conversationId] || 0) < 4000) return;
   lastNotice[message.conversationId] = now;
   const text = gifOf(message.content) ? "sent a GIF" : message.content.replace(/\s+/g, " ").trim() || (message.media ? `sent a ${mediaWord(message.media) === "GIF" ? "GIF" : mediaWord(message.media).toLowerCase()}` : "");
+  if (conversation?.isGroup) { // "Alex in Squad: ..." (Added by aura-messages-groups-setup.cjs)
+    const who = memberName(conversation, message.senderId);
+    const said = isNote(conversation, message.content) ? `${who} ${message.content.slice(GROUP_NOTE.length)}` : `${who}: ${text}`;
+    hooks.toast?.(`${conversation.title}: ${said.length > 70 ? said.slice(0, 69) + "…" : said}`);
+    return;
+  }
   const say = (name) => hooks.toast?.(`${name || "New message"}: ${text.length > 60 ? text.slice(0, 59) + "…" : text}`);
   const known = conversation?.username || state.friends.find((f) => f.userId === message.senderId)?.username;
   if (known || !listed) say(known);
@@ -462,7 +510,8 @@ actions.markReadNow = (conversationId) => {
 // Someone you know, in the shape the call bar wants: from your friends, or someone you've messaged
 const toPerson = (p) => ({ userId: p.userId, username: p.username, avatarUrl: p.avatarUrl || "" });
 function personById(userId) {
-  const known = state.friends.find((f) => f.userId === userId) || state.conversations.find((c) => c.userId === userId);
+  const known = state.friends.find((f) => f.userId === userId) || state.conversations.find((c) => c.userId === userId)
+    || state.conversations.flatMap((c) => c.members || []).find((m) => m.userId === userId); // (someone from a group: Added by aura-messages-groups-setup.cjs)
   return known ? toPerson(known) : null;
 }
 
@@ -484,6 +533,16 @@ export function useFriendCount() {
 // ── Started once, from AuraApp ────────────────────────────────────────────────
 export function useAuraSocial({ view, goTo, toast }) {
   const s = useSocial();
+  // A call started from a group: once the first person is talking, the second is added (Added by aura-messages-groups-setup.cjs)
+  const current = useCall();
+  useEffect(() => {
+    if (!pendingAdd) return;
+    if (!current || current.phase === "over" || Date.now() - pendingAdd.at > 90000) { if (!current || current.phase === "over") pendingAdd = null; return; }
+    if (current.phase !== "live" || current.peer?.userId !== pendingAdd.first) return;
+    const then = pendingAdd.then;
+    pendingAdd = null;
+    if (typeof callActions.addPerson === "function") callActions.addPerson(then);
+  }, [current?.phase, current?.peer?.userId]);
   hooks.toast = toast;
   hooks.goToMessages = () => goTo("messages");
 
@@ -578,6 +637,22 @@ function Avatar({ name, url, size = 38, online = null }) {
     </span>
   );
 }
+
+// A group's picture: two of its people, overlapping (Added by aura-messages-groups-setup.cjs)
+function GroupAvatar({ conversation, size = 40 }) {
+  const me = state.me?.id;
+  const others = (conversation.members || []).filter((m) => m.userId !== me);
+  const [a, b] = others.length ? others : [{ username: conversation.title }];
+  if (!b) return <Avatar name={a.username} url={a.avatarUrl} size={size} />;
+  const small = Math.round(size * 0.68);
+  return (
+    <span className="mx-gav" style={{ width: size, height: size }} aria-hidden="true">
+      <Avatar name={a.username} url={a.avatarUrl} size={small} />
+      <Avatar name={b.username} url={b.avatarUrl} size={small} />
+    </span>
+  );
+}
+const IconGroupAdd = () => <Svg d={<><circle cx="9" cy="8" r="3.2"/><path d="M3 19a6 6 0 0 1 12 0"/><circle cx="16.5" cy="9" r="2.4"/><path d="M15.5 14.2A5 5 0 0 1 21 19"/></>} />;
 
 // "now", "2m", "1h", "Tue", "Oct 3"
 function shortTime(iso) {
@@ -1017,14 +1092,18 @@ function ConversationList() {
         const mine = c.lastSenderId && s.me && c.lastSenderId === s.me.id;
         // The newest message, in words: its text, what kind of file it was, or that it was deleted
         const missed = callNote(c.lastMessage, mine);
-        const last = missed || (c.lastMessage ? c.lastMessage.replace(/\s+/g, " ") : c.lastMedia || (c.lastSenderId ? "Message deleted" : ""));
+        const lastText = c.lastMessage ? c.lastMessage.replace(/\s+/g, " ") : c.lastMedia || (c.lastSenderId ? "Message deleted" : "");
+        // In a group, who said it ("Alex: ..."), and a line like "added Cam" reads as a sentence (Added by aura-messages-groups-setup.cjs)
+        const last = c.isGroup && lastText
+          ? (isNote(c, c.lastMessage) ? `${mine ? "You" : memberName(c, c.lastSenderId)} ${c.lastMessage.slice(GROUP_NOTE.length)}` : `${mine ? "You" : memberName(c, c.lastSenderId)}: ${lastText}`)
+          : missed || lastText;
         return (
           <button key={c.id} type="button" role="listitem" className={`mx-conv ${s.activeId === c.id ? "on" : ""} ${c.unread ? "unread" : ""}`} onClick={() => actions.open(c.id)}>
-            <Avatar name={c.username} url={c.avatarUrl} size={40} online={c.isFriend ? c.online : null} />
+            {c.isGroup ? <GroupAvatar conversation={c} size={40} /> : <Avatar name={c.username} url={c.avatarUrl} size={40} online={c.isFriend ? c.online : null} />}
             <span className="mx-conv-m">
               <span className="mx-conv-top"><span className="mx-conv-n">{c.username}</span><span className="mx-conv-t">{last ? shortTime(c.lastMessageAt) : ""}</span></span>
               <span className="mx-conv-bot">
-                <span className="mx-conv-p">{last ? (mine && !missed && (c.lastMessage || c.lastMedia) ? "You: " : "") + last : "No messages yet"}</span>
+                <span className="mx-conv-p">{last ? (!c.isGroup && mine && !missed && (c.lastMessage || c.lastMedia) ? "You: " : "") + last : "No messages yet"}</span>
                 {c.unread > 0 && <span className="mx-badge" aria-label={`${c.unread} unread`}>{c.unread > 99 ? "99+" : c.unread}</span>}
               </span>
             </span>
@@ -1251,7 +1330,7 @@ function ReactionChips({ message, me, name, canAdd, onReact }) {
       {["like", "dislike"].map((kind) => {
         const who = list.filter((x) => x.reaction === kind);
         if (!who.length) return null;
-        const names = who.map((x) => (x.userId === me ? "You" : name)).sort((a) => (a === "You" ? -1 : 1));
+        const names = who.map((x) => (x.userId === me ? "You" : typeof name === "function" ? name(x.userId) : name)).sort((a) => (a === "You" ? -1 : 1)); // (a group names each person: Added by aura-messages-groups-setup.cjs)
         const label = `${names.join(" and ")} ${kind === "like" ? "liked" : "disliked"} this`;
         const on = mine === kind;
         return (
@@ -1284,7 +1363,7 @@ function Lightbox({ item, onClose }) {
 
 // Report a person, or one message of theirs. Covers the conversation while it's open.
 const REASONS = [["spam", "Spam"], ["harassment", "Harassment or bullying"], ["inappropriate", "Inappropriate content"], ["other", "Something else"]];
-function ReportSheet({ conversation, message, onClose }) {
+function ReportSheet({ conversation, message, onClose, person }) {
   const [reason, setReason] = useState("");
   const [details, setDetails] = useState("");
   const [alsoBlock, setAlsoBlock] = useState(true);
@@ -1297,14 +1376,14 @@ function ReportSheet({ conversation, message, onClose }) {
     document.addEventListener("keydown", esc, true);
     return () => document.removeEventListener("keydown", esc, true);
   }, [onClose]);
-  const name = conversation.username;
+  const name = person?.username || conversation.username; // (in a group, whoever sent the message: Added by aura-messages-groups-setup.cjs)
   const quoted = message ? (gifOf(message.content) ? "GIF" : message.content ? message.content.replace(/\s+/g, " ").slice(0, 140) : mediaWord(message.media) || "Message") : "";
   const send = async (e) => {
     e.preventDefault();
     if (!reason) { setError("Pick a reason."); return; }
     setBusy(true); setError("");
     try {
-      await actions.report({ userId: conversation.userId, username: name }, { reason, details, messageId: message?.id || null, block: alsoBlock });
+      await actions.report({ userId: person?.userId || conversation.userId, username: name }, { reason, details, messageId: message?.id || null, block: alsoBlock, conversationId: conversation.id });
       hooks.toast?.(alsoBlock ? `Report sent. ${name} is blocked.` : "Report sent. Thank you.");
       onClose();
     } catch (err) { setError(err.message); setBusy(false); }
@@ -1339,6 +1418,175 @@ function ReportSheet({ conversation, message, onClose }) {
   );
 }
 
+// ── Group chats (Added by aura-messages-groups-setup.cjs) ──
+// A list of friends to tick, for making a group or adding people to one
+function FriendTicks({ picked, setPicked, room, skip = [] }) {
+  const s = useSocial();
+  const [find, setFind] = useState("");
+  const friends = s.friends.filter((f) => f.state === "friend" && !skip.includes(f.userId)).sort((a, b) => Number(b.online) - Number(a.online) || a.username.localeCompare(b.username));
+  const wanted = find.trim().toLowerCase();
+  const shown = wanted ? friends.filter((f) => f.username.toLowerCase().includes(wanted)) : friends;
+  const toggle = (id) => setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : cur.length >= room ? cur : [...cur, id]));
+  if (!s.friendsLoaded) return <div className="mx-note">Loading friends…</div>;
+  if (!friends.length) return <div className="mx-note">{skip.length ? "All your friends are already in it." : "No AURA friends yet. Add one first."}</div>;
+  return (
+    <>
+      {friends.length > 6 && <input className="mx-callpick-find" value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find a friend" aria-label="Find a friend" spellCheck={false} />}
+      <div className="mx-ticks" role="group" aria-label="Friends">
+        {shown.map((f) => {
+          const on = picked.includes(f.userId);
+          return (
+            <label key={f.userId} className={`mx-tick ${on ? "on" : ""} ${!on && picked.length >= room ? "full" : ""}`}>
+              <input type="checkbox" checked={on} disabled={!on && picked.length >= room} onChange={() => toggle(f.userId)} />
+              <Avatar name={f.username} url={f.avatarUrl} size={32} online={f.online} />
+              <span className="mx-tick-n">{f.username}</span>
+            </label>
+          );
+        })}
+        {wanted && !shown.length && <div className="mx-note">No friend named "{find.trim()}".</div>}
+      </div>
+    </>
+  );
+}
+
+// Making a group: a name and some friends
+function NewGroupSheet({ onClose }) {
+  const [title, setTitle] = useState("");
+  const [picked, setPicked] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    document.addEventListener("keydown", esc, true);
+    return () => document.removeEventListener("keydown", esc, true);
+  }, [onClose]);
+  const make = async (e) => {
+    e.preventDefault();
+    if (!title.trim()) { setError("Give the group a name."); return; }
+    if (!picked.length) { setError("Pick at least one friend."); return; }
+    setBusy(true); setError("");
+    try { await actions.createGroup(title, picked); onClose(); }
+    catch (err) { setError(err.message); setBusy(false); }
+  };
+  return createPortal(
+    <div className="mx-sheet mx-sheet-page" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="mx-sheet-in" role="dialog" aria-modal="true" aria-label="New group" onSubmit={make}>
+        <div className="mx-sheet-t">New group</div>
+        <label className="mx-field">
+          <span>Name</span>
+          <input className="mx-input" value={title} onChange={(e) => { setTitle(e.target.value); setError(""); }} maxLength={60} placeholder="Friday squad" autoFocus />
+        </label>
+        <div className="mx-field"><span>Friends ({picked.length} of {GROUP_MAX - 1})</span></div>
+        <FriendTicks picked={picked} setPicked={(f) => { setPicked(f); setError(""); }} room={GROUP_MAX - 1} />
+        {error && <div className="mx-note err" role="alert">{error}</div>}
+        <div className="mx-sheet-a">
+          <button type="button" className="mx-btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="mx-btn" disabled={busy}>{busy ? "Making it…" : "Make group"}</button>
+        </div>
+      </form>
+    </div>,
+    document.querySelector(".mx") || document.body,
+  );
+}
+
+// A group's people: rename it, add or remove people (whoever made it), leave it
+function GroupCard({ conversation, onClose }) {
+  const s = useSocial();
+  const box = useRef(null);
+  const [name, setName] = useState(conversation.title);
+  const [adding, setAdding] = useState(false);
+  const [picked, setPicked] = useState([]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setName(conversation.title); }, [conversation.title]);
+  useEffect(() => {
+    const away = (e) => { if (box.current && !box.current.contains(e.target) && !e.target.closest?.("[data-mx-profile]")) onClose(); };
+    const esc = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [onClose]);
+  const me = s.me?.id;
+  const owner = conversation.ownerId === me;
+  const room = GROUP_MAX - (conversation.members || []).length;
+  const run = async (work, done) => { setBusy(true); try { await work(); done?.(); } catch (e) { hooks.toast?.(e.message, "err"); } setBusy(false); };
+  const rename = (e) => { e.preventDefault(); if (name.trim() && name.trim() !== conversation.title) run(() => actions.renameGroup(conversation.id, name)); };
+  const add = () => run(() => actions.addToGroup(conversation.id, picked), () => { setPicked([]); setAdding(false); });
+  const remove = (m) => { if (window.confirm(`Remove ${m.username} from ${conversation.title}?`)) run(() => actions.removeFromGroup(conversation.id, m.userId)); };
+  const leave = () => { if (window.confirm(`Leave ${conversation.title}? You won't see its messages any more${owner && conversation.members.length > 1 ? ", and someone else will look after it" : ""}.`)) run(() => actions.leaveGroup(conversation.id), onClose); };
+  return (
+    <div className="mx-pop mx-profile mx-gcard" ref={box} role="dialog" aria-label={`${conversation.title}: people`}>
+      <GroupAvatar conversation={conversation} size={64} />
+      <form className="mx-gname" onSubmit={rename}>
+        <input className="mx-input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} aria-label="Group name" />
+        {name.trim() && name.trim() !== conversation.title && <button type="submit" className="mx-btn" disabled={busy}>Save</button>}
+      </form>
+      <div className="mx-profile-s">{conversation.members.length} {conversation.members.length === 1 ? "person" : "people"}</div>
+      <div className="mx-gpeople" role="list">
+        {conversation.members.map((m) => (
+          <div key={m.userId} className="mx-gperson" role="listitem">
+            <Avatar name={m.username} url={m.avatarUrl} size={32} online={m.userId === me ? null : m.isFriend ? m.online : null} />
+            <span className="mx-gperson-n">{m.userId === me ? "You" : m.username}{m.owner && <small>Made the group</small>}{m.userId !== me && !m.isFriend && <small>Not in your friends</small>}</span>
+            {owner && m.userId !== me && <button type="button" className="mx-link" onClick={() => remove(m)} disabled={busy}>Remove</button>}
+          </div>
+        ))}
+      </div>
+      {owner && (adding ? (
+        <div className="mx-gadd">
+          <FriendTicks picked={picked} setPicked={setPicked} room={room} skip={conversation.members.map((m) => m.userId)} />
+          <div className="mx-sheet-a">
+            <button type="button" className="mx-btn ghost" onClick={() => { setAdding(false); setPicked([]); }}>Cancel</button>
+            <button type="button" className="mx-btn" onClick={add} disabled={busy || !picked.length}>Add {picked.length || ""}</button>
+          </div>
+        </div>
+      ) : room > 0
+        ? <button type="button" className="mx-btn ghost" onClick={() => setAdding(true)}><IconPlus /> Add people</button>
+        : <div className="mx-note">This group is full ({GROUP_MAX} people).</div>)}
+      <button type="button" className="mx-btn ghost danger" onClick={leave} disabled={busy}>Leave group</button>
+    </div>
+  );
+}
+
+// Calling from a group: pick one or two of its people (calls have up to 3 people)
+function GroupCallPicker({ conversation, onClose }) {
+  const box = useRef(null);
+  const current = useCall();
+  const [picked, setPicked] = useState([]);
+  useEffect(() => {
+    const away = (e) => { if (box.current && !box.current.contains(e.target) && !e.target.closest?.("[data-mx-gcall]")) onClose(); };
+    const esc = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [onClose]);
+  const me = state.me?.id;
+  const callable = (conversation.members || []).filter((m) => m.userId !== me && m.isFriend).sort((a, b) => Number(b.online) - Number(a.online));
+  const others = (conversation.members || []).filter((m) => m.userId !== me && !m.isFriend);
+  const busy = !!current && current.phase !== "over";
+  const room = typeof callActions.addPerson === "function" ? 2 : 1;
+  const go = () => { actions.callGroup(picked.map((id) => toPerson(callable.find((m) => m.userId === id)))); onClose(); };
+  return (
+    <div className="mx-pop mx-callpick mx-gcall" ref={box} role="dialog" aria-label="Call people from this group">
+      <div className="mx-pop-t">Call {room > 1 ? "one or two people" : "someone"}</div>
+      {busy && <div className="mx-note">You're already in a call. Hang up first.</div>}
+      <div className="mx-ticks" role="group" aria-label="People in this group">
+        {callable.map((m) => {
+          const on = picked.includes(m.userId);
+          return (
+            <label key={m.userId} className={`mx-tick ${on ? "on" : ""}`}>
+              <input type="checkbox" checked={on} disabled={busy || (!on && picked.length >= room)} onChange={() => setPicked((cur) => (on ? cur.filter((x) => x !== m.userId) : [...cur, m.userId]))} />
+              <Avatar name={m.username} url={m.avatarUrl} size={32} online={m.online} />
+              <span className="mx-tick-n">{m.username}<small>{m.online ? "Online" : "Offline"}</small></span>
+            </label>
+          );
+        })}
+      </div>
+      {!callable.length && <div className="mx-note">Calls are between friends. Nobody else here is your friend yet.</div>}
+      {others.length > 0 && callable.length > 0 && <div className="mx-callpick-foot">Calls are between friends, so {others.map((m) => m.username).join(", ")} can't be called from here.</div>}
+      <button type="button" className="mx-btn" onClick={go} disabled={busy || !picked.length}><IconPhone size={14} /> {picked.length > 1 ? "Call both" : "Call"}</button>
+    </div>
+  );
+}
+
 function Thread({ conversation, nowPlaying }) {
   const s = useSocial();
   const t = s.threads[conversation.id] || thread(conversation.id);
@@ -1350,6 +1598,9 @@ function Thread({ conversation, nowPlaying }) {
   const [showProfile, setShowProfile] = useState(false);
   const [newBelow, setNewBelow] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);     // the GIF search, above the typing box
+  const [groupCall, setGroupCall] = useState(false); // picking who to call from a group (Added by aura-messages-groups-setup.cjs)
+  const group = !!conversation.isGroup;
+  const nameOf = (userId) => (group ? memberName(conversation, userId) : conversation.username);
   const scroller = useRef(null);
   const input = useRef(null);
   const picker = useRef(null);
@@ -1454,7 +1705,7 @@ function Thread({ conversation, nowPlaying }) {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } // Enter sends, Shift+Enter makes a new line
   };
   const remove = async (m) => {
-    if (!window.confirm("Delete this message for both of you? This can't be undone.")) return;
+    if (!window.confirm(group ? "Delete this message for everyone in the group? This can't be undone." : "Delete this message for both of you? This can't be undone.")) return;
     try { await actions.deleteMessage(conversation.id, m.id); }
     catch (e) { hooks.toast?.(e.message, "err"); }
   };
@@ -1471,29 +1722,35 @@ function Thread({ conversation, nowPlaying }) {
     for (const m of t.items) {
       const d = new Date(m.createdAt).toDateString();
       if (d !== day) { day = d; out.push({ type: "day", key: "day-" + d, label: dayLabel(m.createdAt) }); }
+      if (!m.deleted && isNote(conversation, m.content)) { out.push({ type: "note", key: "n-" + m.id, message: m }); continue; } // "Alex added Cam" (Added by aura-messages-groups-setup.cjs)
       const prev = out[out.length - 1];
       if (prev?.type === "group" && prev.senderId === m.senderId && Date.parse(m.createdAt) - Date.parse(prev.items[prev.items.length - 1].createdAt) < 5 * 60000) prev.items.push(m);
       else out.push({ type: "group", key: "g-" + m.id, senderId: m.senderId, items: [m] });
     }
     return out;
-  }, [t.items]);
+  }, [t.items, conversation.isGroup]);
 
   return (
     <section className={`mx-thread ${dropping ? "dropping" : ""}`} aria-label={`Conversation with ${conversation.username}`} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
       <header className="mx-head">
         <button type="button" className="mx-who" data-mx-profile onClick={() => setShowProfile((v) => !v)} title="View profile" aria-expanded={showProfile}>
-          <Avatar name={conversation.username} url={conversation.avatarUrl} size={40} online={conversation.isFriend ? conversation.online : null} />
-          <span><span className="mx-who-n">{conversation.username}</span><span className="mx-who-s">{conversation.isFriend ? (conversation.online ? "Online" : "Offline") : "Not in your friends"}</span></span>
+          {group ? <GroupAvatar conversation={conversation} size={40} /> : <Avatar name={conversation.username} url={conversation.avatarUrl} size={40} online={conversation.isFriend ? conversation.online : null} />}
+          <span><span className="mx-who-n">{conversation.username}</span><span className="mx-who-s">{group
+            ? `${conversation.members.length} people · ${conversation.members.filter((m) => m.userId !== s.me?.id).map((m) => m.username).join(", ")}`
+            : conversation.isFriend ? (conversation.online ? "Online" : "Offline") : "Not in your friends"}</span></span>
         </button>
         <div className="mx-head-a">
           {nowPlaying?.title && conversation.isFriend && (
             <button type="button" className="mx-btn ghost" onClick={() => send(`🎮 Join me in ${nowPlaying.title}!`)} title={`Invite ${conversation.username} to ${nowPlaying.title}`}><IconGame /> Invite to {nowPlaying.title}</button>
           )}
-          {conversation.isFriend && (
+          {conversation.isFriend && !group && (
             <CallButton person={toPerson(conversation)} className="mx-btn ghost">{({ withThem }) => <><IconPhone size={15} /> {withThem ? "In call" : "Call"}</>}</CallButton>
           )}
+          {group && callsAvailable() && <button type="button" className={`mx-btn ghost ${groupCall ? "on" : ""}`} data-mx-gcall onClick={() => setGroupCall((v) => !v)} aria-expanded={groupCall}><IconPhone size={15} /> Call</button>}
         </div>
-        {showProfile && <ProfileCard conversation={conversation} onClose={() => setShowProfile(false)} onReport={(message) => setReporting({ message })} />}
+        {showProfile && !group && <ProfileCard conversation={conversation} onClose={() => setShowProfile(false)} onReport={(message) => setReporting({ message })} />}
+        {showProfile && group && <GroupCard conversation={conversation} onClose={() => setShowProfile(false)} />}
+        {groupCall && group && <GroupCallPicker conversation={conversation} onClose={() => setGroupCall(false)} />}
       </header>
 
       {s.everLive && !s.live && <div className="mx-banner" role="status">Reconnecting. New messages may take a moment to show up.</div>}
@@ -1511,8 +1768,12 @@ function Thread({ conversation, nowPlaying }) {
         )}
         {blocks.map((b) => b.type === "day" ? (
           <div key={b.key} className="mx-day"><span>{b.label}</span></div>
+        ) : b.type === "note" ? (
+          <div key={b.key} className="mx-gnote">{s.me && b.message.senderId === s.me.id ? "You" : nameOf(b.message.senderId)} {b.message.content.slice(GROUP_NOTE.length)}</div>
+        ) : group && blockedId(b.senderId) ? (
+          <div key={b.key} className="mx-gnote">{b.items.length === 1 ? "A message" : `${b.items.length} messages`} from someone you blocked</div>
         ) : (
-          <div key={b.key} className={`mx-group ${s.me && b.senderId === s.me.id ? "me" : "them"}`}>
+          <div key={b.key} className={`mx-group ${s.me && b.senderId === s.me.id ? "me" : "them"} ${group ? "in-group" : ""}`}>
             {b.items.map((m) => {
               const gif = m.deleted ? "" : gifOf(m.content);
               const settled = !m.pending && !m.failed && !m.deleted;
@@ -1528,7 +1789,7 @@ function Thread({ conversation, nowPlaying }) {
                   {m.content === MISSED_CALL && conversation.isFriend && s.me && m.senderId !== s.me.id && (
                     <CallButton person={toPerson(conversation)} className="mx-link mx-callback">Call back</CallButton>
                   )}
-                  {reactable && <ReactionChips message={m} me={meId} name={conversation.username} canAdd={conversation.isFriend} onReact={(kind) => actions.react(conversation.id, m.id, kind)} />}
+                  {reactable && <ReactionChips message={m} me={meId} name={group ? nameOf : conversation.username} canAdd={conversation.isFriend} onReact={(kind) => actions.react(conversation.id, m.id, kind)} />}
                   {settled && (
                     <div className="mx-acts">
                       {reactable && conversation.isFriend && <>
@@ -1546,7 +1807,7 @@ function Thread({ conversation, nowPlaying }) {
                 </div>
               );
             })}
-            <div className="mx-meta"><b>{s.me && b.senderId === s.me.id ? "You" : conversation.username}</b>{b.items[b.items.length - 1].failed ? "" : b.items[b.items.length - 1].pending ? "Sending…" : clock(b.items[b.items.length - 1].createdAt)}</div>
+            <div className="mx-meta">{group && s.me && b.senderId !== s.me.id && <Avatar name={nameOf(b.senderId)} url={conversation.members.find((x) => x.userId === b.senderId)?.avatarUrl} size={18} />}<b>{s.me && b.senderId === s.me.id ? "You" : nameOf(b.senderId)}</b>{b.items[b.items.length - 1].failed ? "" : b.items[b.items.length - 1].pending ? "Sending…" : clock(b.items[b.items.length - 1].createdAt)}</div>
           </div>
         ))}
       </div>
@@ -1581,7 +1842,7 @@ function Thread({ conversation, nowPlaying }) {
       )}
       {dropping && <div className="mx-drop" aria-hidden="true"><div><IconPhoto /> Drop to attach</div></div>}
       {viewing && <Lightbox item={viewing} onClose={() => setViewing(null)} />}
-      {reporting && <ReportSheet conversation={conversation} message={reporting.message} onClose={() => setReporting(null)} />}
+      {reporting && <ReportSheet conversation={conversation} message={reporting.message} person={group && reporting.message ? { userId: reporting.message.senderId, username: nameOf(reporting.message.senderId) } : null} onClose={() => setReporting(null)} />}
     </section>
   );
 }
@@ -1592,6 +1853,7 @@ export default function MessagesPage({ nowPlaying }) {
   const [picking, setPicking] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [calling, setCalling] = useState(false); // the "Call a friend" list
+  const [grouping, setGrouping] = useState(false); // making a group (Added by aura-messages-groups-setup.cjs)
   useEffect(() => {
     ensureStyles();
     // While this page is open and in front, freshen the online dots now and then
@@ -1602,7 +1864,7 @@ export default function MessagesPage({ nowPlaying }) {
   const active = conversations.find((c) => c.id === s.activeId) || null;
   const requests = s.friends.filter((f) => f.state === "incoming").length;
   // A chat's shared background wins while that chat is open; otherwise your own choice shows
-  const sharedUrl = useLoadedMedia(active?.background?.path || "");
+  const sharedUrl = useLoadedMedia(active?.isGroup ? "" : active?.background?.path || "");
   const picture = sharedUrl || ownPicture;
   const style = picture ? { ...vars, ...pictureVars(look) } : vars;
 
@@ -1622,13 +1884,17 @@ export default function MessagesPage({ nowPlaying }) {
                 {drawer ? <IconX /> : <IconPlus />}{!drawer && requests > 0 && <i className="mx-pip" />}
               </button>
             </div>
-            {picking && <LookPicker look={look} setLook={setLook} onClose={() => setPicking(false)} conversation={active} sharedUrl={sharedUrl} hasPicture={!!picture} />}
+            {picking && <LookPicker look={look} setLook={setLook} onClose={() => setPicking(false)} conversation={active?.isGroup ? null : active} sharedUrl={sharedUrl} hasPicture={!!picture} />}
             {calling && <CallPicker onClose={() => setCalling(false)} />}
+            {grouping && <NewGroupSheet onClose={() => setGrouping(false)} />}
           </div>
           {drawer ? (
             <div className="mx-drawer"><FriendsManager variant="glass" onMessaged={() => setDrawer(false)} /></div>
           ) : (
-            <ConversationList />
+            <>
+              {groupsAvailable() && <button type="button" className="mx-newgroup" onClick={() => setGrouping(true)} aria-label="New group"><IconGroupAdd /> New group</button>}{/* (Added by aura-messages-groups-setup.cjs) */}
+              <ConversationList />
+            </>
           )}
         </aside>
         {active ? (
@@ -1977,10 +2243,50 @@ const CSS = `
 .mx-callpick-foot{padding:9px 8px 2px;font-size:11.5px;line-height:1.45;color:var(--mx-ink3)}
 `;
 
+// Group chats (Added by aura-messages-groups-setup.cjs)
+const GROUP_CSS = `
+.mx-gav{position:relative;display:inline-block;flex-shrink:0}
+.mx-gav .mx-av{position:absolute;box-shadow:0 0 0 2px color-mix(in srgb,var(--mx-base) 85%,#000)}
+.mx-gav .mx-av:first-child{top:0;left:0}
+.mx-gav .mx-av:last-child{right:0;bottom:0}
+.mx-gnote{align-self:center;margin:10px auto 4px;padding:4px 12px;border-radius:999px;font-size:12px;color:var(--mx-ink2);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);max-width:80%;text-align:center;overflow-wrap:anywhere}
+.mx-group.in-group .mx-meta{align-items:center}
+.mx-group.in-group .mx-meta .mx-av{margin-right:-2px}
+.mx-input{width:100%;padding:9px 11px;border-radius:10px;font:13.5px 'DM Sans',sans-serif;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);color:#fff;box-sizing:border-box}
+.mx-input:focus{outline:none;border-color:var(--mx-a)}
+.mx-field>span{display:block;margin-bottom:5px;font-size:12px;font-weight:600;color:var(--mx-ink2)}
+.mx-ticks{display:flex;flex-direction:column;gap:2px;max-height:min(300px,calc(100vh - 360px));overflow-y:auto;margin:0 -6px}
+.mx-tick{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:12px;cursor:pointer;border:1px solid transparent}
+.mx-tick:hover{background:rgba(255,255,255,.08)}
+.mx-tick.on{background:color-mix(in srgb,var(--mx-a) 22%,transparent);border-color:color-mix(in srgb,var(--mx-a) 55%,transparent)}
+.mx-tick.full{opacity:.5;cursor:default}
+.mx-tick input{accent-color:var(--mx-a);width:16px;height:16px;margin:0}
+.mx-tick-n{flex:1;min-width:0;display:flex;flex-direction:column;font-size:13.5px;font-weight:500;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mx-tick-n small,.mx-gperson-n small{font-size:11px;font-weight:400;color:var(--mx-ink3)}
+.mx-sheet-page{position:fixed;z-index:60}
+.mx-gcard{width:300px;max-height:calc(100vh - 140px);overflow-y:auto}
+.mx-gname{display:flex;gap:6px;width:100%;margin-top:10px}
+.mx-gname .mx-input{text-align:center;font-family:'Rajdhani',sans-serif;font-size:19px;font-weight:700;padding:5px 10px;background:transparent;border-color:transparent}
+.mx-gname .mx-input:hover,.mx-gname .mx-input:focus{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.15)}
+.mx-gname .mx-btn{margin-top:0;padding:6px 12px}
+.mx-gpeople{width:100%;display:flex;flex-direction:column;gap:2px;margin:10px 0 4px;text-align:left}
+.mx-gperson{display:flex;align-items:center;gap:10px;padding:5px 4px}
+.mx-gperson-n{flex:1;min-width:0;display:flex;flex-direction:column;font-size:13px;color:#fff}
+.mx-gadd{width:100%;display:flex;flex-direction:column;gap:8px;margin-top:8px;text-align:left}
+.mx-gcard .mx-btn{margin-top:8px}
+.mx-gcall{left:auto;right:16px;width:290px;gap:8px}
+.mx-gcall .mx-btn{align-self:flex-end;margin-top:6px}
+.mx-gcall .mx-ticks{margin:0}
+.mx-sheet-page .mx-sheet-in,.mx-ticks,.mx-gadd{text-align:left}
+.mx-sheet-page .mx-sheet-t{text-align:left}
+.mx-gperson .mx-link{font-size:12px}
+.mx-newgroup{display:flex;align-items:center;justify-content:center;gap:8px;margin:0 12px 8px;padding:8px 12px;border-radius:12px;cursor:pointer;font:600 12.5px 'DM Sans',sans-serif;color:var(--mx-ink2);background:rgba(255,255,255,.05);border:1px dashed rgba(255,255,255,.18);transition:background .15s,color .15s}
+.mx-newgroup:hover,.mx-newgroup:focus-visible{background:rgba(255,255,255,.1);color:#fff}
+`;
 function ensureStyles() {
   if (document.getElementById("aura-mx-styles")) return;
   const el = document.createElement("style");
   el.id = "aura-mx-styles";
-  el.textContent = CSS;
+  el.textContent = CSS + GROUP_CSS; // (group chats: Added by aura-messages-groups-setup.cjs)
   document.head.appendChild(el);
 }

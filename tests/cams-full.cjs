@@ -240,19 +240,33 @@ async function person(browser, world, base, id, name) {
     await A.locator(".cx-cams").hover();
     const btn = A.locator('.cx-cams button[aria-label="Full screen"]');
     check("the camera panel has a Full screen button", await btn.isVisible());
+    // Only the window in front may go full screen (like a real AURA window you click in): three pretend people are three windows here (Added by aura-cams-full-fix-setup.cjs)
+    await A.bringToFront();
     await btn.click();
-    let s = await until(() => isFull(A), 8000);
+    // (full screen can take a moment to start: wait for it, and only then settle for filling the window)
+    let s = (await until(async () => { const x = await isFull(A); return x && x.fs ? x : null; }, 8000)) || (await until(() => isFull(A), 2000));
     check("pressing it fills the screen with the camera", !!s, await state(A));
     if (s && !s.fs) note("this browser didn't allow full screen, so it filled the window instead (AURA does the same if Windows says no)");
     check("it says how to get out", /Esc/.test(await A.locator(".cx-cams").innerText()));
     if (process.env.AURA_SHOT_DIR) await A.screenshot({ path: path.join(process.env.AURA_SHOT_DIR, "cams-full.png") });
     await A.keyboard.press("Escape");
     check("Esc puts it back under the call box", !!(await until(() => isSmall(A), 8000)), await state(A));
+    await A.bringToFront();
     await A.locator(".cx-cams .cx-cam-theirs").dblclick();
     check("double-clicking the camera goes full screen too", !!(await until(() => isFull(A), 8000)), await state(A));
     await A.locator('.cx-cams button[aria-label="Exit full screen"]').click();
     check("and the button brings it back", !!(await until(() => isSmall(A), 8000)), await state(A));
     check("the call carried on throughout", (await A.locator(".cx-bar.live").count()) === 1);
+    // A slow PC: Windows only grants full screen after Esc was already pressed (Added by aura-cams-full-fix-setup.cjs)
+    await A.evaluate(() => { const real = Element.prototype.requestFullscreen; window.__realFs = real; Element.prototype.requestFullscreen = function (...a) { const el = this; return new Promise((r) => setTimeout(r, 900)).then(() => real.apply(el, a)); }; });
+    await A.bringToFront();
+    await A.locator(".cx-cams").hover();
+    await A.locator('.cx-cams button[aria-label="Full screen"]').click();
+    await sleep(150);
+    await A.keyboard.press("Escape");
+    await sleep(2500);
+    check("if full screen arrives after Esc, it is left again straight away", !!(await isSmall(A)) && !(await A.evaluate(() => !!document.fullscreenElement)), await state(A));
+    await A.evaluate(() => { Element.prototype.requestFullscreen = window.__realFs; });
 
     console.log("2. Your own camera, full screen");
     await B.locator(".cx-bar .cx-round.cam.on").click();

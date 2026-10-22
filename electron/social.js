@@ -44,6 +44,10 @@ const BACKGROUND_SETUP = "Shared chat backgrounds aren't set up in Supabase yet.
 // the sound goes straight from one PC to the other.
 const VOICE_SETUP = "Voice calls aren't set up in Supabase yet. Run aura-messages-voice.sql first.";
 const GROUP_SETUP = "Calls with 3 people aren't set up in Supabase yet. Run aura-calls-group.sql first."; // (Added by aura-group-calls-setup.cjs)
+// Group chats // (Added by aura-messages-groups-setup.cjs)
+const GROUPS_SETUP = "Group chats aren't set up in Supabase yet. Run aura-messages-groups.sql first.";
+const GROUP_MAX = 10;
+const GROUP_NOTE = "👥 "; // a line in a group saying what happened ("added Cam"), sent as the person who did it
 const SIGNAL_KINDS = ["offer", "answer", "ice"];
 const SIGNAL_MAX = 20000;
 // Free public servers that tell a PC its own internet address, so two PCs can connect directly.
@@ -115,6 +119,11 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   let callsWereDown = false;         // the calls connection dropped: check for a missed ring when it's back
   let reactChannel = null;           // a fourth connection, for likes and dislikes
   let reactionsReady = true;         // false once we learn the likes SQL hasn't been run yet
+  let groupsReady = true;            // same, for group chats // (Added by aura-messages-groups-setup.cjs)
+  const groupTitles = new Map();     // group id -> its name, for notifications (and to know which conversations are groups)
+  let groupChannel = null;           // a fifth connection: being added to or removed from a group
+  let groupsTimer = null;
+  const notGroups = new Set();       // conversations known to be chats of two
   let gifKey = null;                 // { at, key } a GIPHY key, if that is what the AURA server uses for GIFs
   const gifPages = new Map();        // "words|offset" -> { at, page } so the same search isn't sent twice
 
@@ -130,6 +139,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     const msg = String(error?.message || error || "Something went wrong");
     const code = String(error?.code || "");
     if (/fetch failed|network|timeout|ENOTFOUND|ECONN|EAI_AGAIN/i.test(msg)) return new Error("You're offline. Check your connection and try again.");
+    if (/create_group|list_groups|add_group_members|remove_group_member|leave_group|rename_group|mark_group_read|react_in_group|report_in_group|conversation_members/.test(msg) && (code === "PGRST202" || code === "PGRST205" || code === "42883" || code === "42P01" || /schema cache|does not exist/i.test(msg))) return new Error(GROUPS_SETUP); // (Added by aura-messages-groups-setup.cjs)
     if (/add_to_call|join_group|group_id/.test(msg) && (code === "PGRST202" || code === "42883" || code === "42703" || /schema cache|does not exist/i.test(msg))) return new Error(GROUP_SETUP); // (Added by aura-group-calls-setup.cjs)
     if (/start_call|answer_call|end_call|call_heartbeat|send_call_signal|current_call|voice_calls|voice_signals/.test(msg) && (code === "PGRST202" || code === "PGRST205" || code === "42883" || code === "42P01" || /schema cache|does not exist/i.test(msg))) return new Error(VOICE_SETUP);
     if (/react_to_message|message_reactions/.test(msg) && (code === "PGRST202" || code === "PGRST205" || code === "42883" || code === "42P01" || /schema cache|does not exist/i.test(msg))) return new Error(REACTIONS_SETUP);
@@ -241,7 +251,8 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     }
     if (!rows) rows = (await rpc("list_conversations")) || []; // from before the media update
     const backgrounds = await sharedBackgrounds();
-    return rows.map((r) => {
+    const groups = await listGroups(); // group chats are in the same list // (Added by aura-messages-groups-setup.cjs)
+    const chats = rows.map((r) => {
       if (r.username) names.set(r.other_id, r.username);
       return {
         id: r.id, userId: r.other_id, username: r.username || "AURA user", avatarUrl: r.avatar_url || "",
@@ -251,7 +262,80 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
         background: backgrounds.get(r.id) || null,
       };
     });
+    if (!groups.length) return chats;
+    return [...chats, ...groups].sort((a, b) => Date.parse(b.lastMessageAt || 0) - Date.parse(a.lastMessageAt || 0));
   }
+
+  // ── Group chats // (Added by aura-messages-groups-setup.cjs) ──
+  // A group is a conversation with a list of members (aura-messages-groups.sql). It sits in the
+  // same list as chats of two, shaped the same way so the window can show either: `username` is
+  // the group's name and `isFriend` means you can send to it.
+  async function listGroups() {
+    if (!groupsReady) return [];
+    const { data, error } = await sb().rpc("list_groups");
+    if (error) {
+      if (friendly(error).message === GROUPS_SETUP) { groupsReady = false; return []; }
+      throw friendly(error);
+    }
+    groupTitles.clear();
+    return (data || []).map((r) => {
+      const members = (Array.isArray(r.members) ? r.members : []).map((m) => {
+        if (m.username) names.set(m.user_id, m.username);
+        return { userId: m.user_id, username: m.username || "AURA user", avatarUrl: m.avatar_url || "", owner: m.role === "owner", isFriend: !!m.is_friend, online: isOnline(m.last_seen_at) };
+      });
+      groupTitles.set(r.id, r.title || "Group");
+      const note = typeof r.last_message === "string" && r.last_message.startsWith(GROUP_NOTE);
+      return {
+        id: r.id, isGroup: true, title: r.title || "Group", username: r.title || "Group", userId: null, avatarUrl: "", online: false, isFriend: true,
+        ownerId: r.owner_id || null, members,
+        lastMessage: looksLikeGif(r.last_message) ? "" : r.last_message || "", lastSenderId: r.last_sender_id || null, lastMessageAt: r.last_message_at, unread: r.unread || 0,
+        lastMedia: looksLikeGif(r.last_message) ? "GIF" : r.last_media_kind ? mediaWord({ kind: r.last_media_kind, mime: r.last_media_mime }) : "", lastNote: note,
+        background: null,
+      };
+    });
+  }
+  const people = (list) => {
+    const ids = [...new Set((Array.isArray(list) ? list : []).map((u) => id(u, "user")))];
+    if (ids.length > GROUP_MAX) throw new Error("Groups can have up to " + GROUP_MAX + " people.");
+    return ids;
+  };
+  const groupName = (title) => {
+    const t = String(title ?? "").replace(/\s+/g, " ").trim();
+    if (!t) throw new Error("Give the group a name.");
+    if (t.length > 60) throw new Error("Keep the group's name to 60 characters or fewer.");
+    return t;
+  };
+  async function createGroup(title, userIds) {
+    await currentUser();
+    const name = groupName(title);
+    const ids = people(userIds);
+    if (!ids.length) throw new Error("Pick at least one friend for the group.");
+    const cid = await rpc("create_group", { title: name, people: ids });
+    groupsReady = true;
+    groupTitles.set(cid, name);
+    return cid;
+  }
+  const addGroupMembers = async (conversationId, userIds) => rpc("add_group_members", { conversation: id(conversationId, "group"), people: people(userIds) });
+  const removeGroupMember = async (conversationId, userId) => rpc("remove_group_member", { conversation: id(conversationId, "group"), who: id(userId, "user") });
+  async function leaveGroup(conversationId) {
+    const cid = id(conversationId, "group");
+    const done = await rpc("leave_group", { conversation: cid });
+    groupTitles.delete(cid);
+    return done;
+  }
+  // A group's name, for a message from a conversation AURA hasn't listed yet (null: not a group)
+  async function groupTitleOf(conversationId) {
+    if (groupTitles.has(conversationId)) return groupTitles.get(conversationId);
+    if (!groupsReady || notGroups.has(conversationId)) return null;
+    try {
+      const { data, error } = await sb().from("conversations").select("is_group,title").eq("id", conversationId).maybeSingle();
+      if (error || !data) return null;
+      if (!data.is_group) { notGroups.add(conversationId); return null; }
+      groupTitles.set(conversationId, data.title || "Group");
+      return groupTitles.get(conversationId);
+    } catch { return null; }
+  }
+  const renameGroup = async (conversationId, title) => rpc("rename_group", { conversation: id(conversationId, "group"), title: groupName(title) });
 
   const openConversation = async (userId) => rpc("open_conversation", { other: id(userId, "user") });
 
@@ -292,12 +376,12 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     } catch {}
   }
   // reaction: "like", "dislike", or null to take yours back. Supabase checks it is your conversation.
-  async function react(messageId, reaction) {
+  async function react(messageId, reaction, conversationId) {
     const user = await currentUser();
     const mid = id(messageId, "message");
     const feeling = reaction == null || reaction === "" ? null : String(reaction);
     if (feeling !== null && !REACTIONS.includes(feeling)) throw new Error("That isn't a reaction AURA knows.");
-    await rpc("react_to_message", { message: mid, feeling });
+    await rpc(groupTitles.has(conversationId) ? "react_in_group" : "react_to_message", { message: mid, feeling }); // (groups: Added by aura-messages-groups-setup.cjs)
     reactionsReady = true;
     return { messageId: mid, userId: user.id, reaction: feeling };
   }
@@ -450,7 +534,8 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     if (!REPORT_REASONS.includes(reason)) throw new Error("Pick a reason for the report.");
     const details = String(report?.details ?? "").replace(/\r\n?/g, "\n").trim();
     if (details.length > 1000) throw new Error("Keep the details under 1,000 characters.");
-    await rpc("report_user", { target, why: reason, more: details || null, message: report?.messageId ? id(report.messageId, "message") : null });
+    const inGroup = !!report?.messageId && groupTitles.has(report?.conversationId); // (a message in a group: Added by aura-messages-groups-setup.cjs)
+    await rpc(inGroup ? "report_in_group" : "report_user", { target, why: reason, more: details || null, message: report?.messageId ? id(report.messageId, "message") : null });
     if (report?.block) await rpc("block_user", { target });
     return true;
   }
@@ -508,7 +593,8 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     return { urls, seconds: MEDIA_LINK_SECONDS };
   }
 
-  const markRead = async (conversationId) => rpc("mark_conversation_read", { conversation: id(conversationId, "conversation") });
+  // (a group keeps each person's place separately: Added by aura-messages-groups-setup.cjs)
+  const markRead = async (conversationId) => (groupTitles.has(conversationId) ? rpc("mark_group_read", { conversation: id(conversationId, "group") }) : rpc("mark_conversation_read", { conversation: id(conversationId, "conversation") }));
 
   // ── Voice calls ─────────────────────────────────────────────────────────────
   // Supabase decides who may call whom (friends only) and keeps each call's state. Everything
@@ -704,8 +790,9 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     stopRinging();
     liveCall = null; groupLive.clear(); relays = null; callsWereDown = false; // (a relay's login isn't kept for the next account)
     gifKey = null; gifPages.clear();
-    const old = [channel, bgChannel, callChannel, reactChannel];
-    channel = null; bgChannel = null; callChannel = null; reactChannel = null; channelUser = null; live = false;
+    clearTimeout(groupsTimer); groupsTimer = null; groupTitles.clear(); notGroups.clear(); // // (Added by aura-messages-groups-setup.cjs)
+    const old = [channel, bgChannel, callChannel, reactChannel, groupChannel];
+    channel = null; bgChannel = null; callChannel = null; reactChannel = null; groupChannel = null; channelUser = null; live = false;
     for (const ch of old) if (ch) { try { sb().removeChannel(ch); } catch {} }
   }
 
@@ -721,6 +808,16 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
       if (channelUser !== userId || !row?.message_id || !row.user_id) return;
       emit({ type: "reaction", messageId: row.message_id, conversationId: row.conversation_id || null, userId: row.user_id, reaction: REACTIONS.includes(row.reaction) ? row.reaction : null });
     };
+    // Being added to a group, or someone joining or leaving one of yours: the list is fetched again // (Added by aura-messages-groups-setup.cjs)
+    const onMembers = () => {
+      if (channelUser !== userId) return;
+      clearTimeout(groupsTimer);
+      groupsTimer = setTimeout(() => emit({ type: "groups" }), 400);
+    };
+    groupChannel = sb().channel("aura-social-groups:" + userId)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "conversation_members", filter: "user_id=eq." + userId }, onMembers)
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "conversation_members" }, onMembers)
+      .subscribe();
     reactChannel = sb().channel("aura-social-reactions:" + userId)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "message_reactions" }, onReaction)
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "message_reactions" }, onReaction)
@@ -845,8 +942,11 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
       if (entry.count > 0) show(sender, entry.count === 1 ? "Sent another message" : "Sent " + entry.count + " more messages", key);
     }, NOTIFY_QUIET_MS);
     quiet.set(key, entry);
-    const text = isGif(message.content) ? "Sent a GIF" : message.content.replace(/\s+/g, " ").trim() || (message.media ? "Sent a " + mediaWord(message.media).toLowerCase().replace("gif", "GIF") : "");
-    show(sender, text.length > 140 ? text.slice(0, 139) + "…" : text, key);
+    let text = isGif(message.content) ? "Sent a GIF" : message.content.replace(/\s+/g, " ").trim() || (message.media ? "Sent a " + mediaWord(message.media).toLowerCase().replace("gif", "GIF") : "");
+    // In a group: "Alex in Squad", and a line like "added Cam" reads as a sentence (Added by aura-messages-groups-setup.cjs)
+    const group = await groupTitleOf(key);
+    if (group && text.startsWith(GROUP_NOTE)) text = sender + " " + text.slice(GROUP_NOTE.length);
+    show(group ? sender + " in " + group : sender, text.length > 140 ? text.slice(0, 139) + "…" : text, key);
   }
 
   // Windows needs the app's ID to show notifications under AURA's name
@@ -859,7 +959,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   } catch {}
 
   // ── What the window may ask for ─────────────────────────────────────────────
-  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, deleteMessage, blockUser, unblockUser, listBlocked, reportUser, markRead, react, gifSearch, startCall, answerCall, endCall, callSignal, callState, callBeat, currentCall, callConfig, addToCall, joinGroup };
+  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, deleteMessage, blockUser, unblockUser, listBlocked, reportUser, markRead, react, gifSearch, startCall, answerCall, endCall, callSignal, callState, callBeat, currentCall, callConfig, addToCall, joinGroup, createGroup, addGroupMembers, removeGroupMember, leaveGroup, renameGroup };
   for (const [name, fn] of Object.entries(api)) ipcMain.handle("social:" + name, cloudHandler(fn));
   return api;
 }

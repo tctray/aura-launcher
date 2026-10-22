@@ -51,6 +51,10 @@ if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safe
     if (hasCalls) {
       add("messages", "Voice calls: ringing, accepting, hanging up, missed calls", "messages/app-voice.cjs", [social]);
       add("messages", "Voice calls on a database missing the voice update", "messages/app-before-voice-sql.cjs", [social]);
+      if (fs.existsSync(path.join(sqlDir, "aura-messages-groups.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-groups.mjs"))) { // (Added by aura-messages-groups-setup.cjs)
+        add("messages", "Database rules: group chats", "messages/sql-groups.mjs");
+        add("messages", "Group chats: making, talking, changing, leaving", "messages/app-groups.cjs", [social]);
+      }
       if (fs.existsSync(path.join(sqlDir, "aura-calls-group.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-group-calls.mjs"))) { // (Added by aura-group-calls-setup.cjs)
         add("messages", "Database rules: calls with 3 people", "messages/sql-group-calls.mjs");
         add("messages", "Calls with 3 people: adding, joining, leaving", "messages/app-group-calls.cjs", [social]);
@@ -107,6 +111,7 @@ if (fs.existsSync(path.join(__dirname, "group-calls.cjs"))) add("window", "Calls
 if (fs.existsSync(path.join(__dirname, "stream-room.cjs"))) add("window", "A live stream makes room for call panels", "stream-room.cjs");
 if (fs.existsSync(path.join(__dirname, "cams-full.cjs"))) add("window", "Call cameras full screen", "cams-full.cjs");
 if (fs.existsSync(path.join(__dirname, "camera-busy.cjs"))) add("window", "One camera for the preview and calls", "camera-busy.cjs");
+if (fs.existsSync(path.join(__dirname, "group-chats.cjs"))) add("window", "Group chats", "group-chats.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;

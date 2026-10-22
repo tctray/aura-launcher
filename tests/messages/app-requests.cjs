@@ -106,7 +106,8 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   const nl = requests.length;
   r = await call("listConversations"); const lc = requests[nl].path, lb = requests[nl + 1]; await call("listFriends");
   check("lists: call list_conversations_v2 and list_friends", lc === "/rest/v1/rpc/list_conversations_v2" && last().path === "/rest/v1/rpc/list_friends");
-  check("lists: one more request reads the chats' shared backgrounds", requests.length === nl + 3 && lb.method === "GET" && lb.path === "/rest/v1/conversation_backgrounds" && lb.query.includes("select=conversation_id,path,set_by"), lb);
+  const GROUPS = !!handlers["social:createGroup"]; // and one for group chats (Added by aura-messages-groups-setup.cjs)
+  check("lists: one more request reads the chats' shared backgrounds" + (GROUPS ? ", and one the group chats" : ""), requests.length === nl + 3 + (GROUPS ? 1 : 0) && lb.method === "GET" && lb.path === "/rest/v1/conversation_backgrounds" && lb.query.includes("select=conversation_id,path,set_by"), lb);
   check("lists: a chat with a shared background carries it", r.success && r.data[0] && r.data[0].background && r.data[0].background.path === CONV + "/22222222-2222-2222-2222-222222222222.jpg" && r.data[0].background.by === OTHER, r.data && r.data[0]);
 
   // Deleting, blocking, reporting
@@ -189,8 +190,10 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
   check("live: opens Supabase's realtime socket", /^wss:\/\/proj\.supabase\.co\/realtime\/v1\/websocket/.test(String(FakeSocket.url)), FakeSocket.url);
   const callJoin = joins.find((j) => j.topic === "realtime:aura-social-calls:" + ME);
   const likeJoin = joins.find((j) => j.topic === "realtime:aura-social-reactions:" + ME);
-  const CHANNELS = 2 + (VOICE ? 1 : 0) + (LIKES ? 1 : 0);
-  check("live: joins " + CHANNELS + " channels for this user (messages and friends; chat backgrounds" + (VOICE ? "; calls" : "") + (LIKES ? "; likes" : "") + ")", r.success && joins.length === CHANNELS && !!mainJoin && !!bgJoin && !!callJoin === VOICE && !!likeJoin === LIKES, joins.map((j) => j.topic));
+  const HAS_GROUPS = !!handlers["social:createGroup"]; // (group chats: Added by aura-messages-groups-setup.cjs)
+  const groupJoin = joins.find((j) => j.topic === "realtime:aura-social-groups:" + ME);
+  const CHANNELS = 2 + (VOICE ? 1 : 0) + (LIKES ? 1 : 0) + (HAS_GROUPS ? 1 : 0);
+  check("live: joins " + CHANNELS + " channels for this user (messages and friends; chat backgrounds" + (VOICE ? "; calls" : "") + (LIKES ? "; likes" : "") + (HAS_GROUPS ? "; groups" : "") + ")", r.success && joins.length === CHANNELS && !!mainJoin && !!bgJoin && !!callJoin === VOICE && !!likeJoin === LIKES && !!groupJoin === HAS_GROUPS, joins.map((j) => j.topic));
   if (LIKES) check("live: the likes channel watches likes being added and changed, and nothing else", likeJoin && likeJoin.changes.length === 2 && likeJoin.changes.some((c) => c.event === "INSERT" && c.table === "message_reactions") && likeJoin.changes.some((c) => c.event === "UPDATE" && c.table === "message_reactions") && likeJoin.changes.every((c) => c.schema === "public"), likeJoin && likeJoin.changes);
   if (VOICE) check("live: the third channel watches calls starting and changing, and connection details arriving", callJoin && callJoin.changes.length === 3 && callJoin.changes.some((c) => c.event === "INSERT" && c.table === "voice_calls") && callJoin.changes.some((c) => c.event === "UPDATE" && c.table === "voice_calls") && callJoin.changes.some((c) => c.event === "INSERT" && c.table === "voice_signals") && callJoin.changes.every((c) => c.schema === "public"), callJoin && callJoin.changes);
   check("live: asks for new messages, changed messages (deletions) and all friendship changes", changes.length === 3 && changes.some((c) => c.event === "INSERT" && c.table === "messages" && c.schema === "public") && changes.some((c) => c.event === "UPDATE" && c.table === "messages") && changes.some((c) => c.event === "*" && c.table === "friendships"), changes);

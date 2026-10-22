@@ -82,11 +82,12 @@ async function createWorld(socialPath) {
       if (seen.rows.length) sub.cb({ eventType, new: row, old: {} });
     }
   }
-  const SETS = new Set(["list_friends", "list_conversations", "list_conversations_v2", "list_blocked", "current_call", "join_group"]);
+  const SETS = new Set(["list_friends", "list_conversations", "list_conversations_v2", "list_blocked", "current_call", "join_group", "list_groups"]);
   const ROWS = new Set(["start_call", "answer_call", "end_call", "add_to_call"]); // answer with one whole row
   const callsNow = async () => (process.env.NO_VOICE_SQL ? new Map() : new Map((await run(null, "select * from public.voice_calls")).rows.map((r) => [r.id, r])));
   const reactionsNow = async () => (!hasReactions ? new Map() : new Map((await run(null, "select * from public.message_reactions")).rows.map((r) => [String(r.id), r])));
   const messageIds = async () => new Set((await run(null, "select id from public.messages")).rows.map((r) => r.id));
+  const membersNow = async () => ((await run(null, "select to_regclass('public.conversation_members') as t")).rows[0].t ? new Map((await run(null, "select * from public.conversation_members")).rows.map((r) => [r.conversation_id + "|" + r.user_id, r])) : new Map());
   const snapshot = async () => new Map((await run(null, "select * from public.friendships")).rows.map((r) => [r.id, r]));
 
   function clientFor(uid) {
@@ -200,9 +201,22 @@ async function createWorld(socialPath) {
           const keys = Object.keys(args);
           const call = `public.${name}(${keys.map((k, i) => `${k} => $${i + 1}`).join(", ")})`;
           const before = /friend|block/.test(name) ? await snapshot() : null;
-          const voice = /call|friend|block|join_group/.test(name) ? { calls: await callsNow(), messages: await messageIds() } : null;
+          const voice = /call|friend|block|join_group|group/.test(name) ? { calls: await callsNow(), messages: await messageIds() } : null;
           const liked = /react_to_message|delete_message/.test(name) ? await reactionsNow() : null;
+          const grouped = /group/.test(name) ? await membersNow() : null; // who is in which group, before (Added by aura-messages-groups-setup.cjs)
           const res = await run(uid, SETS.has(name) || ROWS.has(name) ? `select * from ${call}` : `select ${call} as r`, keys.map((k) => args[k]));
+          if (grouped) {
+            // Someone added arrives live for the people who can see it; someone leaving goes to everyone, carrying just the key
+            const after = await membersNow();
+            for (const [key, row] of after) if (!grouped.has(key)) for (const sub of [...world.subs]) {
+              if (sub.table !== "conversation_members" || (sub.event !== "*" && sub.event !== "INSERT") || world.offline.has(sub.uid)) continue;
+              if ((await run(sub.uid, "select 1 from public.conversation_members where conversation_id = $1 and user_id = $2", [row.conversation_id, row.user_id])).rows.length) sub.cb({ eventType: "INSERT", new: plain(row), old: {} });
+            }
+            for (const [key, row] of grouped) if (!after.has(key)) for (const sub of [...world.subs]) {
+              if (sub.table !== "conversation_members" || (sub.event !== "*" && sub.event !== "DELETE") || world.offline.has(sub.uid)) continue;
+              sub.cb({ eventType: "DELETE", new: {}, old: { conversation_id: row.conversation_id, user_id: row.user_id } });
+            }
+          }
           if (voice) {
             // Calls starting, being answered and ending arrive live, as do the details the PCs swap
             // and the note a missed call leaves in the conversation
@@ -253,7 +267,7 @@ async function createWorld(socialPath) {
           _remove() { world.subs = world.subs.filter((x) => !mine.includes(x)); },
           _status(st) { statusCb && statusCb(st); },
         };
-        if (world.sessions[uid]) { (world.sessions[uid].channels ||= []).push(ch); if (!/-(bg|calls|reactions):/.test(name)) world.sessions[uid].channel = ch; }
+        if (world.sessions[uid]) { (world.sessions[uid].channels ||= []).push(ch); if (!/-(bg|calls|reactions|groups):/.test(name)) world.sessions[uid].channel = ch; }
         return ch;
       },
       removeChannel(ch) { ch._remove(); },

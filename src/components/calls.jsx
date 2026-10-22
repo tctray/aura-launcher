@@ -1320,6 +1320,14 @@ function CallCams({ call }) {
   // the panel already showing (Windows says no otherwise). If it still can't, they fill AURA's window.
   const box = useRef(null);
   const [full, setFull] = useState(false);
+  // Full screen can arrive a moment late (after Esc was already pressed, on a slow PC): if it does, leave it again (Added by aura-cams-full-fix-setup.cjs)
+  const fullRef = useRef(false);
+  fullRef.current = full;
+  useEffect(() => {
+    const changed = () => { const el = box.current; if (el && document.fullscreenElement === el && !fullRef.current) document.exitFullscreen().catch(() => {}); };
+    document.addEventListener("fullscreenchange", changed);
+    return () => document.removeEventListener("fullscreenchange", changed);
+  }, []);
   useEffect(() => {
     if (!full) return;
     const changed = () => { if (document.fullscreenElement !== box.current) setFull(false); };
