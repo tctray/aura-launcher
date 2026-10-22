@@ -7,7 +7,7 @@ jobs:
   # AURA's checks (the tests folder). If any fail, the builds below don't run and no release is made.
   test:
     runs-on: ubuntu-24.04   # pinned: GitHub is moving ubuntu-latest to a new Ubuntu (Added by aura-ci-fix-setup.cjs)
-    timeout-minutes: 15   # GitHub stops the job after this, instead of waiting for hours
+    timeout-minutes: 30   # GitHub stops the job after this, instead of waiting for hours (more time: Added by aura-checks-time-setup.cjs)
     steps:
       - uses: actions/checkout@v4
       - name: Setup Node.js
