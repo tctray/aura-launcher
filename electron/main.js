@@ -1624,17 +1624,56 @@ let streamView = null;
 //   - a slim strip at the top is left uncovered, where the page shows "Exit full view"
 //   - Esc leaves full view even when the keyboard is inside the Twitch player
 const STREAM_BAR = 44; // height of that strip, in page pixels (the page draws a bar the same height)
+
+// ── Room for AURA's own panels over the stream (Added by aura-stream-room-setup.cjs) ──
+// The player and chat are drawn on top of AURA's page, so they make room for AURA's call cameras,
+// shared screens, call settings and camera preview (see streamroom.js). Every place that sizes
+// them goes through placeStream / placeChat.
+const { fitStream, cleanRoom } = require("./streamroom");
+let streamRoom = { rects: [], all: false };
+function placeStream(want) {
+  if (!streamView || !mainWin || !want) return;
+  streamView.__auraWant = want;
+  const fit = fitStream(want, streamRoom, mainWin.webContents.getZoomFactor() || 1);
+  const shown = mainWin.getBrowserViews().includes(streamView);
+  if (!fit) {
+    // Steps aside, still playing
+    if (shown) mainWin.removeBrowserView(streamView);
+    streamView.__auraAside = true;
+    return;
+  }
+  if (streamView.__auraAside) { streamView.__auraAside = false; if (!shown) mainWin.addBrowserView(streamView); }
+  streamView.setBounds(fit);
+}
+function placeChat(want) {
+  const chat = mainWin?.chatView;
+  if (!chat || !want) return;
+  chat.__auraWant = want;
+  const shown = mainWin.getBrowserViews().includes(chat);
+  if (streamRoom.all) { if (shown) mainWin.removeBrowserView(chat); chat.__auraAside = true; return; }
+  if (chat.__auraAside) { chat.__auraAside = false; if (!shown) mainWin.addBrowserView(chat); }
+  chat.setBounds(want);
+}
+ipcMain.handle("stream-room", async (_e, room) => {
+  streamRoom = cleanRoom(room);
+  try {
+    if (streamView?.__auraWant) placeStream(streamView.__auraWant);
+    if (mainWin?.chatView?.__auraWant && (mainWin.chatView.__auraAside || streamRoom.all)) placeChat(mainWin.chatView.__auraWant);
+  } catch {}
+  return { success: true };
+});
+
 function fillWindowWithStream() {
   if (!streamView || !mainWin) return;
   const [w, h] = mainWin.getContentSize();
   const bar = Math.round(STREAM_BAR * (mainWin.webContents.getZoomFactor() || 1));
-  streamView.setBounds({ x: 0, y: bar, width: w, height: Math.max(1, h - bar) });
+  placeStream({ x: 0, y: bar, width: w, height: Math.max(1, h - bar) });
 }
 function leaveStreamFull() {
   if (!streamView || !streamView.__auraFull) return false;
   streamView.__auraFull = false;
   // Straight back to where it was; the page then lines it up exactly
-  if (streamView.__auraBefore) { try { streamView.setBounds(streamView.__auraBefore); } catch {} }
+  if (streamView.__auraBefore) { try { placeStream(streamView.__auraBefore); } catch {} }
   return true;
 }
 
@@ -1647,7 +1686,7 @@ ipcMain.handle("stream-fullscreen", async () => {
   }
   if (!streamView || !mainWin) return { success: false, error: "No stream active" };
   const view = streamView;
-  if (!view.__auraFull) view.__auraBefore = view.getBounds();
+  if (!view.__auraFull) view.__auraBefore = view.__auraWant || view.getBounds();
   view.__auraFull = true;
   mainWin.removeBrowserView(view);
   mainWin.addBrowserView(view);
@@ -1687,12 +1726,12 @@ ipcMain.handle("stream-restore", async (_e, { bounds, chatBounds }) => {
     if (!mainWin.getBrowserViews().includes(streamView)) {
       mainWin.addBrowserView(streamView);
     }
-    streamView.setBounds(zoomBounds(bounds));
+    placeStream(zoomBounds(bounds));
     if (mainWin.chatView && chatBounds) {
       if (!mainWin.getBrowserViews().includes(mainWin.chatView)) {
         mainWin.addBrowserView(mainWin.chatView);
       }
-      mainWin.chatView.setBounds(zoomBounds(chatBounds));
+      placeChat(zoomBounds(chatBounds));
     }
     return { success: true };
   } catch(e) {
@@ -1712,7 +1751,7 @@ ipcMain.handle("stream-open", async (_e, { channel, bounds }) => {
     webPreferences: { contextIsolation: true, nodeIntegration: false }
   });
   mainWin.addBrowserView(streamView);
-  streamView.setBounds(zoomBounds(bounds));
+  placeStream(zoomBounds(bounds));
   streamView.setAutoResize({ width: false, height: false });
   streamView.webContents.loadURL(
     `https://player.twitch.tv/?channel=${channel}&parent=aura-launcher&autoplay=true&muted=false`
@@ -1798,7 +1837,7 @@ const STREAM_MIN = { width: 400, height: 300 };
 ipcMain.handle("stream-pip", async (_e, bounds) => {
   if (streamView && bounds) {
     const b = zoomBounds(bounds);
-    streamView.setBounds({ x: b.x, y: b.y, width: Math.max(STREAM_MIN.width, b.width), height: Math.max(STREAM_MIN.height, b.height) });
+    placeStream({ x: b.x, y: b.y, width: Math.max(STREAM_MIN.width, b.width), height: Math.max(STREAM_MIN.height, b.height) });
   }
   // Chat isn't shown in the mini-player
   if (mainWin.chatView) {
@@ -1808,7 +1847,7 @@ ipcMain.handle("stream-pip", async (_e, bounds) => {
 });
 
 ipcMain.handle("stream-resize", async (_e, bounds) => {
-  if (streamView) streamView.setBounds(zoomBounds(bounds));
+  if (streamView) placeStream(zoomBounds(bounds));
   return { success: true };
 });
 
@@ -1834,7 +1873,7 @@ ipcMain.handle("chat-open", async (_e, { channel, bounds }) => {
     webPreferences: { contextIsolation: true, nodeIntegration: false }
   });
   mainWin.addBrowserView(mainWin.chatView);
-  mainWin.chatView.setBounds(zoomBounds(bounds));
+  placeChat(zoomBounds(bounds));
   mainWin.chatView.webContents.loadURL(
     `https://www.twitch.tv/embed/${channel}/chat?parent=aura-launcher&darkpopout`
   );

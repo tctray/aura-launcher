@@ -19,6 +19,8 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom"; // the call screen opens in the click (Added by aura-call-screen-setup.cjs)
 import { ringtone, soundPrefs } from "./sounds"; // your ringtone (Settings > Calls and messages)
 import { cameraEffects } from "./camfx"; // your camera background in calls (Added by aura-camera-backgrounds-setup.cjs)
+import { holdCamera, borrowCamera, cameraBusy } from "./camfx"; // one camera shared by the preview and calls (Added by aura-camera-busy-setup.cjs)
+import { watchStreamRoom } from "./streamroom"; // a Twitch stream makes room for call panels (Added by aura-stream-room-setup.cjs)
 
 const RING_OUT_MS = 30000;    // a call you make rings this long before "didn't answer"
 const RING_IN_MS = 50000;     // a call ringing for you is given up on after this, if nothing ends it first
@@ -160,7 +162,7 @@ function camProblem(e) {
   const name = e?.name || "";
   if (name === "NotAllowedError" || name === "SecurityError") return "AURA isn't allowed to use your camera. In Windows, open Settings > Privacy & security > Camera and let desktop apps use it.";
   if (name === "NotFoundError" || name === "OverconstrainedError") return "No camera found. Plug one in and try again.";
-  if (name === "NotReadableError" || name === "AbortError") return "Your camera is being used by another app. Close it and try again.";
+  if (name === "NotReadableError" || name === "AbortError") return "Your camera is being used by another app (like Discord, Zoom, OBS, Teams or the Windows Camera app). Close it and try again.";
   return "AURA couldn't use your camera" + (e?.message ? " (" + e.message + ")." : ".");
 }
 function micProblem(e) {
@@ -972,12 +974,17 @@ export const callActions = {
       try { stream = await want(picked); }
       catch (e) { if (picked && (e?.name === "OverconstrainedError" || e?.name === "NotFoundError")) stream = await want(""); else throw e; }
     } catch (e) {
-      if (mine === session) { patch({ camStarting: false }); toast(camProblem(e), "err"); }
-      return;
+      // Busy because AURA's camera preview has it: send that picture instead of opening it again (Added by aura-camera-busy-setup.cjs)
+      stream = cameraBusy(e) ? borrowCamera() : null;
+      if (!stream) {
+        if (mine === session) { patch({ camStarting: false }); toast(camProblem(e), "err"); }
+        return;
+      }
     }
     if (mine !== session || !rtc || !state.call?.camStarting) return stopStream(stream); // the call ended (or you pressed again) meanwhile
     // What's sent has your background (Settings > Camera); the camera itself is kept to let go of later (Added by aura-camera-backgrounds-setup.cjs)
     const raw = stream;
+    holdCamera(raw);
     const fx = cameraEffects(raw);
     if (fx) stream = fx.stream;
     const track = stream.getVideoTracks()[0];
@@ -1309,24 +1316,49 @@ const camsOf = () => links().filter((l) => l.v.peerCamOn && l.remoteCam && !ring
 function CallCams({ call }) {
   const [big, setBig] = useState(false);
   const [hidden, setHidden] = useState(false);
+  // Full screen: the cameras fill your whole monitor (Added by aura-cams-full-setup.cjs). Asked for in the click itself, on
+  // the panel already showing (Windows says no otherwise). If it still can't, they fill AURA's window.
+  const box = useRef(null);
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    if (!full) return;
+    const changed = () => { if (document.fullscreenElement !== box.current) setFull(false); };
+    const esc = (e) => { if (e.key === "Escape") setFull(false); };
+    document.addEventListener("fullscreenchange", changed);
+    window.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("fullscreenchange", changed);
+      window.removeEventListener("keydown", esc);
+      if (box.current && document.fullscreenElement === box.current) document.exitFullscreen().catch(() => {});
+    };
+  }, [full]);
+  const goFull = () => {
+    const el = box.current;
+    try { if (el && document.fullscreenElement !== el) el.requestFullscreen?.({ navigationUI: "hide" })?.catch?.(() => {}); } catch {}
+    setFull(true);
+  };
+  const leaveFull = () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); setFull(false); };
   const theirs = camsOf();
   const mine = call.camOn ? rtc?.cam || null : null;
   if (!theirs.length && !mine) return null;
-  if (hidden) return (
+  if (hidden && !full) return (
     <button type="button" className="cx-cams-pill" onClick={() => setHidden(false)} aria-label="Show the cameras">{theirs.length > 1 ? "Cameras" : theirs.length ? `${theirs[0].peer.username}'s camera` : "Your camera"} <b>Show</b></button>
   );
   const duo = theirs.length > 1;
   return (
-    <div className={`cx-cams ${theirs.length ? "two" : "solo"} ${duo ? "duo" : ""} ${big ? "big" : ""}`} role="region" aria-label="Cameras">
+    <div ref={box} className={`cx-cams ${theirs.length ? "two" : "solo"} ${duo ? "duo" : ""} ${big ? "big" : ""} ${full ? "full" : ""}`} role="region" aria-label="Cameras"
+      onDoubleClick={(e) => { if (!e.target.closest("button")) (full ? leaveFull() : goFull()); }}>
       {duo
         ? <div className="cx-cam-pair">{theirs.map((l) => <div className="cx-cam-cell" key={l.id}><CamVideo className="cx-cam-theirs" stream={l.remoteCam} rev={call.camRev} /><span className="cx-cam-name">{l.peer.username}</span></div>)}</div>
         : theirs.length ? <><CamVideo className="cx-cam-theirs" stream={theirs[0].remoteCam} rev={call.camRev} /><span className="cx-cam-name">{theirs[0].peer.username}</span></> : null}
       {theirs.length
         ? mine && <CamVideo className="cx-cam-mine small" stream={mine} rev={call.camRev} mirror />
         : <><CamVideo className="cx-cam-mine" stream={mine} rev={call.camRev} mirror /><span className="cx-cam-name">You</span></>}
+      {full && <span className="cx-cam-hint">Press Esc to exit full screen</span>}
       <div className="cx-cam-tools">
-        {theirs.length > 0 && <button type="button" onClick={() => setBig((b) => !b)} title={big ? "Smaller" : "Bigger"} aria-label={big ? "Make the camera smaller" : "Make the camera bigger"}><IconExpandCam /></button>}
-        <button type="button" onClick={() => setHidden(true)} title="Hide the cameras" aria-label="Hide the cameras">–</button>
+        <button type="button" className="cx-cam-full" onClick={full ? leaveFull : goFull} title={full ? "Exit full screen (Esc)" : "Full screen"} aria-label={full ? "Exit full screen" : "Full screen"}>{full ? <IconShrink /> : <IconExpand />}</button>{/* (Added by aura-cams-full-setup.cjs) */}
+        {theirs.length > 0 && !full && <button type="button" onClick={() => setBig((b) => !b)} title={big ? "Smaller" : "Bigger"} aria-label={big ? "Make the camera smaller" : "Make the camera bigger"}><IconExpandCam /></button>}
+        {!full && <button type="button" onClick={() => setHidden(true)} title="Hide the cameras" aria-label="Hide the cameras">–</button>}
       </div>
     </div>
   );
@@ -1558,7 +1590,7 @@ function CallBar() {
   };
   // While dragging, the whole window is watched, so a quick flick that leaves the bar still moves it
   const onPointerDown = (e) => {
-    if (e.button !== 0 || e.target.closest("button:not(.cx-grip),select,input,.cx-devices")) return;
+    if (e.button !== 0 || e.target.closest("button:not(.cx-grip),select,input,.cx-devices,.cx-cams.full")) return;
     const el = bar.current;
     const r = el.getBoundingClientRect();
     const d = { id: e.pointerId, dx: e.clientX - r.left, dy: e.clientY - r.top, x0: e.clientX, y0: e.clientY, moved: false };
@@ -1871,6 +1903,16 @@ const CSS = `
 .cx-cam-cell{position:relative;overflow:hidden}
 .cx-cams.duo video.small{width:16%}
 @media (max-width:760px){.cx-tiles.n3{grid-template-columns:1fr 1fr}}
+/* Call cameras full screen (Added by aura-cams-full-setup.cjs) */
+.cx-cams.full,.cx-cams:fullscreen{position:fixed;inset:0!important;width:100vw!important;height:100vh!important;max-width:none;aspect-ratio:auto;transform:none;border-radius:0;border:none;box-shadow:none;z-index:9650;cursor:default}
+.cx-bar:has(.cx-cams.full){transform:none;backdrop-filter:none;animation:none}
+.cx-cams.full video:not(.small),.cx-cams:fullscreen video:not(.small){object-fit:contain}
+.cx-cams.full video.small{inset:auto 24px 24px auto;width:min(22%,360px)}
+.cx-cams.full .cx-cam-pair{gap:4px}
+.cx-cams.full .cx-cam-name{left:16px;bottom:16px;padding:4px 12px;font-size:14px}
+.cx-cams.full .cx-cam-tools{top:16px;right:16px;opacity:1}
+.cx-cams.full .cx-cam-tools button{width:36px;height:36px;border-radius:9px}
+.cx-cam-hint{position:absolute;top:22px;left:50%;transform:translateX(-50%);padding:4px 12px;border-radius:999px;background:rgba(0,0,0,.55);font:500 12px 'DM Sans',sans-serif;color:rgba(255,255,255,.75);pointer-events:none}
 .reduce-motion .cx-bar,.reduce-motion .cx-bar.ringing.in,.reduce-motion .cx-bar.moved{animation:none}
 @media (prefers-reduced-motion:reduce){.cx-bar,.cx-bar.ringing.in,.cx-bar.moved{animation:none}}
 `;
@@ -1892,7 +1934,9 @@ export function mountCallLayer() {
   root.render(<><CallBar /><ScreenView /><CallStage /></>); // (call screen: Added by aura-call-screen-setup.cjs)
   const leaving = () => callActions.reset(); // AURA is closing or reloading: hang up
   window.addEventListener("beforeunload", leaving);
+  const stopRoom = watchStreamRoom(); // (Added by aura-stream-room-setup.cjs)
   return () => {
+    stopRoom();
     window.removeEventListener("beforeunload", leaving);
     callActions.reset();
     setTimeout(() => { try { root.unmount(); } catch {} host.remove(); }, 0);

@@ -104,6 +104,9 @@ if (fs.existsSync(path.join(__dirname, "call-screen.cjs"))) add("window", "The c
 if (fs.existsSync(path.join(__dirname, "reset-password.cjs"))) add("window", "Forgot password", "reset-password.cjs");
 if (fs.existsSync(path.join(__dirname, "theme-backgrounds.cjs"))) add("window", "Saved themes keep their background", "theme-backgrounds.cjs");
 if (fs.existsSync(path.join(__dirname, "group-calls.cjs"))) add("window", "Calls with 3 people", "group-calls.cjs");
+if (fs.existsSync(path.join(__dirname, "stream-room.cjs"))) add("window", "A live stream makes room for call panels", "stream-room.cjs");
+if (fs.existsSync(path.join(__dirname, "cams-full.cjs"))) add("window", "Call cameras full screen", "cams-full.cjs");
+if (fs.existsSync(path.join(__dirname, "camera-busy.cjs"))) add("window", "One camera for the preview and calls", "camera-busy.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;

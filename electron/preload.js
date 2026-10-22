@@ -133,6 +133,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   streamOpen:   (opts)   => ipcRenderer.invoke("stream-open", opts),
   streamResize: (bounds) => ipcRenderer.invoke("stream-resize", bounds),
   streamClose:  ()       => ipcRenderer.invoke("stream-close"),
+  streamRoom:   (room)   => ipcRenderer.invoke("stream-room", room), // AURA's panels the stream makes room for (Added by aura-stream-room-setup.cjs)
   chatOpen:     (opts)   => ipcRenderer.invoke("chat-open", opts),
   chatClose:    ()       => ipcRenderer.invoke("chat-close"),
 

@@ -235,3 +235,20 @@ export function cameraEffects(raw) {
     return null;
   }
 }
+
+// One camera, shared (Added by aura-camera-busy-setup.cjs)
+// Windows often won't let the same camera be opened twice (for example by the camera preview at
+// 720p and by a call at 1080p): the second one is told "the camera is being used by another app".
+// So whatever has the camera open says so here, and the other part of AURA borrows a copy of that
+// picture instead of opening the camera again. A copy keeps going after the original is closed.
+const cameraHolders = new Set();
+export function holdCamera(stream) { if (stream) cameraHolders.add(stream); }
+export function borrowCamera() {
+  for (const s of [...cameraHolders]) {
+    const t = s.getVideoTracks()[0];
+    if (!t || t.readyState !== "live") { cameraHolders.delete(s); continue; }
+    try { return new MediaStream([t.clone()]); } catch {}
+  }
+  return null;
+}
+export const cameraBusy = (e) => e?.name === "NotReadableError" || e?.name === "TrackStartError" || e?.name === "AbortError";

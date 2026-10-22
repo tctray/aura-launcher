@@ -9,7 +9,7 @@
 // The camera only turns on when you press something that says so. Nothing is saved or sent
 // anywhere: the picture stays on this PC, and only goes into a clip you record yourself.
 import { useEffect, useRef, useState } from "react";
-import { BACKGROUNDS, cameraEffects, paintBackground, refreshCameraEffects, setBackgroundPicture, backgroundPicture, shrinkPicture, effectsStatus, onEffectsStatus } from "./camfx"; // backgrounds (Added by aura-camera-backgrounds-setup.cjs)
+import { BACKGROUNDS, cameraEffects, paintBackground, refreshCameraEffects, setBackgroundPicture, backgroundPicture, shrinkPicture, effectsStatus, onEffectsStatus, holdCamera, borrowCamera, cameraBusy } from "./camfx"; // backgrounds (Added by aura-camera-backgrounds-setup.cjs)
 
 // ── The camera itself (one for all of AURA) ─────────────────────────────────
 const cam = { open: false, minimized: false, on: false, starting: false, stream: null, error: "", devices: [], deviceId: "" };
@@ -50,7 +50,7 @@ function explain(e) {
   if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError")
     return "No camera was found. Plug one in, then press Turn on.";
   if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError")
-    return "The camera is being used by another app, or Windows couldn't start it. Close the other app, then press Turn on.";
+    return "The camera is being used by another app (like Discord, Zoom, OBS, Teams or the Windows Camera app), or Windows couldn't start it. Close the other app, then press Turn on.";
   return "The camera couldn't start" + (e && e.message ? ": " + e.message : ".");
 }
 
@@ -72,14 +72,18 @@ export async function startCamera(deviceId = "") {
       else throw e;
     }
   } catch (e) {
-    if (mine !== attempt) return false;
-    cam.starting = false; cam.error = explain(e);
-    emit();
-    return false;
+    // Busy because a call in AURA has it: show that camera instead of opening it again (Added by aura-camera-busy-setup.cjs)
+    stream = cameraBusy(e) ? borrowCamera() : null;
+    if (!stream) {
+      if (mine !== attempt) return false;
+      cam.starting = false; cam.error = explain(e);
+      emit();
+      return false;
+    }
   }
   if (mine !== attempt) { stream.getTracks().forEach((t) => t.stop()); return false; } // turned off meanwhile
   const track = stream.getVideoTracks()[0];
-  cam.raw = stream; const fx = cameraEffects(stream); cam.stream = fx ? fx.stream : stream; cam.on = true; cam.starting = false; // (the background: Added by aura-camera-backgrounds-setup.cjs)
+  cam.raw = stream; holdCamera(stream); const fx = cameraEffects(stream); cam.stream = fx ? fx.stream : stream; cam.on = true; cam.starting = false; // (the background: Added by aura-camera-backgrounds-setup.cjs)
   cam.deviceId = (track && track.getSettings && track.getSettings().deviceId) || deviceId || "";
   if (track) track.addEventListener("ended", () => {
     if (cam.raw !== stream) return;
