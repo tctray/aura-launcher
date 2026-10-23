@@ -535,6 +535,7 @@ const cloudHandler = (fn) => async (_e, ...args) => {
 ipcMain.handle("auth:signUp", cloudHandler(auraCloud.signUp));
 ipcMain.handle("auth:logIn", cloudHandler(auraCloud.logIn));
 ipcMain.handle("auth:logOut", cloudHandler(auraCloud.logOut));
+ipcMain.handle("auth:deleteAccount", cloudHandler((password) => require("./account").deleteAccount(auraCloud, password))); // (Added by aura-account-delete-setup.cjs)
 ipcMain.handle("auth:getSession", cloudHandler(auraCloud.getSession));
 ipcMain.handle("auth:resendConfirmation", cloudHandler(auraCloud.resendConfirmation));
 // Forgot password (Added by aura-reset-password-setup.cjs)

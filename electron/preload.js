@@ -153,6 +153,7 @@ contextBridge.exposeInMainWorld("auraCloud", {
   signUp: (email, password, username) => ipcRenderer.invoke("auth:signUp", email, password, username),
   logIn: (email, password) => ipcRenderer.invoke("auth:logIn", email, password),
   logOut: () => ipcRenderer.invoke("auth:logOut"),
+  deleteAccount: (password) => ipcRenderer.invoke("auth:deleteAccount", password), // (Added by aura-account-delete-setup.cjs)
   getSession: () => ipcRenderer.invoke("auth:getSession"),
   resendConfirmation: (email) => ipcRenderer.invoke("auth:resendConfirmation", email),
   sendResetCode: (email) => ipcRenderer.invoke("auth:sendResetCode", email), // forgot password (Added by aura-reset-password-setup.cjs)

@@ -136,6 +136,19 @@ export function AuthGate({ children, loadProfile, saveProfile, covers = [], calm
     return () => { alive = false; };
   }, [enabled, resolveUser]);
 
+  // Deleting the account (Added by aura-account-delete-setup.cjs)
+  const [deleting, setDeleting] = useState(false);
+  const [goodbye, setGoodbye] = useState("");
+  const deleteAccount = useCallback(async (password) => {
+    await cloudCall("deleteAccount", password); // throws with a message to show
+    try { window.electronAPI?.streamClose?.(); window.electronAPI?.chatClose?.(); } catch {}
+    setDeleting(false);
+    setConfirming(false);
+    setNeedsName(null);
+    setGoodbye("Your AURA account has been deleted.");
+    setUser(null);
+  }, []);
+
   const logOut = useCallback(async () => {
     setLoggingOut(true);
     try { await cloudCall("logOut"); } catch {}
@@ -167,6 +180,7 @@ export function AuthGate({ children, loadProfile, saveProfile, covers = [], calm
     enabled: true,
     user: user || null,
     requestLogout: () => setConfirming(true),
+    requestDelete: () => setDeleting(true), // (Added by aura-account-delete-setup.cjs)
     saveProfile: saveAccountProfile,
   }), [user, saveAccountProfile]);
 
@@ -178,7 +192,7 @@ export function AuthGate({ children, loadProfile, saveProfile, covers = [], calm
     <AccountContext.Provider value={account}>
       <style>{CSS}</style>
       {user === undefined && <Splash />}
-      {user === null && !needsName && <AuthScreen covers={covers} calm={calm} onSignedIn={resolveUser} />}
+      {user === null && !needsName && <AuthScreen covers={covers} calm={calm} onSignedIn={(a) => { setGoodbye(""); resolveUser(a); }} goodbye={goodbye} />}
       {user === null && needsName && (
         <UsernameStep
           covers={covers}
@@ -192,6 +206,7 @@ export function AuthGate({ children, loadProfile, saveProfile, covers = [], calm
       {user && confirming && (
         <LogoutDialog busy={loggingOut} onCancel={() => setConfirming(false)} onConfirm={logOut} />
       )}
+      {user && deleting && <DeleteAccountDialog onCancel={() => setDeleting(false)} onDelete={deleteAccount} />}
     </AccountContext.Provider>
   );
 }
@@ -254,6 +269,50 @@ function LogoutDialog({ busy, onCancel, onConfirm }) {
   );
 }
 
+// Deleting the account: says what goes, and asks for the password (Added by aura-account-delete-setup.cjs)
+function DeleteAccountDialog({ onCancel, onDelete }) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const keep = useRef(null);
+  useEffect(() => {
+    keep.current?.focus();
+    const onKey = (e) => { if (e.key === "Escape" && !busy) onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel, busy]);
+  const submit = async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    if (!password) { setError("Enter your password."); return; }
+    setBusy(true);
+    setError("");
+    try { await onDelete(password); }
+    catch (err) { setError(err?.message || "Something went wrong. Try again."); setBusy(false); }
+  };
+  return (
+    <div className="auth-dim" onClick={(e) => e.target === e.currentTarget && !busy && onCancel()}>
+      <form className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-delete-title" onSubmit={submit}>
+        <h2 id="auth-delete-title" className="auth-title">Delete your AURA account?</h2>
+        <p className="auth-text">
+          This can't be undone. Your profile, friends, the messages you sent, your one-to-one chats, and the library and
+          settings saved online are deleted for good. Games, clips and settings on this PC stay.
+        </p>
+        <div className="auth-field" style={{ marginBottom: 14 }}>
+          <label className="auth-label" htmlFor="auth-delete-password">Your password</label>
+          <input id="auth-delete-password" className="auth-input" type="password" value={password} autoComplete="current-password"
+            onChange={(e) => { setPassword(e.target.value); setError(""); }} disabled={busy} />
+        </div>
+        {error && <div className="auth-msg err" role="alert" style={{ marginBottom: 14 }}>{error}</div>}
+        <div className="auth-dialog-actions">
+          <button ref={keep} type="button" className="auth-btn ghost" onClick={onCancel} disabled={busy}>Keep my account</button>
+          <button type="submit" className="auth-btn danger" disabled={busy}>{busy ? "Deleting…" : "Delete account"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 // ── Screens ───────────────────────────────────────────────────────────────────
 
 function Splash() {
@@ -306,7 +365,7 @@ function AuthShell({ covers, calm, children }) {
   );
 }
 
-function AuthScreen({ covers, calm, onSignedIn }) {
+function AuthScreen({ covers, calm, onSignedIn, goodbye = "" }) {
   const [mode, setMode] = useState("login"); // "login" | "signup" | "sent" | "reset"
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -314,7 +373,7 @@ function AuthScreen({ covers, calm, onSignedIn }) {
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(goodbye); // e.g. "Your AURA account has been deleted." (Added by aura-account-delete-setup.cjs)
   const firstField = useRef(null);
 
   useEffect(() => { firstField.current?.focus(); }, [mode]);
@@ -445,6 +504,7 @@ function AuthScreen({ covers, calm, onSignedIn }) {
         )}
 
         {error && <div className="auth-msg err" role="alert">{error}</div>}
+        {notice && !error && <div className="auth-msg ok" role="status">{notice}</div>}{/* e.g. the account was deleted (Added by aura-account-delete-setup.cjs) */}
 
         <button type="submit" className="auth-btn" disabled={busy}>
           {busy ? (signingUp ? "Creating account…" : "Logging in…") : (signingUp ? "Create account" : "Log in")}

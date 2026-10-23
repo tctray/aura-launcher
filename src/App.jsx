@@ -1669,6 +1669,7 @@ function DelModal({game,onClose,onOk}){
 }
 
 function ProfileModal({ profile, onClose, onSave }) {
+  const account = useAccount(); // for Delete account (Added by aura-account-delete-setup.cjs)
   const [username, setUsername] = useState(profile?.username || "");
   const [avatar, setAvatar] = useState(profile?.avatar || "");
   const [avatarErr, setAvatarErr] = useState(false);
@@ -1692,7 +1693,7 @@ function ProfileModal({ profile, onClose, onSave }) {
             </div>
           </div>
         </div>
-        <div className="mf"><button className="btn-gh" onClick={onClose}>Cancel</button><button className="btn-p" onClick={()=>{if(!username.trim()) return;onSave({...profile, username:username.trim(), avatar:avatar.trim()});}}>Save</button></div>
+        <div className="mf">{account?.requestDelete&&account.user&&!account.user.offline&&<button className="btn-gh aura-delete-account" style={{marginRight:"auto",color:"#ff8fa3",borderColor:"rgba(255,77,109,.35)"}} onClick={()=>{onClose();account.requestDelete();}}>Delete account</button>}{/* (Added by aura-account-delete-setup.cjs) */}<button className="btn-gh" onClick={onClose}>Cancel</button><button className="btn-p" onClick={()=>{if(!username.trim()) return;onSave({...profile, username:username.trim(), avatar:avatar.trim()});}}>Save</button></div>
       </div>
     </div>
   );

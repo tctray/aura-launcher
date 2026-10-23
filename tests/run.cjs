@@ -29,6 +29,10 @@ if (fs.existsSync(errorlog)) add("files", "The error log", "errorlog.cjs", [erro
 const shareFile = path.join(ROOT, "electron", "share.js");
 if (fs.existsSync(shareFile) && fs.existsSync(path.join(__dirname, "share.cjs"))) add("files", "Sharing clips", "share.cjs", [shareFile]);
 if (fs.existsSync(shareFile) && fs.existsSync(path.join(__dirname, "share-errors.cjs"))) add("files", "Sharing clips: when the sharing sites are down", "share-errors.cjs", [shareFile]);
+// Deleting your account (Added by aura-account-delete-setup.cjs)
+const accountFile = path.join(ROOT, "electron", "account.js");
+if (fs.existsSync(accountFile) && fs.existsSync(path.join(__dirname, "account-delete.cjs"))) add("files", "Deleting your account: password first, files, then the account", "account-delete.cjs", [accountFile]);
+if (fs.existsSync(path.join(sqlDir, "aura-account-delete.sql")) && fs.existsSync(path.join(sqlDir, "aura-messages-groups.sql")) && fs.existsSync(path.join(sqlDir, "aura-calls-group.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-account-delete.mjs"))) add("messages", "Database rules: deleting your account", "messages/sql-account-delete.mjs");
 const xboxFile = path.join(ROOT, "electron", "xbox.js");
 if (fs.existsSync(xboxFile) && fs.existsSync(path.join(__dirname, "xbox.cjs"))) add("files", "Xbox and Game Pass games", "xbox.cjs", [xboxFile]);
 if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safety.sql"))) {
@@ -95,6 +99,7 @@ if (fs.existsSync(path.join(__dirname, "twitch-glass.cjs"))) add("window", "Twit
 if (fs.existsSync(path.join(__dirname, "video-popout.cjs"))) add("window", "Videos pop out of the Social browser", "video-popout.cjs");
 if (fs.existsSync(path.join(__dirname, "miniplayer.cjs"))) add("window", "The stream mini-player", "miniplayer.cjs");
 if (fs.existsSync(path.join(__dirname, "login.cjs"))) add("window", "Staying logged in when AURA restarts", "login.cjs");
+if (fs.existsSync(path.join(__dirname, "delete-account.cjs"))) add("window", "Deleting your account", "delete-account.cjs"); // (Added by aura-account-delete-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "twitch-favorites.cjs"))) add("window", "Twitch favorites and live notices", "twitch-favorites.cjs");
 if (fs.existsSync(path.join(__dirname, "achievements.cjs"))) add("window", "Achievements count everything", "achievements.cjs");
 if (fs.existsSync(path.join(__dirname, "screen-share.cjs"))) add("window", "Screen share in voice calls", "screen-share.cjs");

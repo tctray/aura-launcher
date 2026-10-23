@@ -66,7 +66,7 @@ AURA uses these to do its job. Each sees your internet address, as any website d
 
 - A message: point at one of your own messages and choose Delete. Its words and its file are removed for both of you.
 - A friend: remove them from the profile card in a chat. Your past conversation stays, but neither of you can send more.
-- Your account and everything in it: ask using the contact details below, from the email address on the account or naming your AURA username. It will be removed within 30 days.
+- Your account and everything in it: open Edit profile (under your name in the left panel) and choose Delete account. It's deleted straight away, with the messages you sent and your one-to-one chats. You can also ask using the contact details below, from the email address on the account.
 - Uninstalling AURA removes it from your PC. It doesn't delete your account.
 
 ## Blocking and reporting
@@ -77,7 +77,7 @@ Reporting someone sends the reason, and the message if you report one, to the de
 
 ## How long things are kept
 
-What's saved to your account stays until you delete it or ask for your account to be removed. Reports are kept for as long as it takes to deal with them.
+What's saved to your account stays until you delete it or delete your account. Reports are kept for as long as it takes to deal with them.
 
 ## Children
 
