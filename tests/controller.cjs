@@ -55,6 +55,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await page.route((url) => !String(url).startsWith(base) && !String(url).startsWith("data:"), (route) => route.abort());
     await page.addInitScript(() => {
       try { localStorage.clear(); localStorage.setItem("aura_profile", JSON.stringify({ username: "tester", avatar: "", userId: "user-1" })); } catch {}
+      // A library to move around in (a new AURA starts empty: Added by aura-no-demo-setup.cjs)
+      try { localStorage.setItem("aura_games", JSON.stringify([["Elden Ring","RPG"],["Cyberpunk 2077","RPG"],["Hollow Knight","Indie"],["Counter-Strike 2","FPS"],["Civilization VI","Strategy"],["Celeste","Indie"],["Hades","Action"],["Portal 2","Adventure"]].map(([title, category], i) => ({ id: "c" + i, title, exePath: "C:/Games/" + i + ".exe", cover: "", category, favorite: i < 2, playCount: i, lastPlayed: Date.now() - i * 3600000, addedAt: Date.now() - i * 86400000 })))); } catch {}
       const ok = (data) => Promise.resolve({ success: true, data });
       const account = { getSession: () => ok({ id: "user-1", email: "me@example.com" }), getMyProfile: () => ok({ username: "tester", avatar_url: null }) };
       const fake = (name) => new Proxy({}, { get: (_t, key) => (key === "then" ? undefined : (...args) => (name === "auraCloud" && account[key]) ? account[key](...args) : ok(null)) });

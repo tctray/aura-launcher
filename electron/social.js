@@ -9,6 +9,7 @@
 //   require("./social").register({ ipcMain, cloudHandler, cloud: auraCloud, getWindow: () => mainWin, server: (route, body) => auraServer(route, body) });
 "use strict";
 const { app, Notification } = require("electron");
+const links = require("./linkpreview"); // link previews in messages // (Added by aura-messages-links-setup.cjs)
 
 const ONLINE_WITHIN_MS = 150 * 1000;   // seen in the last 2.5 minutes counts as online
 const HEARTBEAT_MS = 60 * 1000;
@@ -110,7 +111,8 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   let mediaReady = true;             // false once we learn the media SQL hasn't been run yet
   let listReady = true;              // same, for the newer conversation list
   let backgroundsReady = true;       // same, for shared chat backgrounds
-  let deleteReady = true;            // same, for deleted messages
+  let deleteReady = true;
+  let linksReady = true;             // false once we learn the link preview SQL hasn't been run yet // (Added by aura-messages-links-setup.cjs)            // same, for deleted messages
   let liveCall = null;               // id of the call you started or answered on this PC, if any
   const groupLive = new Set();      // in a call with 3 people, the other calls it is made of // (Added by aura-group-calls-setup.cjs)
   let ringing = null;                // { id, note } while a call is ringing and AURA isn't in front
@@ -168,17 +170,19 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
 
   const shapeMessage = (m) => ({
     id: m.id, conversationId: m.conversation_id, senderId: m.sender_id, content: m.content || "", createdAt: m.created_at, readAt: m.read_at || null, deleted: !!m.deleted_at,
+    link: m.link && !m.deleted_at ? links.cleanLink(m.link) : null, // a link's preview, checked again here // (Added by aura-messages-links-setup.cjs)
     media: m.media_path ? { path: m.media_path, kind: m.media_kind, mime: m.media_mime, size: m.media_size || 0, width: m.media_width || null, height: m.media_height || null, name: m.media_name || "" } : null,
   });
   // The words shown where a file has no caption: in the list, in notices
   const mediaWord = (media) => (!media ? "" : media.kind === "video" ? "Video" : media.mime === "image/gif" ? "GIF" : "Photo");
   // Which columns a message has depends on which SQL files have been run. AURA asks for all of
   // them; if Supabase says one is missing, it remembers that and asks again without it.
-  const messageCols = () => BASIC_COLS + (mediaReady ? MEDIA_EXTRA : "") + (deleteReady ? ",deleted_at" : "");
+  const messageCols = () => BASIC_COLS + (mediaReady ? MEDIA_EXTRA : "") + (deleteReady ? ",deleted_at" : "") + (linksReady ? ",link" : ""); // (link: Added by aura-messages-links-setup.cjs)
   const missingColumn = (error) => String(error?.code || "") === "42703" || /(media_(path|kind|mime|size|width|height|name)|deleted_at).*does not exist/i.test(String(error?.message || ""));
   function withoutMissing(error) {
-    if (!missingColumn(error)) return false;
     const msg = String(error?.message || "");
+    if (linksReady && /\blink\b/.test(msg) && (missingColumn(error) || String(error?.code || "") === "PGRST204")) { linksReady = false; return true; } // link previews aren't set up // (Added by aura-messages-links-setup.cjs)
+    if (!missingColumn(error)) return false;
     if (deleteReady && (/deleted_at/.test(msg) || !/media_/.test(msg))) { deleteReady = false; return true; }
     if (mediaReady) { mediaReady = false; return true; }
     return false;
@@ -456,13 +460,24 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     return page;
   }
 
-  async function sendMessage(conversationId, content) {
+  async function sendMessage(conversationId, content, link) {
     const user = await currentUser();
     const row = { conversation_id: id(conversationId, "conversation"), sender_id: user.id, content: tidyContent(content) }; // sender is always the signed-in account
+    // A preview of a link in the message, made on this PC (Added by aura-messages-links-setup.cjs): only for a link that is really in it
+    const preview = link && linksReady ? links.cleanLink(link) : null;
+    if (preview && (row.content.includes(preview.url) || row.content.includes(preview.url.replace(/\/$/, "")))) row.link = preview;
     const save = (cols) => sb().from("messages").insert(row).select(cols).single();
-    const { data, error } = await withColumns(save);
+    let { data, error } = await withColumns(save);
+    if (error && row.link && !linksReady) { delete row.link; ({ data, error } = await withColumns(save)); } // not set up yet: the message goes without it
     if (error) throw friendly(error);
     return shapeMessage(data);
+  }
+
+  // The preview of a link you're typing // (Added by aura-messages-links-setup.cjs). The page is looked up here, never in the window.
+  async function linkPreview(url) {
+    await currentUser();
+    if (typeof url !== "string" || url.length > 2000) return null;
+    return links.linkPreview(url);
   }
 
   // ── Pictures, GIFs and videos ───────────────────────────────────────────────
@@ -897,7 +912,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   // Called by the window when it opens. Safe to call again.
   async function start() {
     const user = await currentUser();
-    mediaReady = true; listReady = true; backgroundsReady = true; deleteReady = true; reactionsReady = true; // check again each time AURA starts, in case the SQL has been run since
+    mediaReady = true; listReady = true; backgroundsReady = true; deleteReady = true; reactionsReady = true; linksReady = true; // check again each time AURA starts, in case the SQL has been run since
     if (!authWatched) {
       authWatched = true;
       try { sb().auth.onAuthStateChange((event) => { if (event === "SIGNED_OUT") unsubscribe(); }); } catch {}
@@ -959,7 +974,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   } catch {}
 
   // ── What the window may ask for ─────────────────────────────────────────────
-  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, deleteMessage, blockUser, unblockUser, listBlocked, reportUser, markRead, react, gifSearch, startCall, answerCall, endCall, callSignal, callState, callBeat, currentCall, callConfig, addToCall, joinGroup, createGroup, addGroupMembers, removeGroupMember, leaveGroup, renameGroup };
+  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, deleteMessage, blockUser, unblockUser, listBlocked, reportUser, markRead, react, gifSearch, startCall, answerCall, endCall, callSignal, callState, callBeat, currentCall, callConfig, addToCall, joinGroup, linkPreview, createGroup, addGroupMembers, removeGroupMember, leaveGroup, renameGroup };
   for (const [name, fn] of Object.entries(api)) ipcMain.handle("social:" + name, cloudHandler(fn));
   return api;
 }

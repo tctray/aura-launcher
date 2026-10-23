@@ -183,14 +183,14 @@ const actions = {
   },
 
   // Shows the message straight away, then confirms it once Supabase has it
-  async send(conversationId, text, retryOf) {
+  async send(conversationId, text, retryOf, link) {
     const content = tidy(text);
     if (!content || !state.me) return false;
     const tempId = retryOf || `sending-${++tempCounter}`;
-    const draft = { id: tempId, conversationId, senderId: state.me.id, content, createdAt: new Date().toISOString(), readAt: null, pending: true, failed: false };
+    const draft = { id: tempId, conversationId, senderId: state.me.id, content, createdAt: new Date().toISOString(), readAt: null, pending: true, failed: false, link: link || null }; // (link preview: Added by aura-messages-links-setup.cjs)
     setThread(conversationId, (t) => ({ items: [...t.items.filter((m) => m.id !== tempId), draft] }));
     try {
-      const saved = await call("sendMessage", conversationId, content);
+      const saved = await call("sendMessage", conversationId, content, link || null);
       setThread(conversationId, (t) => ({ items: mergeMessage(t.items.filter((m) => m.id !== tempId), saved) }));
       touchConversation(saved, false);
       try { window.dispatchEvent(new Event("aura-message-sent")); } catch {} // for First Contact (Added by aura-new-achievements-setup.cjs)
@@ -1587,6 +1587,90 @@ function GroupCallPicker({ conversation, onClose }) {
   );
 }
 
+// ── Links in messages (Added by aura-messages-links-setup.cjs) ──
+// Links can be clicked (they open in your browser). A link can carry a preview: made on the
+// sender's PC when they sent it and saved with the message, so showing it never visits the site.
+const LINK_IN_TEXT = /https?:\/\/[^\s<>"'`]+/gi;
+// A link ends before trailing punctuation, and before a closing bracket it didn't open ("(see https://x.com/a)")
+function trimLink(url) {
+  let u = url.replace(/[.,!?;:'"]+$/, "");
+  const pairs = { ")": "(", "]": "[", "}": "{" };
+  while (/[)\]}]$/.test(u)) {
+    const close = u.slice(-1);
+    if (u.split(pairs[close]).length >= u.split(close).length) break;
+    u = u.slice(0, -1).replace(/[.,!?;:'"]+$/, "");
+  }
+  return u;
+}
+const openLink = (url) => { if (/^https?:\/\//i.test(url)) window.electronAPI?.openExternal?.(url); };
+function firstLink(text) {
+  for (const m of String(text || "").matchAll(LINK_IN_TEXT)) {
+    const url = trimLink(m[0]);
+    if (/^https:\/\//i.test(url) && !gifOf(url)) return url;
+  }
+  return "";
+}
+function Linked({ text }) {
+  const parts = [];
+  let at = 0, n = 0;
+  for (const m of String(text).matchAll(LINK_IN_TEXT)) {
+    const url = trimLink(m[0]);
+    if (m.index > at) parts.push(text.slice(at, m.index));
+    parts.push(<a key={"l" + n++} href={url} className="mx-a" onClick={(e) => { e.preventDefault(); openLink(url); }} title={url}>{url}</a>);
+    at = m.index + url.length;
+  }
+  if (!parts.length) return text;
+  if (at < text.length) parts.push(text.slice(at));
+  return <>{parts}</>;
+}
+// A preview's picture, made small on this PC (a JPEG of at most 480 x 320)
+async function thumbOf(image) {
+  if (!image?.bytes || typeof createImageBitmap !== "function") return "";
+  try {
+    const bmp = await createImageBitmap(new Blob([image.bytes], { type: image.mime || "image/jpeg" }));
+    for (const [w, h, q] of [[480, 320, 0.74], [360, 240, 0.6], [240, 160, 0.5]]) {
+      const scale = Math.min(w / bmp.width, h / bmp.height, 1);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bmp.width * scale)); canvas.height = Math.max(1, Math.round(bmp.height * scale));
+      const g = canvas.getContext("2d");
+      g.fillStyle = "#111"; g.fillRect(0, 0, canvas.width, canvas.height);
+      g.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      const url = canvas.toDataURL("image/jpeg", q);
+      if (url.length <= 58000) return url;
+    }
+  } catch {}
+  return "";
+}
+const PREVIEW_PICTURE = /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/;
+const IconPlayBig = () => <Svg d={<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/>} size={30} />;
+function LinkCard({ link, draft, onRemove }) {
+  const [playing, setPlaying] = useState(false);
+  if (!link?.url) return null;
+  const picture = typeof link.image === "string" && PREVIEW_PICTURE.test(link.image) ? link.image : "";
+  const video = link.kind === "youtube" && /^[A-Za-z0-9_-]{11}$/.test(link.videoId || "");
+  const open = () => openLink(link.url);
+  return (
+    <div className={`mx-link-card ${link.kind || "page"} ${draft ? "draft" : ""}`}>
+      {video && playing ? (
+        <div className="mx-link-video"><iframe src={`https://www.youtube-nocookie.com/embed/${link.videoId}?autoplay=1&rel=0`} title={link.title || "YouTube video"} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" /></div>
+      ) : picture ? (
+        <button type="button" className="mx-link-pic" onClick={video && !draft ? () => setPlaying(true) : open} aria-label={video ? `Play ${link.title || "the video"}` : `Open ${link.title || link.url}`} disabled={!!draft}>
+          <img src={picture} alt="" draggable={false} />
+          {video && <span className="mx-link-play"><IconPlayBig /></span>}
+        </button>
+      ) : null}
+      <button type="button" className="mx-link-text" onClick={open} disabled={!!draft} title={link.url}>
+        <span className="mx-link-site">{link.site || "Link"}</span>
+        {link.title && <span className="mx-link-title">{link.title}</span>}
+        {link.description && <span className="mx-link-desc">{link.description}</span>}
+        {link.kind === "steam" && link.price && <span className="mx-link-price">{link.price}</span>}
+      </button>
+      {draft && <button type="button" className="mx-link-x" onClick={onRemove} aria-label="Remove the preview" title="Send without the preview"><IconX /></button>}
+    </div>
+  );
+}
+const PREVIEWABLE = () => typeof window.auraSocial?.linkPreview === "function";
+
 function Thread({ conversation, nowPlaying }) {
   const s = useSocial();
   const t = s.threads[conversation.id] || thread(conversation.id);
@@ -1598,6 +1682,8 @@ function Thread({ conversation, nowPlaying }) {
   const [showProfile, setShowProfile] = useState(false);
   const [newBelow, setNewBelow] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);     // the GIF search, above the typing box
+  const [linkDraft, setLinkDraft] = useState(null);  // { url, link } the preview of a link you're typing (Added by aura-messages-links-setup.cjs)
+  const noPreview = useRef(new Set());               // links whose preview you removed
   const [groupCall, setGroupCall] = useState(false); // picking who to call from a group (Added by aura-messages-groups-setup.cjs)
   const group = !!conversation.isGroup;
   const nameOf = (userId) => (group ? memberName(conversation, userId) : conversation.username);
@@ -1687,6 +1773,24 @@ function Thread({ conversation, nowPlaying }) {
   const onDragLeave = (e) => { if (!hasFiles(e)) return; dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDropping(false); };
   const onDrop = (e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth.current = 0; setDropping(false); addFiles(e.dataTransfer.files); };
 
+  // Looks up the first link you type, a moment after you stop typing (Added by aura-messages-links-setup.cjs)
+  const typedLink = PREVIEWABLE() && !tray.length ? firstLink(text) : "";
+  useEffect(() => {
+    if (!typedLink || noPreview.current.has(typedLink)) { setLinkDraft(null); return; }
+    if (linkDraft?.url === typedLink) return;
+    let alive = true;
+    setLinkDraft({ url: typedLink, link: null });
+    const timer = setTimeout(async () => {
+      try {
+        const found = await call("linkPreview", typedLink);
+        if (!alive) return;
+        if (!found?.title && !found?.description) { setLinkDraft({ url: typedLink, link: null, none: true }); return; }
+        const image = await thumbOf(found.image);
+        if (alive) setLinkDraft({ url: typedLink, link: { url: found.url, kind: found.kind, title: found.title || "", description: found.description || "", site: found.site || "", ...(found.videoId ? { videoId: found.videoId } : {}), ...(found.appId ? { appId: found.appId, price: found.price || "" } : {}), ...(image ? { image } : {}) } });
+      } catch { if (alive) setLinkDraft({ url: typedLink, link: null, none: true }); }
+    }, 700);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [typedLink]);
   const ready = tidy(text);
   const tooLong = ready.length > MAX_LENGTH;
   const canSend = conversation.isFriend && (!!ready || tray.length > 0) && !tooLong;
@@ -1696,7 +1800,11 @@ function Thread({ conversation, nowPlaying }) {
     if (!conversation.isFriend || (!content && !files.length) || content.length > MAX_LENGTH) return;
     if (value === text) { setText(""); setTray([]); }
     stick.current = true;
-    if (!files.length) actions.send(conversation.id, content);
+    if (!files.length) {
+      const preview = value === text && linkDraft?.link && content.includes(linkDraft.url) ? linkDraft.link : null; // (Added by aura-messages-links-setup.cjs)
+      setLinkDraft(null);
+      actions.send(conversation.id, content, undefined, preview);
+    }
     // Files go one after another so they arrive in the order you picked them; the words go with the first
     else (async () => { for (let i = 0; i < files.length; i++) await actions.sendMedia(conversation.id, files[i], i === 0 ? content : ""); })();
     input.current?.focus();
@@ -1713,7 +1821,7 @@ function Thread({ conversation, nowPlaying }) {
   const sendGif = (g) => { setGifOpen(false); send(g.send.url); }; // what you were typing stays in the box
   const meId = s.me?.id || null;
   const canReact = reactionsAvailable();
-  const retry = (m) => (m.attachment ? actions.sendMedia(conversation.id, m.attachment, m.content, m.id) : actions.send(conversation.id, m.content, m.id));
+  const retry = (m) => (m.attachment ? actions.sendMedia(conversation.id, m.attachment, m.content, m.id) : actions.send(conversation.id, m.content, m.id, m.link)); // (its preview too: Added by aura-messages-links-setup.cjs)
 
   // Group messages: a new block when the sender changes or five minutes pass; a divider per day
   const blocks = useMemo(() => {
@@ -1785,7 +1893,8 @@ function Thread({ conversation, nowPlaying }) {
                   {m.media && <MediaView message={m} onOpen={setViewing} />}
                   {gif ? <GifView url={gif} pending={m.pending} /> : m.content && (m.content === MISSED_CALL
                     ? <div className="mx-bubble mx-missed"><IconPhone size={15} /> {callNote(m.content, !!s.me && m.senderId === s.me.id)}</div>
-                    : <div className="mx-bubble">{m.content}</div>)}
+                    : <div className="mx-bubble"><Linked text={m.content} /></div>)}
+                  {m.link && !m.deleted && <LinkCard link={m.link} />}{/* (Added by aura-messages-links-setup.cjs) */}
                   {m.content === MISSED_CALL && conversation.isFriend && s.me && m.senderId !== s.me.id && (
                     <CallButton person={toPerson(conversation)} className="mx-link mx-callback">Call back</CallButton>
                   )}
@@ -1828,6 +1937,9 @@ function Thread({ conversation, nowPlaying }) {
             </div>
           )}
           {gifOpen && <GifPicker onPick={sendGif} onClose={closeGifs} />}
+          {linkDraft && !linkDraft.none && (linkDraft.link
+            ? <LinkCard link={linkDraft.link} draft onRemove={() => { noPreview.current.add(linkDraft.url); setLinkDraft(null); }} />
+            : <div className="mx-link-card draft loading" role="status">Getting a preview of the link…</div>)}{/* (Added by aura-messages-links-setup.cjs) */}
           <div className="mx-compose-row">
             <button type="button" className="mx-attach" onClick={() => picker.current?.click()} disabled={tray.length >= MAX_ATTACHMENTS} title="Attach a picture, GIF or video" aria-label="Attach a picture, GIF or video"><IconClip /></button>
             {gifsAvailable() && <button type="button" className={`mx-attach mx-gifbtn ${gifOpen ? "on" : ""}`} data-mx-gifs onClick={() => setGifOpen((v) => !v)} title="Send a GIF" aria-label="Send a GIF" aria-expanded={gifOpen}>GIF</button>}
@@ -2283,10 +2395,41 @@ const GROUP_CSS = `
 .mx-newgroup{display:flex;align-items:center;justify-content:center;gap:8px;margin:0 12px 8px;padding:8px 12px;border-radius:12px;cursor:pointer;font:600 12.5px 'DM Sans',sans-serif;color:var(--mx-ink2);background:rgba(255,255,255,.05);border:1px dashed rgba(255,255,255,.18);transition:background .15s,color .15s}
 .mx-newgroup:hover,.mx-newgroup:focus-visible{background:rgba(255,255,255,.1);color:#fff}
 `;
+// Links in messages (Added by aura-messages-links-setup.cjs)
+const LINK_CSS = `
+.mx-a{color:inherit;text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px;overflow-wrap:anywhere;cursor:pointer}
+.mx-a:hover{opacity:.85}
+.mx-link-card{position:relative;display:flex;flex-direction:column;width:min(360px,100%);margin-top:4px;border-radius:14px;overflow:hidden;background:color-mix(in srgb,var(--mx-base) 70%,rgba(255,255,255,.08));border:1px solid rgba(255,255,255,.12);text-align:left}
+.mx-group.me .mx-link-card{align-self:flex-end}
+.mx-link-card.youtube{width:min(420px,100%)}
+.mx-link-pic{position:relative;display:block;width:100%;padding:0;border:none;background:#000;cursor:pointer}
+.mx-link-pic img{display:block;width:100%;max-height:220px;object-fit:cover}
+.mx-link-card.youtube .mx-link-pic img{aspect-ratio:16/9;max-height:none}
+.mx-link-play{position:absolute;inset:0;margin:auto;width:62px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:rgba(220,0,0,.88);color:#fff;transition:transform .15s}
+.mx-link-pic:hover .mx-link-play{transform:scale(1.08)}
+.mx-link-video{position:relative;width:100%;aspect-ratio:16/9;background:#000}
+.mx-link-video iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.mx-link-text{display:flex;flex-direction:column;gap:2px;padding:9px 12px 11px;border:none;background:transparent;color:#fff;cursor:pointer;text-align:left;font:inherit}
+.mx-link-text:hover .mx-link-title{text-decoration:underline}
+.mx-link-site{font-size:11px;font-weight:600;color:var(--mx-ink3)}
+.mx-link-title{font-size:13.5px;font-weight:600;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.mx-link-desc{font-size:12px;line-height:1.4;color:var(--mx-ink2);overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+.mx-link-price{margin-top:3px;font-size:12px;font-weight:600;color:#a4d007}
+.mx-link-card.draft{flex-direction:row;align-items:stretch;width:auto;margin:0 0 8px;border-radius:12px}
+.mx-link-card.draft .mx-link-pic{width:96px;flex-shrink:0;cursor:default}
+.mx-link-card.draft .mx-link-pic img{height:100%;max-height:80px;aspect-ratio:auto}
+.mx-link-card.draft .mx-link-play{width:34px;height:24px;border-radius:7px}
+.mx-link-card.draft .mx-link-text{flex:1;min-width:0;cursor:default;padding:8px 36px 8px 12px}
+.mx-link-card.draft .mx-link-desc{-webkit-line-clamp:1}
+.mx-link-card.loading{padding:10px 12px;font-size:12px;color:var(--mx-ink3)}
+.mx-link-x{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:none;background:rgba(0,0,0,.45);color:#fff;cursor:pointer}
+.mx-link-x:hover{background:rgba(0,0,0,.7)}
+.mx-link-pic:focus-visible,.mx-link-text:focus-visible,.mx-link-x:focus-visible,.mx-a:focus-visible{outline:2px solid var(--mx-a);outline-offset:2px}
+`;
 function ensureStyles() {
   if (document.getElementById("aura-mx-styles")) return;
   const el = document.createElement("style");
   el.id = "aura-mx-styles";
-  el.textContent = CSS + GROUP_CSS; // (group chats: Added by aura-messages-groups-setup.cjs)
+  el.textContent = CSS + GROUP_CSS + LINK_CSS; // (group chats: Added by aura-messages-groups-setup.cjs) (links: Added by aura-messages-links-setup.cjs)
   document.head.appendChild(el);
 }

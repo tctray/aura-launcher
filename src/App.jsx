@@ -70,7 +70,8 @@ const pickImageFile = () => new Promise((resolve) => {
   };
   input.click();
 });
-const load = () => { try { const s=localStorage.getItem("aura_games"); return s?JSON.parse(s):DEMO_GAMES; } catch { return DEMO_GAMES; } };
+// A new AURA starts with an empty library: your own games come in by import or Add Game (Added by aura-no-demo-setup.cjs)
+const load = () => { try { const s=localStorage.getItem("aura_games"); return s?JSON.parse(s):[]; } catch { return []; } };
 const save = (g) => { try { localStorage.setItem("aura_games",JSON.stringify(g)); } catch {} };
 const loadProfile = () => { try { const s=localStorage.getItem("aura_profile"); return s?JSON.parse(s):null; } catch { return null; } };
 const saveProfile = (p) => { try { localStorage.setItem("aura_profile",JSON.stringify(p)); } catch {} };
@@ -511,6 +512,13 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .img-fb span{font-size:10px;font-weight:600}
 
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:260px;gap:10px;color:var(--t3)}
+/* An empty library: where to start (Added by aura-no-demo-setup.cjs) */
+.start-lib{margin:4px 40px 24px;text-align:left;padding:26px 28px;border-radius:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--ac) 16%,var(--card,#1b2230)),var(--card,#1b2230));border:1px solid color-mix(in srgb,var(--ac) 35%,var(--border,rgba(255,255,255,.1)))}
+.start-lib-t{font-family:'Rajdhani',sans-serif;font-size:26px;font-weight:700;letter-spacing:.4px;color:var(--t1,#fff)}
+.start-lib-s{margin:4px 0 16px;font-size:13.5px;line-height:1.5;color:var(--t2)}
+.gc .start-lib{margin:8px 0}
+.start-lib-a{display:flex;flex-wrap:wrap;gap:10px}
+.start-lib-a button{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;font-size:12.5px}
 .empty-icon{font-size:44px}
 .empty-t{font-size:15px;font-weight:600;color:var(--t2)}
 .empty-s{font-size:11px;text-align:center;max-width:240px}
@@ -1597,6 +1605,22 @@ function TwitchShelf({ games, onStreamClick }) {
           </div>
         )
       }
+    </div>
+  );
+}
+
+// ── An empty library: where to start (Added by aura-no-demo-setup.cjs) ──
+function StartLibrary({onSteam,onEpic,onXbox,onAdd}){
+  return(
+    <div className="start-lib" role="region" aria-label="Add your games">
+      <div className="start-lib-t">Bring in your games</div>
+      <div className="start-lib-s">AURA finds the games already on this PC. Pick where they're from, or add one yourself.</div>
+      <div className="start-lib-a">
+        <button className="btn-p" onClick={onSteam}><Ic.Steam/> Import Steam</button>
+        <button className="btn-p" onClick={onEpic}>Import Epic</button>
+        <button className="btn-p" onClick={onXbox}>Import Xbox</button>
+        <button className="btn-gh" onClick={onAdd}><Ic.Plus/> Add a game</button>
+      </div>
     </div>
   );
 }
@@ -3170,7 +3194,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
           <div className="sr"><div><div className="sr-l">Import Xbox Game Pass</div><div className="sr-s">Auto-import all installed Xbox games</div></div><button className="btn-p" onClick={onImportXbox} style={{fontSize:11,padding:"6px 14px"}}>Import</button></div>
           <div className="sr"><div><div className="sr-l">Count Games Started Outside AURA</div><div className="sr-s">Sessions and playtime include library games you start from Steam, Epic, Xbox or a shortcut. AURA checks which are running on this PC; nothing is sent anywhere</div></div><Tog k="trackAllGames"/></div>
           <div className="sr"><div><div className="sr-l">Games in Library</div><div className="sr-s">{games.length} titles stored locally</div></div><span style={{fontFamily:"Rajdhani,sans-serif",fontSize:22,fontWeight:700,color:"var(--ac)"}}>{games.length}</span></div>
-          <div className="sr"><div><div className="sr-l">Reset to Defaults</div><div className="sr-s">Restore demo games</div></div><button className="btn-d" onClick={onReset} style={{fontSize:11,padding:"5px 12px"}}>Reset</button></div>
+          <div className="sr"><div><div className="sr-l">Reset Library</div><div className="sr-s">Remove every game from AURA (the games stay installed)</div></div><button className="btn-d" onClick={()=>{if(window.confirm("Remove every game from your AURA library? The games themselves stay installed, and you can import them again."))onReset();}} style={{fontSize:11,padding:"5px 12px"}}>Reset</button></div>{/* (Added by aura-no-demo-setup.cjs) */}
         </div>
       </div>
       <div className="ss">
@@ -4020,13 +4044,14 @@ function AuraApp(){
               <div className="gm-srch"><Ic.Search/><input value={srch} onChange={e=>setSrch(e.target.value)} placeholder="Search games…"/></div>
               <button className="btn-p" onClick={()=>setModal("add")} style={{borderRadius:10}}><Ic.Plus/> Add</button>
             </div>
-            {!srch&&settings.homeBanner&&<GMBanner games={[...games].filter(g=>g.cover).sort((a,b)=>(b.lastPlayed||0)-(a.lastPlayed||0))} onPlay={doPlay} onFav={doFav} onSelect={setHeroGame}/>}
-            {!srch&&!settings.homeBanner&&<div style={{height:58,flexShrink:0}}/>}
+            {!srch&&settings.homeBanner&&games.some(g=>g.cover)&&<GMBanner games={[...games].filter(g=>g.cover).sort((a,b)=>(b.lastPlayed||0)-(a.lastPlayed||0))} onPlay={doPlay} onFav={doFav} onSelect={setHeroGame}/>}
+            {!srch&&(!settings.homeBanner||!games.some(g=>g.cover))&&<div style={{height:58,flexShrink:0}}/>}{/* (no banner without covers: Added by aura-no-demo-setup.cjs) */}
             <div className="gm-content">
               {srch?(
                 <GMShelf title="SEARCH RESULTS" games={sorted} onPlay={doPlay} onFav={doFav} onSelect={g=>{goTo("library");setHeroGame(g);}} count={`${sorted.length} games`}/>
               ):(
                 <>
+                  {games.length===0&&<StartLibrary onSteam={doImportSteam} onEpic={doImportEpic} onXbox={doImportXbox} onAdd={()=>setModal("add")}/>}{/* (Added by aura-no-demo-setup.cjs) */}
                   <FriendActivityShelf/>
                   <TwitchShelf games={games} onStreamClick={s=>{setActiveStream(s);goTo("streams");}}/>
                   <MadeForShelf games={games} username={profile.username} onPlay={doPlay} onSelect={g=>{setHeroGame(g);goTo("library");}}/>
@@ -4128,7 +4153,9 @@ function AuraApp(){
                 <div className="gc" style={{padding:0,display:"flex",flexDirection:"column"}}>
                   <Spotlight games={[...games].filter(g=>g.cover).sort((a,b)=>(b.lastPlayed||0)-(a.lastPlayed||0))} onPlay={doPlay} onFav={doFav} onSelect={setHeroGame}/>
                   <div style={{padding:"16px 22px 20px"}}>
-                    <Grid games={sorted} onPlay={doPlay} onFav={doFav} onEdit={openEdit} onDel={openDel} onSelect={setHeroGame}/>
+                    {games.length===0
+                      ? <StartLibrary onSteam={doImportSteam} onEpic={doImportEpic} onXbox={doImportXbox} onAdd={()=>setModal("add")}/>
+                      : <Grid games={sorted} onPlay={doPlay} onFav={doFav} onEdit={openEdit} onDel={openDel} onSelect={setHeroGame}/>}{/* (Added by aura-no-demo-setup.cjs) */}
                   </div>
                 </div>
               )}
@@ -4190,7 +4217,7 @@ function AuraApp(){
 
           {view==="messages"&&<PageBoundary name="messages"><MessagesPage nowPlaying={nowPlaying}/></PageBoundary>}
 
-          {view==="settings"&&<PageBoundary name="settings"><Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames(DEMO_GAMES);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers} coverProgress={coverProgress}/></PageBoundary>}
+          {view==="settings"&&<PageBoundary name="settings"><Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames([]);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers} coverProgress={coverProgress}/></PageBoundary>}
         </div>
 
         <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onToggle={()=>setFriendsOpen(o=>!o)}/>

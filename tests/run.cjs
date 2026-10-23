@@ -22,6 +22,7 @@ const sqlDir = path.join(ROOT, "supabase");
 const steps = [];
 const add = (group, title, file, args = []) => steps.push({ group, title, file: path.join(__dirname, file), args });
 add("files", "Project files", "static.cjs");
+if (fs.existsSync(path.join(__dirname, "link-preview.cjs"))) add("files", "Link previews: what is looked up, and what a preview may hold", "link-preview.cjs"); // (Added by aura-messages-links-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "tray-rules.cjs"))) add("files", "Running in the tray: when AURA closes and when it only hides", "tray-rules.cjs");
 if (fs.existsSync(path.join(__dirname, "platform-rules.cjs"))) add("files", "Twitch and Discord rules", "platform-rules.cjs");
 if (fs.existsSync(errorlog)) add("files", "The error log", "errorlog.cjs", [errorlog]);
@@ -51,6 +52,7 @@ if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safe
     if (hasCalls) {
       add("messages", "Voice calls: ringing, accepting, hanging up, missed calls", "messages/app-voice.cjs", [social]);
       add("messages", "Voice calls on a database missing the voice update", "messages/app-before-voice-sql.cjs", [social]);
+      if (fs.existsSync(path.join(sqlDir, "aura-messages-links.sql")) && fs.existsSync(path.join(__dirname, "messages", "app-links.cjs"))) add("messages", "Link previews in messages", "messages/app-links.cjs", [social]); // (Added by aura-messages-links-setup.cjs)
       if (fs.existsSync(path.join(sqlDir, "aura-messages-groups.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-groups.mjs"))) { // (Added by aura-messages-groups-setup.cjs)
         add("messages", "Database rules: group chats", "messages/sql-groups.mjs");
         add("messages", "Group chats: making, talking, changing, leaving", "messages/app-groups.cjs", [social]);
@@ -113,6 +115,8 @@ if (fs.existsSync(path.join(__dirname, "cams-full.cjs"))) add("window", "Call ca
 if (fs.existsSync(path.join(__dirname, "camera-busy.cjs"))) add("window", "One camera for the preview and calls", "camera-busy.cjs");
 if (fs.existsSync(path.join(__dirname, "group-chats.cjs"))) add("window", "Group chats", "group-chats.cjs");
 if (fs.existsSync(path.join(__dirname, "covers.cjs"))) add("window", "Cover art: none skipped", "covers.cjs");
+if (fs.existsSync(path.join(__dirname, "message-links.cjs"))) add("window", "Links in messages", "message-links.cjs");
+if (fs.existsSync(path.join(__dirname, "new-library.cjs"))) add("window", "A new AURA starts with an empty library", "new-library.cjs");
 
 // No check may run for ever: after this many minutes it is stopped and counted as failed
 const STEP_MINUTES = Number(process.env.AURA_STEP_MINUTES) > 0 ? Number(process.env.AURA_STEP_MINUTES) : 6;
