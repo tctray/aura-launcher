@@ -1,7 +1,7 @@
 // Links in messages: clickable links, a preview while you type (which you can remove), preview
 // cards in the chat (page, YouTube that plays in the chat, Steam with its price), and a preview's
 // picture only ever shown when it's AURA's own small JPEG. Two AURA windows in a real browser.
-// Added by aura-messages-links-setup.cjs.
+// Added by aura-messages-links-setup.cjs. (Updated by aura-links-youtube-fix-setup.cjs.)
 "use strict";
 const fs = require("fs");
 const http = require("http");
@@ -126,6 +126,7 @@ function makeWorld() {
   const PREVIEWS = {
     "https://example.com/post": { url: "https://example.com/post", kind: "page", title: "Patch notes", description: "Big changes this week", site: "Example News", image: { bytes: PNG, mime: "image/png" } },
     "https://www.youtube.com/watch?v=dQw4w9WgXcQ": { url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", kind: "youtube", videoId: "dQw4w9WgXcQ", title: "Never Gonna Give You Up", description: "Rick Astley", site: "YouTube", image: { bytes: PNG, mime: "image/png" } },
+    "https://youtu.be/dQw4w9WgXcQ?slow=1": { url: "https://youtu.be/dQw4w9WgXcQ?slow=1", kind: "youtube", videoId: "dQw4w9WgXcQ", title: "Slow to look up", description: "Rick Astley", site: "YouTube", image: { bytes: PNG, mime: "image/png" } },
     "https://store.steampowered.com/app/367520/": { url: "https://store.steampowered.com/app/367520/", kind: "steam", appId: "367520", title: "Hollow Knight", description: "Forge your own path", site: "Steam", price: "$14.99", image: null },
   };
   const friendsOf = { "user-A": ["user-B", "user-C"], "user-B": ["user-A"], "user-C": ["user-A"] };
@@ -159,7 +160,7 @@ function makeWorld() {
     listConversations: (me) => ok(groups.filter((g) => member(g, me)).map((g) => shapeGroup(g, me)).sort((a, b) => (a.lastMessageAt < b.lastMessageAt ? 1 : -1))),
     getMessages: (me, id) => { const g = findGroup(me, id); return g ? ok({ messages: msgs.filter((m) => m.conversationId === id).map(shapeMsg), hasMore: false }) : no("That isn't your conversation."); },
     sendMessage: (me, id, content, link) => { const g = findGroup(me, id); if (!g) return no("You can only message friends."); return ok(shapeMsg(post(g, me, String(content).trim(), link))); },
-    linkPreview: (_me, url) => ok(PREVIEWS[url] || null),
+    linkPreview: async (_me, url) => { if (/slow/.test(url)) await new Promise((r) => setTimeout(r, 1800)); return ok(PREVIEWS[url] || null); },
     markRead: (me, id) => { const g = findGroup(me, id); if (g) member(g, me).lastRead = new Date(Date.now() + 1000).toISOString(); return ok(true); },
     react: (me, mid, reaction, cid) => {
       const m = msgs.find((x) => x.id === mid);
@@ -379,6 +380,12 @@ const thrown = (ids, world) => ids.flatMap((id) => world.people[id].thrown.filte
     await box.press("Enter");
     const steam = B.locator(".mx-link-card.steam").last();
     check("a Steam link shows the game and its price", await until(async () => /Hollow Knight/.test(await steam.innerText().catch(() => ""))) && /\$14\.99/.test(await steam.innerText()));
+
+    console.log("4b. Sending before the preview is ready");
+    await box.fill("https://youtu.be/dQw4w9WgXcQ?slow=1");
+    await box.press("Enter");
+    check("pressing Enter straight away still sends the preview (the message waits for it)", await until(() => world.msgs[world.msgs.length - 1].content === "https://youtu.be/dQw4w9WgXcQ?slow=1" && sentLink()?.title === "Slow to look up", 12000), sentLink());
+    check("...and the other person gets the video card", await until(async () => /Slow to look up/.test(await B.locator(".mx-link-card.youtube").last().innerText().catch(() => ""))));
 
     console.log("5. A preview made some other way");
     const g = world.groups[0];

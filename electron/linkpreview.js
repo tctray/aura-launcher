@@ -1,4 +1,5 @@
 // Link previews for messages. Added by aura-messages-links-setup.cjs
+// (YouTube videos always get a card, and big pages are read further: Added by aura-links-youtube-fix-setup.cjs)
 //
 // When you type a link in a message, the main process (never the window) looks the page up and
 // returns its title, a short description, the site's name and its picture. The window shrinks the
@@ -13,7 +14,7 @@
 const dns = require("dns").promises;
 const net = require("net");
 
-const PAGE_MAX = 700 * 1024;          // read at most this much of a page
+const PAGE_MAX = 3 * 1024 * 1024;     // read at most this much of a page (YouTube's pages are big, and keep their titles far down)
 const IMAGE_MAX = 4 * 1024 * 1024;    // and of its picture
 const TIMEOUT_MS = 7000;
 const AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 AURA-link-preview";
@@ -113,7 +114,7 @@ function decode(text) {
 }
 const cut = (text, n) => { const t = decode(text); return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t; };
 function metaTags(html) {
-  const head = html.slice(0, 400 * 1024);
+  const head = html;
   const tags = {};
   for (const m of head.matchAll(/<meta\b[^>]*>/gi)) {
     const tag = m[0];
@@ -123,6 +124,9 @@ function metaTags(html) {
     if (key && content != null && !(key in tags)) tags[key] = content;
   }
   const title = head.match(/<title\b[^>]*>([\s\S]{0,600}?)<\/title>/i);
+  // YouTube also names the video in its page data
+  const yt = head.match(/"videoDetails":\{[^{}]*?"title":"((?:[^"\\]|\\.){1,300})"/);
+  if (yt && !tags["og:title"]) { try { tags["og:title"] = JSON.parse('"' + yt[1] + '"'); } catch {} }
   if (title && !tags["<title>"]) tags["<title>"] = title[1];
   return tags;
 }
@@ -165,6 +169,15 @@ async function linkPreview(raw, { fetchFn = globalThis.fetch, lookup = dns.looku
     out.title = cut(o?.title || "", 200);
     out.description = o?.author_name ? cut(o.author_name, 120) : "";
     picture = "https://i.ytimg.com/vi/" + vid + "/hqdefault.jpg";
+    if (!out.title) {
+      // The quick lookup didn't answer: the video's own page has its name too
+      const pageFor = await careful("https://www.youtube.com/watch?v=" + vid, { ...opts, max: PAGE_MAX, accept: "text/html" });
+      const tags = pageFor && /html/.test(pageFor.type) ? metaTags(pageFor.bytes.toString("utf8")) : {};
+      out.title = cut(tags["og:title"] || tags["twitter:title"] || String(tags["<title>"] || "").replace(/\s*-\s*YouTube\s*$/, ""), 200);
+      if (!out.description) out.description = cut(tags["og:description"] || "", 300);
+    }
+    // Even with no name at all, it's still a video that can be played: it always gets a card
+    if (!out.title) out.title = "YouTube video";
   } else if (app) {
     out.kind = "steam"; out.appId = app; out.site = "Steam";
     const j = await readJson("https://store.steampowered.com/api/appdetails?cc=us&l=english&appids=" + app, opts);
@@ -191,10 +204,12 @@ async function linkPreview(raw, { fetchFn = globalThis.fetch, lookup = dns.looku
     }
   }
   if (!out.title && !out.description) return null;
-  if (picture) {
-    const img = await careful(picture, { ...opts, max: IMAGE_MAX, accept: "image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.8" });
+  const pictures = picture ? [picture] : [];
+  if (out.kind === "youtube") pictures.push("https://i.ytimg.com/vi/" + out.videoId + "/mqdefault.jpg"); // a smaller one, if the big one isn't there
+  for (const p of pictures) {
+    const img = await careful(p, { ...opts, max: IMAGE_MAX, accept: "image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.8" });
     const mime = img?.type.split(";")[0].trim();
-    if (img && img.complete && /^image\/(png|jpeg|webp|gif)$/.test(mime) && img.bytes.length > 64) out.image = { bytes: new Uint8Array(img.bytes), mime };
+    if (img && img.complete && /^image\/(png|jpeg|webp|gif)$/.test(mime) && img.bytes.length > 64) { out.image = { bytes: new Uint8Array(img.bytes), mime }; break; }
   }
   return out;
 }

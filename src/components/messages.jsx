@@ -187,9 +187,11 @@ const actions = {
     const content = tidy(text);
     if (!content || !state.me) return false;
     const tempId = retryOf || `sending-${++tempCounter}`;
-    const draft = { id: tempId, conversationId, senderId: state.me.id, content, createdAt: new Date().toISOString(), readAt: null, pending: true, failed: false, link: link || null }; // (link preview: Added by aura-messages-links-setup.cjs)
+    const waiting = !!link && typeof link.then === "function"; // a preview still being looked up (Added by aura-links-youtube-fix-setup.cjs)
+    const draft = { id: tempId, conversationId, senderId: state.me.id, content, createdAt: new Date().toISOString(), readAt: null, pending: true, failed: false, link: waiting ? null : link || null }; // (link preview: Added by aura-messages-links-setup.cjs)
     setThread(conversationId, (t) => ({ items: [...t.items.filter((m) => m.id !== tempId), draft] }));
     try {
+      if (waiting) { link = await Promise.race([link, new Promise((r) => setTimeout(() => r(null), 6000))]); setThread(conversationId, (t) => ({ items: t.items.map((m) => (m.id === tempId ? { ...m, link: link || null } : m)) })); }
       const saved = await call("sendMessage", conversationId, content, link || null);
       setThread(conversationId, (t) => ({ items: mergeMessage(t.items.filter((m) => m.id !== tempId), saved) }));
       touchConversation(saved, false);
@@ -1775,20 +1777,28 @@ function Thread({ conversation, nowPlaying }) {
 
   // Looks up the first link you type, a moment after you stop typing (Added by aura-messages-links-setup.cjs)
   const typedLink = PREVIEWABLE() && !tray.length ? firstLink(text) : "";
+  // Each link is looked up once; sending before its preview is ready waits for it (Added by aura-links-youtube-fix-setup.cjs)
+  const lookups = useRef(new Map());
+  const lookUp = (url) => {
+    if (!lookups.current.has(url)) lookups.current.set(url, (async () => {
+      try {
+        const found = await call("linkPreview", url);
+        if (!found?.title && !found?.description) return null;
+        const image = await thumbOf(found.image);
+        return { url: found.url, kind: found.kind, title: found.title || "", description: found.description || "", site: found.site || "", ...(found.videoId ? { videoId: found.videoId } : {}), ...(found.appId ? { appId: found.appId, price: found.price || "" } : {}), ...(image ? { image } : {}) };
+      } catch { return null; }
+    })());
+    return lookups.current.get(url);
+  };
   useEffect(() => {
     if (!typedLink || noPreview.current.has(typedLink)) { setLinkDraft(null); return; }
     if (linkDraft?.url === typedLink) return;
     let alive = true;
     setLinkDraft({ url: typedLink, link: null });
     const timer = setTimeout(async () => {
-      try {
-        const found = await call("linkPreview", typedLink);
-        if (!alive) return;
-        if (!found?.title && !found?.description) { setLinkDraft({ url: typedLink, link: null, none: true }); return; }
-        const image = await thumbOf(found.image);
-        if (alive) setLinkDraft({ url: typedLink, link: { url: found.url, kind: found.kind, title: found.title || "", description: found.description || "", site: found.site || "", ...(found.videoId ? { videoId: found.videoId } : {}), ...(found.appId ? { appId: found.appId, price: found.price || "" } : {}), ...(image ? { image } : {}) } });
-      } catch { if (alive) setLinkDraft({ url: typedLink, link: null, none: true }); }
-    }, 700);
+      const link = await lookUp(typedLink);
+      if (alive) setLinkDraft(link ? { url: typedLink, link } : { url: typedLink, link: null, none: true });
+    }, 500);
     return () => { alive = false; clearTimeout(timer); };
   }, [typedLink]);
   const ready = tidy(text);
@@ -1801,7 +1811,9 @@ function Thread({ conversation, nowPlaying }) {
     if (value === text) { setText(""); setTray([]); }
     stick.current = true;
     if (!files.length) {
-      const preview = value === text && linkDraft?.link && content.includes(linkDraft.url) ? linkDraft.link : null; // (Added by aura-messages-links-setup.cjs)
+      // Its preview: ready, or still being looked up (then the message waits for it) (Added by aura-links-youtube-fix-setup.cjs)
+      const url = value === text && PREVIEWABLE() ? firstLink(content) : "";
+      const preview = !url || noPreview.current.has(url) ? null : linkDraft?.url === url && linkDraft.link ? linkDraft.link : lookUp(url);
       setLinkDraft(null);
       actions.send(conversation.id, content, undefined, preview);
     }

@@ -9,7 +9,7 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
 
 // ── A pretend internet ───────────────────────────────────────────────────────
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 7)]);
-const DNS = { "example.com": "93.184.216.34", "www.youtube.com": "142.250.1.1", "i.ytimg.com": "142.250.1.2", "store.steampowered.com": "23.1.1.1", "shared.akamai.steamstatic.com": "23.1.1.2",
+const DNS = { "youtu.be": "142.250.1.3", "example.com": "93.184.216.34", "www.youtube.com": "142.250.1.1", "i.ytimg.com": "142.250.1.2", "store.steampowered.com": "23.1.1.1", "shared.akamai.steamstatic.com": "23.1.1.2",
   "evil.example": "192.168.1.10", "rebind.example": "127.0.0.1", "cdn.example.com": "93.184.216.35", "www.twitch.tv": "151.101.1.1", "bounce.example.com": "93.184.216.36", "big.example.com": "93.184.216.37", "file.example.com": "93.184.216.38" };
 const asked = [];
 const page = (html, type = "text/html; charset=utf-8") => ({ status: 200, type, body: Buffer.from(html) });
@@ -31,6 +31,11 @@ const SITES = {
   "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg": { status: 200, type: "image/jpeg", body: JPEG },
   "https://store.steampowered.com/api/appdetails?cc=us&l=english&appids=367520": page(JSON.stringify({ 367520: { success: true, data: { name: "Hollow Knight", short_description: "Forge your own path in <b>Hollow Knight</b>!", is_free: false, price_overview: { final_formatted: "$14.99" }, header_image: "https://shared.akamai.steamstatic.com/header.jpg" } } }), "application/json"),
   "https://shared.akamai.steamstatic.com/header.jpg": { status: 200, type: "image/jpeg", body: JPEG },
+  // A video whose quick lookup doesn't answer: its name is far down its (big) page, as on YouTube (Added by aura-links-youtube-fix-setup.cjs)
+  "https://www.youtube.com/watch?v=aaaaaaaaaaa": page("<html><head><script>" + "x".repeat(900 * 1024) + "</script></head><body><meta property=\"og:title\" content=\"Deep &amp; down\"></body></html>"),
+  "https://i.ytimg.com/vi/aaaaaaaaaaa/hqdefault.jpg": { status: 200, type: "image/jpeg", body: JPEG },
+  // A video nothing answers for at all, except its smaller picture
+  "https://i.ytimg.com/vi/bbbbbbbbbbb/mqdefault.jpg": { status: 200, type: "image/jpeg", body: JPEG },
   "https://www.twitch.tv/somestreamer": page(`<meta property="og:title" content="somestreamer - Twitch"><meta property="og:description" content="Playing games">`),
   "https://big.example.com/huge.jpg": { status: 200, type: "image/jpeg", body: Buffer.alloc(5 * 1024 * 1024, 1) },
   "https://big.example.com/page": page(`<meta property="og:title" content="Huge picture"><meta property="og:image" content="https://big.example.com/huge.jpg">`),
@@ -83,6 +88,10 @@ const preview = (url) => linkPreview(url, { fetchFn, lookup });
   check("a YouTube link: the video's title, channel and picture", p && p.kind === "youtube" && p.videoId === "dQw4w9WgXcQ" && p.title === "Never Gonna Give You Up" && p.description === "Rick Astley" && p.site === "YouTube" && !!p.image, p);
   p = await preview("https://store.steampowered.com/app/367520/Hollow_Knight/");
   check("a Steam store link: the game's name, price and picture from Steam", p && p.kind === "steam" && p.appId === "367520" && p.title === "Hollow Knight" && p.price === "$14.99" && /Forge your own path in Hollow Knight/.test(p.description) && !!p.image, p);
+  p = await preview("https://www.youtube.com/watch?v=aaaaaaaaaaa&si=share");
+  check("if YouTube's quick lookup doesn't answer, the name comes from the video's page, even far down it", p && p.kind === "youtube" && p.title === "Deep & down" && !!p.image, p);
+  p = await preview("https://youtu.be/bbbbbbbbbbb");
+  check("a YouTube video always gets a card, even when nothing answers (with the smaller picture if that's all there is)", p && p.kind === "youtube" && p.videoId === "bbbbbbbbbbb" && p.title === "YouTube video" && !!p.image, p);
   p = await preview("https://www.twitch.tv/somestreamer");
   check("a Twitch link is marked as Twitch", p && p.kind === "twitch" && p.site === "Twitch" && p.title === "somestreamer - Twitch", p);
 
