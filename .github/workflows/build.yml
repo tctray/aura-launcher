@@ -16,6 +16,10 @@ jobs:
           node-version: 20
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund   # the checks don't need the Electron program or ffmpeg downloaded
+      - name: Get FFmpeg for the media and clip checks   # (Added by aura-ci-ffmpeg-setup.cjs)
+        run: node node_modules/ffmpeg-static/install.js
+        timeout-minutes: 5
+        continue-on-error: true   # if it can't be fetched, those checks are skipped instead of failing
       - name: Install the browser the window check uses
         run: npx playwright install chromium
         timeout-minutes: 5

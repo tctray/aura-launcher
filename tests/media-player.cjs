@@ -2,6 +2,7 @@
 // playlists, converting, and YouTube links. Opens the built window (dist) in a real browser,
 // with the real electron/media.js serving real (made-up) files.
 // Added by aura-media-player-setup.cjs.
+// (Updated by aura-media-youtube-setup.cjs.)
 "use strict";
 const fs = require("fs");
 const http = require("http");
@@ -42,7 +43,7 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
 
   // Real files, made with FFmpeg (WebM and Ogg, which the test browser plays; AURA itself plays MP4 and MP3 too)
   let ffmpeg = null; try { ffmpeg = require("ffmpeg-static"); } catch {}
-  if (!ffmpeg || !fs.existsSync(ffmpeg)) { note("FFmpeg isn't installed here (npm install)"); return done(process.env.CI ? 1 : 3); }
+  if (!ffmpeg || !fs.existsSync(ffmpeg)) { note("FFmpeg isn't downloaded here, so this was skipped (npm install gets it)"); return done(3); } // (Added by aura-ci-ffmpeg-setup.cjs)
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-media-ui-"));
   const music = path.join(root, "Music"), videos = path.join(root, "Videos");
   fs.mkdirSync(music); fs.mkdirSync(videos);
@@ -60,6 +61,20 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
   const calls = [];
   const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
   await page.route((url) => { const u = String(url); return !u.startsWith(base) && !u.startsWith("http://127.0.0.1:"); }, (route) => route.abort());
+  // A pretend YouTube player: answers like the real one, and remembers the commands AURA sends it
+  await page.route((url) => String(url).startsWith("https://www.youtube-nocookie.com/embed/"), (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><body style="background:#222"><script>
+    window.cmds = [];
+    const send = (m) => parent.postMessage(JSON.stringify(m), "*");
+    addEventListener("message", (e) => {
+      let d; try { d = JSON.parse(e.data); } catch { return; }
+      if (d.event === "listening" && !window.said) { window.said = true; send({ event: "onReady" }); send({ event: "infoDelivery", info: { playerState: 1, currentTime: 5, duration: 200, videoData: { title: "Late Night Mix", author: "Hello Vee" }, playlist: ["a", "b", "c"], playlistIndex: 0 } }); }
+      if (d.event === "command") {
+        window.cmds.push(d.func + (d.args && d.args.length ? ":" + JSON.stringify(d.args) : ""));
+        if (d.func === "pauseVideo") send({ event: "infoDelivery", info: { playerState: 2 } });
+        if (d.func === "nextVideo") send({ event: "infoDelivery", info: { playerState: 1, playlistIndex: 1, videoData: { title: "Second Song", author: "Hello Vee" } } });
+      }
+    });
+  </script></body>` }));
   await page.exposeBinding("__media", async (_src, ch, args) => { calls.push(ch); const h = handlers["media:" + ch]; return h ? h(null, ...(args || [])) : { success: false, error: "no " + ch }; });
   await page.addInitScript(() => {
     try { localStorage.clear(); localStorage.setItem("aura_profile", JSON.stringify({ username: "tctray", avatar: "", userId: "user-1" })); } catch {}
@@ -159,6 +174,17 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
     await page.getByRole("button", { name: "Play", exact: true }).last().click(); await page.waitForTimeout(500);
     h = await host();
     check("a YouTube link with a playlist plays in the privacy-friendly YouTube player", /^https:\/\/www\.youtube-nocookie\.com\/embed\/dQw4w9WgXcQ\?autoplay=1.*list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG/.test(h.frame), h.frame);
+    await page.waitForTimeout(1500);
+    const ytCmds = () => page.frames().find((f) => f.url().includes("youtube-nocookie"))?.evaluate(() => window.cmds) || [];
+    check("its real title and channel show, and where you are in the playlist", (await page.locator(".md-now-t").innerText()) === "Late Night Mix" && /Hello Vee · 1 of 3/.test(await page.locator(".md-now-s").innerText()), [await page.locator(".md-now-t").innerText(), await page.locator(".md-now-s").innerText()]);
+    await page.locator(".md-now").getByRole("button", { name: "Pause" }).click(); await page.waitForTimeout(400);
+    check("AURA's Pause button pauses YouTube", (await ytCmds()).includes("pauseVideo") && await page.locator(".md-now").getByRole("button", { name: "Play", exact: true }).isVisible());
+    await page.locator(".md-now").getByRole("button", { name: "Next" }).click(); await page.waitForTimeout(400);
+    check("...Next goes to the next video in the playlist", (await ytCmds()).includes("nextVideo") && (await page.locator(".md-now-t").innerText()) === "Second Song" && /2 of 3/.test(await page.locator(".md-now-s").innerText()));
+    await page.locator(".md-now").getByLabel("Volume").fill("0.3"); await page.waitForTimeout(300);
+    check("...and the volume slider sets YouTube's volume", (await ytCmds()).includes("setVolume:[30]"), await ytCmds());
+    await page.locator(".md-now").getByLabel("Position").fill("60"); await page.waitForTimeout(300);
+    check("...and the progress bar skips through it", (await ytCmds()).some((c) => c.startsWith("seekTo:[60")), await ytCmds());
     await page.getByLabel("YouTube link").fill("https://evil.example/watch?v=abc");
     await page.getByRole("button", { name: "Play", exact: true }).last().click(); await page.waitForTimeout(300);
     check("other links aren't played", (await host()).frame.includes("dQw4w9WgXcQ"));

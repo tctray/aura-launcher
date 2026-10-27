@@ -2,6 +2,7 @@
 // mini player that keeps going while you use the rest of AURA.
 // The files are found, read and converted by electron/media.js.
 // Added by aura-media-player-setup.cjs.
+// (AURA's own buttons control YouTube too: Added by aura-media-youtube-setup.cjs)
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 const api = () => (typeof window !== "undefined" ? window.electronAPI : null);
@@ -113,7 +114,45 @@ function showFrame(src) {
   video.style.display = "none";
   frame.style.display = "block";
 }
-function hideFrame() { if (frame) { frame.src = "about:blank"; frame.remove(); } video.style.display = "block"; }
+function hideFrame() { clearInterval(yt.hello); yt.ready = false; if (frame) { frame.src = "about:blank"; frame.remove(); } video.style.display = "block"; }
+
+// ── Controlling the YouTube player (YouTube's own player commands, sent as messages) ──
+const YT_ORIGIN = "https://www.youtube-nocookie.com";
+const yt = { ready: false, hello: 0, listening: false, state: -1 };
+const isYt = () => S.item?.kind === "youtube";
+function ytSend(func, args = []) {
+  try { frame?.contentWindow?.postMessage(JSON.stringify({ event: "command", func, args, id: 1, channel: "widget" }), YT_ORIGIN); } catch {}
+}
+function ytListen() {
+  if (yt.listening) return;
+  yt.listening = true;
+  window.addEventListener("message", (e) => {
+    if (e.origin !== YT_ORIGIN || !frame || e.source !== frame.contentWindow || !isYt()) return;
+    let d; try { d = typeof e.data === "string" ? JSON.parse(e.data) : e.data; } catch { return; }
+    if (!d || typeof d !== "object") return;
+    if (d.event === "onReady" || d.event === "initialDelivery" || d.event === "infoDelivery") {
+      if (!yt.ready) { yt.ready = true; clearInterval(yt.hello); ytSend("setVolume", [Math.round(S.volume * 100)]); if (S.muted) ytSend("mute"); ytSend("setShuffle", [!!S.shuffle]); ytSend("setLoop", [S.repeat !== "off"]); }
+    }
+    const info = d.info && typeof d.info === "object" ? d.info : d.event === "onStateChange" ? { playerState: d.info } : null;
+    if (!info) return;
+    let changed = false;
+    if (typeof info.currentTime === "number") { S.time = info.currentTime; changed = true; }
+    if (typeof info.duration === "number" && info.duration > 0) { S.duration = info.duration; changed = true; }
+    if (typeof info.playerState === "number") { yt.state = info.playerState; S.playing = info.playerState === 1 || info.playerState === 3; changed = true; }
+    const vd = info.videoData;
+    if (vd && typeof vd.title === "string" && vd.title && vd.title !== S.item.title) {
+      S.item = { ...S.item, title: vd.title.slice(0, 200), artist: typeof vd.author === "string" ? vd.author.slice(0, 120) : "" };
+      setSession(S.item, "");
+      changed = true;
+    }
+    // Where you are in a playlist (YouTube sends the list itself only now and then)
+    if (typeof info.playlistIndex === "number" && info.playlistIndex >= 0) {
+      const count = Array.isArray(info.playlist) ? info.playlist.length : S.ytList?.count || 0;
+      if (count) { S.ytList = { index: info.playlistIndex, count }; changed = true; }
+    }
+    if (changed) emit();
+  });
+}
 
 async function load(item) {
   ensureHost();
@@ -157,13 +196,21 @@ export function playList(items, index = 0) {
   load(S.queue[S.index]);
 }
 export function playYouTube(link) {
-  const yt = youTube(link);
-  if (!yt) return false;
+  const link_ = youTube(link);
+  if (!link_) return false;
   ensureHost();
   video.pause(); video.removeAttribute("src"); video.load();
-  S.item = { kind: "youtube", name: yt.list ? "YouTube playlist" : "YouTube video", path: "" }; S.queue = [S.item]; S.index = 0; S.error = ""; S.preparing = null; S.time = 0; S.duration = 0; S.playing = true; S.art = "";
-  const q = "autoplay=1&rel=0&modestbranding=1" + (yt.list ? "&list=" + encodeURIComponent(yt.list) : "");
-  showFrame(yt.id ? `https://www.youtube-nocookie.com/embed/${yt.id}?${q}` : `https://www.youtube-nocookie.com/embed/videoseries?${q}`);
+  S.item = { kind: "youtube", name: link_.list ? "YouTube playlist" : "YouTube video", path: "" }; S.queue = [S.item]; S.index = 0; S.error = ""; S.preparing = null; S.time = 0; S.duration = 0; S.playing = true; S.art = "";
+  const origin = /^https?:/.test(location.origin) ? "&origin=" + encodeURIComponent(location.origin) : "";
+  const q = "autoplay=1&rel=0&modestbranding=1&enablejsapi=1" + origin + (link_.list ? "&list=" + encodeURIComponent(link_.list) : "");
+  S.ytList = null;
+  ytListen();
+  showFrame(link_.id ? `${YT_ORIGIN}/embed/${link_.id}?${q}` : `${YT_ORIGIN}/embed/videoseries?${q}`);
+  // Say hello until the player answers; then AURA's buttons control it
+  clearInterval(yt.hello); yt.ready = false;
+  const hello = () => { try { frame?.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: 1, channel: "widget" }), YT_ORIGIN); } catch {} };
+  frame.onload = hello;
+  let tries = 0; yt.hello = setInterval(() => { if (yt.ready || ++tries > 40) clearInterval(yt.hello); else hello(); }, 500);
   emit(); kick();
   return true;
 }
@@ -181,7 +228,8 @@ export function youTube(link) {
   return id || list ? { id, list } : null;
 }
 export function toggle(force) {
-  if (!S.item || S.item.kind === "youtube") return;
+  if (!S.item) return;
+  if (isYt()) { const go = force === undefined ? !S.playing : force; ytSend(go ? "playVideo" : "pauseVideo"); S.playing = go; emit(); return; }
   const go = force === undefined ? video.paused : force;
   if (go) video.play().catch(() => {}); else video.pause();
 }
@@ -194,6 +242,7 @@ function order(step) {
 }
 export function next(auto = false) {
   if (!S.item || !S.queue.length) return;
+  if (isYt()) { if (!auto) ytSend("nextVideo"); return; }
   if (auto && S.repeat === "one") { video.currentTime = 0; video.play().catch(() => {}); return; }
   const last = S.index >= S.queue.length - 1;
   if (auto && last && S.repeat === "off" && !S.shuffle) { S.playing = false; emit(); return; }
@@ -203,15 +252,18 @@ export function next(auto = false) {
 }
 export function prev() {
   if (!S.item) return;
+  if (isYt()) { if (S.time > 3) ytSend("seekTo", [0, true]); else ytSend("previousVideo"); return; }
   if (video && video.currentTime > 3) { video.currentTime = 0; return; }
   S.index = order(-1);
   load(S.queue[S.index]);
 }
-export function seek(t) { if (video && isFinite(t)) { video.currentTime = Math.max(0, Math.min(t, S.duration || t)); S.time = video.currentTime; emit(); } }
-export function setVolume(v) { S.volume = Math.max(0, Math.min(1, v)); S.muted = false; if (video) { video.volume = S.volume; video.muted = false; } local.set("aura_media_volume", S.volume); emit(); }
-export function toggleMute() { S.muted = !S.muted; if (video) video.muted = S.muted; emit(); }
-export function setShuffle(on) { S.shuffle = on; local.set("aura_media_shuffle", on); emit(); }
-export function cycleRepeat() { S.repeat = S.repeat === "off" ? "all" : S.repeat === "all" ? "one" : "off"; local.set("aura_media_repeat", S.repeat); emit(); }
+export function seek(t) {
+  if (isYt() && isFinite(t)) { ytSend("seekTo", [Math.max(0, t), true]); S.time = t; emit(); return; }
+  if (video && isFinite(t)) { video.currentTime = Math.max(0, Math.min(t, S.duration || t)); S.time = video.currentTime; emit(); } }
+export function setVolume(v) { S.volume = Math.max(0, Math.min(1, v)); S.muted = false; if (video) { video.volume = S.volume; video.muted = false; } if (isYt()) { ytSend("unMute"); ytSend("setVolume", [Math.round(S.volume * 100)]); } local.set("aura_media_volume", S.volume); emit(); }
+export function toggleMute() { S.muted = !S.muted; if (video) video.muted = S.muted; if (isYt()) ytSend(S.muted ? "mute" : "unMute"); emit(); }
+export function setShuffle(on) { S.shuffle = on; local.set("aura_media_shuffle", on); if (isYt()) ytSend("setShuffle", [!!on]); emit(); }
+export function cycleRepeat() { S.repeat = S.repeat === "off" ? "all" : S.repeat === "all" ? "one" : "off"; local.set("aura_media_repeat", S.repeat); if (isYt()) ytSend("setLoop", [S.repeat !== "off"]); emit(); }
 export function stop() {
   if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
   hideFrame();
@@ -256,7 +308,7 @@ function Art({ item, size = 40 }) {
 }
 
 function Controls({ m, compact = false }) {
-  const busy = !m.item || m.item.kind === "youtube";
+  const busy = !m.item;
   return (
     <div className={`md-ctl${compact ? " compact" : ""}`}>
       {!compact && (
@@ -458,7 +510,7 @@ function MediaTab({ toast }) {
             <div className="md-now-t">{nowInfo ? nowInfo.title || nowInfo.name : "Nothing playing"}</div>
             <div className="md-now-s">
               {m.preparing != null ? `Getting this file ready to play… ${m.preparing}%` : m.error ? <span className="md-err">{m.error}</span>
-                : nowInfo ? [nowInfo.artist, nowInfo.album].filter(Boolean).join(" · ") || (m.queue.length > 1 ? `${m.index + 1} of ${m.queue.length}` : "")
+                : nowInfo ? [nowInfo.artist, nowInfo.album].filter(Boolean).join(" · ") + (m.ytList ? `${nowInfo.artist ? " · " : ""}${m.ytList.index + 1} of ${m.ytList.count}` : "") || (m.queue.length > 1 ? `${m.index + 1} of ${m.queue.length}` : "")
                 : "Pick something below, or drop music and videos here."}
             </div>
             <Controls m={m} />
