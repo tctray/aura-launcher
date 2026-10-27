@@ -9,6 +9,8 @@ import { addSession, loadSessions } from "./sessionstore";
 import { achievementStats } from "./achievements"; // Added by aura-achievements-fix-setup.cjs
 import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
+import { ClipsAndMedia, MediaDock } from "./components/media"; // Clips > Media, and the mini player (Added by aura-media-player-setup.cjs)
+import { SettingsTabs, SoundDevicesTab, useSettingsTab } from "./components/sounddevices"; // Settings > Sound devices (Added by aura-sound-devices-setup.cjs)
 import { useCloudGames, useCloudProfile } from "./cloudsync";
 import { backgroundForTheme, resolveThemeBackground, forgetThemePicture, themePicture, isWebPicture } from "./components/themebg"; // a saved theme keeps its background (Added by aura-theme-backgrounds-setup.cjs)
 import { CameraButton, CameraPanel, CameraSettings, cameraOverlay } from "./components/camera"; // the camera (Added by aura-camera-setup.cjs)
@@ -3124,8 +3126,11 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
     return [<option key="" value="">Automatic</option>,...opts.map(d=><option key={d} value={d}>{d}</option>)];
   };
   const Tog=({k})=>(<div className={`tog ${s[k]?"on":""}`} onClick={()=>set({[k]:!s[k]})}/>);
+  const [tab,setTab]=useSettingsTab(); // General | Sound devices (Added by aura-sound-devices-setup.cjs)
   return(
     <div className="sc">
+      <SettingsTabs tab={tab} onTab={setTab}/>
+      {tab==="sound"?<SoundDevicesTab/>:<>
       <div className="ss">
         <div className="ss-t">DISPLAY</div>
         <div className="ss-card">
@@ -3208,6 +3213,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
           <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>
+      </>}
     </div>
   );
 }
@@ -4077,6 +4083,7 @@ function AuraApp(){
         <AutoUpdater/>
         <ControllerHUD/>
         <CameraPanel settings={settings} onSettings={updateSettings}/>
+        <MediaDock onOpen={()=>goTo("clips")}/>{/* (Added by aura-media-player-setup.cjs) */}
         {isRecording&&<RecordingIndicator game={recGame} elapsed={recElapsed} onStop={async()=>{ if(isQuickRecording()) stopQuickRecording(); else await window.electronAPI?.stopRecording(); setIsRecording(false);}}/>}
         <div className="tc">
           {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
@@ -4182,7 +4189,7 @@ function AuraApp(){
           {view==="performance"&&<PageBoundary name="performance"><div style={{flex:1,overflowY:"auto"}}><PerformancePage games={games} accent={accent||(theme==="custom"?customColors?.ac:THEMES[theme]?.ac)||"#FF5722"}/></div></PageBoundary>}
 
           <div style={{display:view==="clips"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
-            <PageBoundary name="clips"><ClipsPage nowPlayingGame={nowPlaying?.title} toast={toast}/></PageBoundary>
+            <PageBoundary name="clips"><ClipsAndMedia toast={toast}><ClipsPage nowPlayingGame={nowPlaying?.title} toast={toast}/></ClipsAndMedia></PageBoundary>
           </div>
 
           <div style={{display:view==="streams"?"flex":"none",flex:1,flexDirection:"column",overflow:"hidden"}}>
@@ -4240,6 +4247,7 @@ function AuraApp(){
       <AutoUpdater/>
       <ControllerHUD/>
       <CameraPanel settings={settings} onSettings={updateSettings}/>
+      <MediaDock onOpen={()=>goTo("clips")}/>{/* (Added by aura-media-player-setup.cjs) */}
       <div className="tc">
         {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
         {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}

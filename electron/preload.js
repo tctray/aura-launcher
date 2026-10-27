@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron"); // webUtils: where a dropped file is (Added by aura-media-player-setup.cjs)
 
 contextBridge.exposeInMainWorld("electronAPI", {
   perfSubscribe: () => ipcRenderer.invoke("perf-subscribe"),
@@ -30,6 +30,32 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   isElectron: true,
+
+  // The media player: Clips > Media (Added by aura-media-player-setup.cjs)
+  mediaState: () => ipcRenderer.invoke("media:state"),
+  mediaAddFolder: () => ipcRenderer.invoke("media:add-folder"),
+  mediaRemoveFolder: (folder) => ipcRenderer.invoke("media:remove-folder", folder),
+  mediaScan: () => ipcRenderer.invoke("media:scan"),
+  mediaInfo: (paths) => ipcRenderer.invoke("media:info", paths),
+  mediaOpenFiles: () => ipcRenderer.invoke("media:open-files"),
+  mediaDropped: (paths) => ipcRenderer.invoke("media:dropped", paths),
+  mediaPathsFor: (files) => Array.from(files || []).slice(0, 200).map((f) => { try { return webUtils.getPathForFile(f); } catch { return ""; } }).filter(Boolean),
+  mediaUrl: (p) => ipcRenderer.invoke("media:url", p),
+  mediaConvert: (p) => ipcRenderer.invoke("media:convert", p),
+  mediaPlaylistsSave: (lists) => ipcRenderer.invoke("media:playlists-save", lists),
+  mediaImport: () => ipcRenderer.invoke("media:import"),
+  mediaExport: (id) => ipcRenderer.invoke("media:export", id),
+  onMediaProgress: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("media-progress", h); return () => ipcRenderer.removeListener("media-progress", h); },
+
+  // Sound devices: Settings > Sound devices, Quick Switch (Added by aura-sound-devices-setup.cjs)
+  soundList: () => ipcRenderer.invoke("sound:list"),
+  soundUse: (id) => ipcRenderer.invoke("sound:use", id),
+  soundVolume: (id, value) => ipcRenderer.invoke("sound:volume", id, value),
+  soundMute: (id, muted) => ipcRenderer.invoke("sound:mute", id, muted),
+  soundPrefs: (patch) => ipcRenderer.invoke("sound:prefs", patch),
+  soundQuickSwitch: () => ipcRenderer.invoke("sound:quick"),
+  soundOpenWindows: () => ipcRenderer.invoke("sound:open-windows"),
+  onSoundChanged: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("sound-changed", h); return () => ipcRenderer.removeListener("sound-changed", h); },
 
   // ── Game launching ──────────────────────────────────────────────────────────
   launchGame:          (exePath) => ipcRenderer.invoke("launch-game", exePath),

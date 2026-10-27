@@ -33,6 +33,12 @@ if (fs.existsSync(shareFile) && fs.existsSync(path.join(__dirname, "share-errors
 const accountFile = path.join(ROOT, "electron", "account.js");
 if (fs.existsSync(accountFile) && fs.existsSync(path.join(__dirname, "account-delete.cjs"))) add("files", "Deleting your account: password first, files, then the account", "account-delete.cjs", [accountFile]);
 if (fs.existsSync(path.join(sqlDir, "aura-account-delete.sql")) && fs.existsSync(path.join(sqlDir, "aura-messages-groups.sql")) && fs.existsSync(path.join(sqlDir, "aura-calls-group.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-account-delete.mjs"))) add("messages", "Database rules: deleting your account", "messages/sql-account-delete.mjs");
+// Choosing sound devices (Added by aura-sound-devices-setup.cjs)
+const soundFile = path.join(ROOT, "electron", "sounddevices.js");
+if (fs.existsSync(soundFile) && fs.existsSync(path.join(__dirname, "sound-devices.cjs"))) add("files", "Sound devices: switching, favourites, Quick Switch", "sound-devices.cjs", [soundFile]);
+// The media player (Added by aura-media-player-setup.cjs)
+const mediaFile = path.join(ROOT, "electron", "media.js");
+if (fs.existsSync(mediaFile) && fs.existsSync(path.join(__dirname, "media.cjs"))) add("files", "Media player: playlist files, what can be played, converting", "media.cjs", [mediaFile]);
 const xboxFile = path.join(ROOT, "electron", "xbox.js");
 if (fs.existsSync(xboxFile) && fs.existsSync(path.join(__dirname, "xbox.cjs"))) add("files", "Xbox and Game Pass games", "xbox.cjs", [xboxFile]);
 if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safety.sql"))) {
@@ -99,6 +105,8 @@ if (fs.existsSync(path.join(__dirname, "twitch-glass.cjs"))) add("window", "Twit
 if (fs.existsSync(path.join(__dirname, "video-popout.cjs"))) add("window", "Videos pop out of the Social browser", "video-popout.cjs");
 if (fs.existsSync(path.join(__dirname, "miniplayer.cjs"))) add("window", "The stream mini-player", "miniplayer.cjs");
 if (fs.existsSync(path.join(__dirname, "login.cjs"))) add("window", "Staying logged in when AURA restarts", "login.cjs");
+if (fs.existsSync(path.join(__dirname, "media-player.cjs"))) add("window", "Clips > Media: playing, the mini player, playlists", "media-player.cjs"); // (Added by aura-media-player-setup.cjs)
+if (fs.existsSync(path.join(__dirname, "sound-settings.cjs"))) add("window", "Settings > Sound devices, and the bar's sound button", "sound-settings.cjs"); // (Added by aura-sound-devices-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "delete-account.cjs"))) add("window", "Deleting your account", "delete-account.cjs"); // (Added by aura-account-delete-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "twitch-favorites.cjs"))) add("window", "Twitch favorites and live notices", "twitch-favorites.cjs");
 if (fs.existsSync(path.join(__dirname, "achievements.cjs"))) add("window", "Achievements count everything", "achievements.cjs");

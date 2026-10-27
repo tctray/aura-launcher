@@ -37,6 +37,11 @@ const icons = {
     <path d="M6.5 9.5V19h11V9.5" />
   </>),
   close: <path d="M7 7l10 10M17 7L7 17" />,
+  headset: (<>
+    <path d="M4.5 14v-2a7.5 7.5 0 0 1 15 0v2" />
+    <rect x="3.5" y="13.5" width="4" height="6" rx="1.5" />
+    <rect x="16.5" y="13.5" width="4" height="6" rx="1.5" />
+  </>), // Quick Switch (Added by aura-sound-devices-setup.cjs)
 };
 
 function Icon({ name, size = 20 }) {
@@ -136,6 +141,12 @@ export default function AuraBar() {
 
   const openAura = () => (api?.barOpenAura || api?.focusMain)?.();
 
+  // Flip between the two favourite sound devices (Added by aura-sound-devices-setup.cjs)
+  const soundSwitch = async () => {
+    const r = await api?.soundQuickSwitch?.();
+    showToast(r?.success ? "Sound: " + r.name : r?.error || "Couldn't switch sound");
+  };
+
   const close = () => {
     if (statsOpen) { setStatsOpen(false); api?.barSetExpanded?.(false); }
     (api?.barClose || api?.aurabarHide)?.();
@@ -211,6 +222,11 @@ export default function AuraBar() {
                   title="Performance" aria-label="Performance" aria-expanded={statsOpen}>
             <Icon name="gauge" />
           </button>
+          {state.sound?.show && (
+            <button className="ab-btn" onClick={soundSwitch} title={`Switch sound device (${state.sound.hotkey || "Ctrl + Alt + S"})`} aria-label="Switch sound device">
+              <Icon name="headset" />
+            </button>
+          )}
           <button className="ab-btn" onClick={openAura} title="Open AURA" aria-label="Open AURA">
             <Icon name="home" />
           </button>

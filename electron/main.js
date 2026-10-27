@@ -256,6 +256,8 @@ async function auraServer(route, body = {}) {
 let discordToken  = null;
 let authServer    = null;
 let mainWin       = null;
+// Sound devices: Settings > Sound devices, Ctrl+Alt+S, the AURA bar button (Added by aura-sound-devices-setup.cjs)
+const soundDevices = require("./sounddevices").create({ app, ipcMain, globalShortcut, getWindow: () => mainWin, onChange: () => pushBarState(), openExternal: (u) => shell.openExternal(u) });
 
 // ── Running in the tray ───────────────────────────────────────────────────────
 // Added by aura-tray-setup.cjs.
@@ -469,7 +471,7 @@ app.commandLine.appendSwitch("allow-http-screen-capture");
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 let auraBar = null;
-const BAR_WIDTH = 640;
+const BAR_WIDTH = 700; // (room for the sound button: Added by aura-sound-devices-setup.cjs)
 const BAR_HEIGHT = 60;           // bar only
 const BAR_HEIGHT_EXPANDED = 160; // bar + performance panel
 const RECORD_HOTKEY = "Alt+Shift+R";
@@ -481,6 +483,7 @@ function barState() {
     recStartedAt: isRecording ? recordingStartTime : null,
     game: currentGameName,
     hotkey: "Alt+Shift+R",
+    sound: soundDevices.barInfo(), // the Quick Switch button (Added by aura-sound-devices-setup.cjs)
   };
 }
 
@@ -544,6 +547,8 @@ ipcMain.handle("auth:resetPasswordWithCode", cloudHandler(auraCloud.resetPasswor
 ipcMain.handle("profile:getMine", cloudHandler(auraCloud.getMyProfile));
 ipcMain.handle("profile:save", cloudHandler(auraCloud.saveProfile));
 ipcMain.handle("profile:get", cloudHandler(auraCloud.getProfile));
+// The media player: Clips > Media (Added by aura-media-player-setup.cjs)
+require("./media").create({ app, ipcMain, dialog, getWindow: () => mainWin });
 ipcMain.handle("games:getMine", cloudHandler(auraCloud.getMyGames));
 ipcMain.handle("games:saveMine", cloudHandler(auraCloud.saveMyGames));
 ipcMain.handle("data:getMine", cloudHandler(auraCloud.getMyData));
@@ -843,6 +848,7 @@ const gameWatch = gameWatchKit.createGameWatch({
     currentGameName = titleOf(exePath);
     if (!launched) rpc.setActivity({ details: `Playing ${titleOf(exePath)}`, state: "AURA Game Launcher", largeImageKey: "aura_logo", startTimestamp: new Date(start || Date.now()) }).catch(() => {});
     pushBarState();
+    soundDevices.gameStarted(); // your headset while you play, if that's switched on (Added by aura-sound-devices-setup.cjs)
     console.log("Session started: " + path.basename(exePath) + (launched ? "" : " (started outside AURA)"));
     mainWin?.webContents.send("game-session-started", { exePath, startTime: start, launched }); // the Now Playing timer
   },
@@ -850,6 +856,7 @@ const gameWatch = gameWatchKit.createGameWatch({
     const perfSummary = perf.endSession(exePath);
     if (currentGameName === titleOf(exePath) || currentGameName === path.basename(exePath, ".exe")) currentGameName = null;
     pushBarState();
+    soundDevices.gameEnded();
     console.log("Session ended: " + path.basename(exePath) + " (" + Math.round((end - start) / 1000) + "s)");
     mainWin?.webContents.send("game-session-ended", { exePath, sessionMs: Math.max(0, end - start), startTime: start, endTime: end, perf: perfSummary, detected: !launched });
     rpc.setActivity({ details: "Browsing Game Library", state: "AURA Game Launcher", largeImageKey: "aura_logo", startTimestamp: new Date() }).catch(() => {});
