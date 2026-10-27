@@ -39,6 +39,9 @@ if (fs.existsSync(soundFile) && fs.existsSync(path.join(__dirname, "sound-device
 // The media player (Added by aura-media-player-setup.cjs)
 const mediaFile = path.join(ROOT, "electron", "media.js");
 if (fs.existsSync(mediaFile) && fs.existsSync(path.join(__dirname, "media.cjs"))) add("files", "Media player: playlist files, what can be played, converting", "media.cjs", [mediaFile]);
+// Release fixes: light while gaming, F9/F10, clip folder, crash reload (Added by aura-release-fixes-setup.cjs)
+if (fs.existsSync(path.join(ROOT, "electron", "perf.js")) && fs.existsSync(path.join(__dirname, "release-fixes.cjs"))) add("files", "Release fixes: light while gaming, F9/F10, clip folder", "release-fixes.cjs", [path.join(ROOT, "electron", "perf.js")]);
+if (fs.existsSync(path.join(__dirname, "privacy.cjs"))) add("files", "Privacy policy: same in AURA and on GitHub, says what it should", "privacy.cjs"); // (Added by aura-privacy-update-setup.cjs)
 const xboxFile = path.join(ROOT, "electron", "xbox.js");
 if (fs.existsSync(xboxFile) && fs.existsSync(path.join(__dirname, "xbox.cjs"))) add("files", "Xbox and Game Pass games", "xbox.cjs", [xboxFile]);
 if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safety.sql"))) {
@@ -105,6 +108,7 @@ if (fs.existsSync(path.join(__dirname, "twitch-glass.cjs"))) add("window", "Twit
 if (fs.existsSync(path.join(__dirname, "video-popout.cjs"))) add("window", "Videos pop out of the Social browser", "video-popout.cjs");
 if (fs.existsSync(path.join(__dirname, "miniplayer.cjs"))) add("window", "The stream mini-player", "miniplayer.cjs");
 if (fs.existsSync(path.join(__dirname, "login.cjs"))) add("window", "Staying logged in when AURA restarts", "login.cjs");
+if (fs.existsSync(path.join(__dirname, "release-window.cjs"))) add("window", "F9/F10 switches, and resting while hidden", "release-window.cjs"); // (Added by aura-release-fixes-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "media-player.cjs"))) add("window", "Clips > Media: playing, the mini player, playlists", "media-player.cjs"); // (Added by aura-media-player-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "sound-settings.cjs"))) add("window", "Settings > Sound devices, and the bar's sound button", "sound-settings.cjs"); // (Added by aura-sound-devices-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "delete-account.cjs"))) add("window", "Deleting your account", "delete-account.cjs"); // (Added by aura-account-delete-setup.cjs)

@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   isElectron: true,
+  onWindowShown: (cb) => { const h = (_e, shown) => cb(shown); ipcRenderer.on("window-shown", h); return () => ipcRenderer.removeListener("window-shown", h); }, // the window rests while hidden (Added by aura-release-fixes-setup.cjs)
 
   // The media player: Clips > Media (Added by aura-media-player-setup.cjs)
   mediaState: () => ipcRenderer.invoke("media:state"),

@@ -504,7 +504,7 @@ export function CameraSettings({ settings: s, onChange, Seg }) {
         </div>
         <div className="sr"><div><div className="sr-l">Green Screen</div><div className="sr-s">{greenNote}</div></div>
           <Seg value={greenMode} options={[["auto", "Auto"], ["on", "Always"], ["off", "Never"]]} onChange={(v) => { onChange({ camGreen: v }); refreshCameraEffects(); }} /></div>
-        <div className="sr"><div><div className="sr-l">Camera in Recordings</div><div className="sr-s">While the camera is on, clips you record with F9, the AURA Bar or the Clips page show it in a corner. When it's off, clips are only the screen</div></div>
+        <div className="sr"><div><div className="sr-l">Camera in Recordings</div><div className="sr-s">While the camera is on, clips you record with Alt + Shift + R, the AURA Bar or the Clips page show it in a corner. When it's off, clips are only the screen</div></div>
           <Switch on={!!s.camInRecordings} label="Camera in recordings" onChange={(v) => onChange({ camInRecordings: v })} /></div>
         {s.camInRecordings && <div className="sr"><div><div className="sr-l">Corner</div><div className="sr-s">Where the camera goes in the clip</div></div>
           <Seg value={s.camCorner || "br"} options={CORNERS} onChange={(v) => onChange({ camCorner: v })} /></div>}

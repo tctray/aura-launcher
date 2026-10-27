@@ -240,7 +240,7 @@ export function SoundDevicesTab({ toast }) {
                   onClick={() => savePrefs({ hotkey: !prefs.hotkey })} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); savePrefs({ hotkey: !prefs.hotkey }); } }} />
               </div>
               <div className="sr">
-                <div><div className="sr-l">Quick Switch on the AURA bar</div><div className="sr-s">A button to flip devices while you play (F10 shows the bar)</div></div>
+                <div><div className="sr-l">Quick Switch on the AURA bar</div><div className="sr-s">A button to flip devices while you play (Alt + Shift + B shows the bar)</div></div>
                 <div className={`tog ${prefs.bar ? "on" : ""}`} role="switch" aria-checked={!!prefs.bar} tabIndex={0} aria-label="Quick Switch on the AURA bar"
                   onClick={() => savePrefs({ bar: !prefs.bar })} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); savePrefs({ bar: !prefs.bar }); } }} />
               </div>

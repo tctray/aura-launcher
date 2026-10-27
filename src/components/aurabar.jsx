@@ -195,7 +195,7 @@ export default function AuraBar() {
               {toast || state.game || local.username || "AURA"}
             </div>
             <div style={{ fontSize: 11, color: "rgba(242,244,248,0.55)", whiteSpace: "nowrap" }}>
-              {state.game ? "Playing now" : "F10 to hide"}
+              {state.game ? "Playing now" : (state.barHotkey || "Alt+Shift+B") + " to hide"}
             </div>
           </div>
         </div>
@@ -235,7 +235,7 @@ export default function AuraBar() {
         {/* Right: clock + close */}
         <div style={{ display: "flex", alignItems: "center", paddingLeft: 18 }}>
           <span style={{ fontSize: 20, fontWeight: 600, fontVariantNumeric: "tabular-nums", paddingRight: 6 }}>{clock}</span>
-          <button className="ab-btn" onClick={close} title="Close bar (F10 to reopen)" aria-label="Close bar">
+          <button className="ab-btn" onClick={close} title={`Close bar (${state.barHotkey || "Alt+Shift+B"} to reopen)`} aria-label="Close bar">
             <Icon name="close" />
           </button>
         </div>

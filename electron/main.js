@@ -134,6 +134,9 @@ const appSettings = {
   startWithWindows: false,   // open AURA in the tray when you sign in to Windows
   trayTipShown: false,
   trackAllGames: true,       // sessions for library games started outside AURA too (Added by aura-sessions-setup.cjs)
+  keyF9: false,              // F9 also starts/stops recording (off: games keep F9) (Added by aura-release-fixes-setup.cjs)
+  keyF10: false,             // F10 also shows the AURA Bar (off: games keep F10)
+  clipFolder: null,          // the clip folder you picked (null: Videos\\AURA, or where clips already are)
   messageSound: "aura",       // the message sound picked in Settings ("windows" = Windows' own; Added by aura-ringtones-setup.cjs)       // the "AURA is still running" tip has been shown once
 };
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
@@ -209,8 +212,12 @@ try {
 
 function getClipFolder() {
   if (clipFolder) return clipFolder;
-  // Use userData path - always accessible in packaged apps
-  return path.join(app.getPath("userData"), "Clips");
+  // The folder you picked is remembered. Otherwise Videos\AURA, unless your clips are already
+  // in the old place (AURA's data folder), which then stays in use. (Added by aura-release-fixes-setup.cjs)
+  if (appSettings.clipFolder && path.isAbsolute(appSettings.clipFolder)) return appSettings.clipFolder;
+  const old = path.join(app.getPath("userData"), "Clips");
+  try { if (fs.existsSync(old) && fs.readdirSync(old).length) return old; } catch {}
+  try { return path.join(app.getPath("videos"), "AURA"); } catch { return old; }
 }
 
 function ensureDir(dir) {
@@ -422,6 +429,19 @@ function createWindow() {
     event.preventDefault();
     toggleFullScreenMode();
   });
+  // A crashed window loads again (at most once a minute) instead of staying blank (Added by aura-release-fixes-setup.cjs)
+  let lastReload = 0;
+  mainWin.webContents.on("render-process-gone", (_e, d) => {
+    if (!d || d.reason === "clean-exit" || mainWin.isDestroyed() || Date.now() - lastReload < 60000) return;
+    lastReload = Date.now();
+    setTimeout(() => { try { if (!mainWin.isDestroyed()) mainWin.reload(); } catch {} }, 1000);
+  });
+  // The window is told when it's hidden, so it can rest while you play
+  const tellShown = (shown) => { try { if (!mainWin.isDestroyed()) mainWin.webContents.send("window-shown", shown); } catch {} };
+  mainWin.on("hide", () => tellShown(false));
+  mainWin.on("minimize", () => tellShown(false));
+  mainWin.on("show", () => tellShown(true));
+  mainWin.on("restore", () => tellShown(true));
   mainWin.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
     // Only AURA's own pages may capture the screen
     if (!request.frame || request.frame.parent || !isAppPage(request.frame.url)) return callback({});
@@ -475,6 +495,7 @@ const BAR_WIDTH = 700; // (room for the sound button: Added by aura-sound-device
 const BAR_HEIGHT = 60;           // bar only
 const BAR_HEIGHT_EXPANDED = 160; // bar + performance panel
 const RECORD_HOTKEY = "Alt+Shift+R";
+const BAR_HOTKEY = "Alt+Shift+B"; // shows/hides the AURA Bar (F10 only if you switch it on) (Added by aura-release-fixes-setup.cjs)
 let currentGameName = null;
 
 function barState() {
@@ -483,6 +504,7 @@ function barState() {
     recStartedAt: isRecording ? recordingStartTime : null,
     game: currentGameName,
     hotkey: "Alt+Shift+R",
+    barHotkey: appSettings.keyF10 ? "F10" : BAR_HOTKEY, // (Added by aura-release-fixes-setup.cjs)
     sound: soundDevices.barInfo(), // the Quick Switch button (Added by aura-sound-devices-setup.cjs)
   };
 }
@@ -973,6 +995,7 @@ ipcMain.handle("settings-sync", (_e, patch = {}) => {
   const prevMode = appSettings.windowMode;
   const prevZoom = appSettings.zoom;
   const prevStart = appSettings.startWithWindows;
+  const prevClipFolder = appSettings.clipFolder, prevKeys = [appSettings.keyF9, appSettings.keyF10].join(); // (Added by aura-release-fixes-setup.cjs)
   for (const key of Object.keys(appSettings)) {
     if (patch[key] !== undefined) appSettings[key] = patch[key];
   }
@@ -981,6 +1004,11 @@ ipcMain.handle("settings-sync", (_e, patch = {}) => {
   appSettings.startWithWindows = appSettings.startWithWindows === true;
   appSettings.trackAllGames = appSettings.trackAllGames !== false;
   appSettings.messageSound = typeof appSettings.messageSound === "string" ? appSettings.messageSound.slice(0, 20) : "aura";
+  // The clip folder only changes through its folder picker; F9/F10 are on or off (Added by aura-release-fixes-setup.cjs)
+  appSettings.clipFolder = prevClipFolder;
+  appSettings.keyF9 = appSettings.keyF9 === true;
+  appSettings.keyF10 = appSettings.keyF10 === true;
+  if ([appSettings.keyF9, appSettings.keyF10].join() !== prevKeys) { applyHotkeys(); pushBarState(); }
   saveAppSettings();
   if (appSettings.windowMode !== prevMode) applyWindowMode(appSettings.windowMode);
   if (appSettings.zoom !== prevZoom) mainWin?.webContents.setZoomFactor(appSettings.zoom);
@@ -1525,6 +1553,7 @@ ipcMain.handle("set-clip-folder", async () => {
   const r = await dialog.showOpenDialog({ properties: ["openDirectory"], title: "Choose Clip Save Folder" });
   if (r.canceled) return { success: false };
   clipFolder = r.filePaths[0];
+  appSettings.clipFolder = clipFolder; saveAppSettings(); // remembered after a restart (Added by aura-release-fixes-setup.cjs)
   return { success: true, folder: clipFolder };
 });
 
@@ -1596,27 +1625,29 @@ ipcMain.handle("rename-clip", async (_e, input = {}) => {
   }
 });
 
-// ── Register F9 hotkey after window ready ─────────────────────────────────────
-function registerHotkeys() {
-  // F9 or Ctrl+Alt+R start/stop recording
-  globalShortcut.register("F9", toggleRecordingHotkey);
-  if (!globalShortcut.register(RECORD_HOTKEY, toggleRecordingHotkey)) {
-    console.log("Record hotkey is in use by another app:", RECORD_HOTKEY);
+// ── Shortcuts that work everywhere, even inside a game ─────────────────────────
+// Alt+Shift+R records and Alt+Shift+B shows the AURA Bar. F9 and F10 only if you switch them on in
+// Settings: a shortcut taken here never reaches the game, and many games use F9/F10 to quicksave.
+// (Added by aura-release-fixes-setup.cjs)
+function toggleBar() {
+  if (!auraBar) return;
+  if (auraBar.isVisible()) {
+    auraBar.hide();
+  } else {
+    // showInactive: don't steal focus from the game (that can minimize it)
+    auraBar.showInactive();
+    auraBar.setAlwaysOnTop(true, "screen-saver");
+    auraBar.moveTop();
   }
-
-  // F10 toggles AURA Bar visibility
-  globalShortcut.register("F10", () => {
-    if (!auraBar) return;
-    if (auraBar.isVisible()) {
-      auraBar.hide();
-    } else {
-      // showInactive: don't steal focus from the game (that can minimize it)
-      auraBar.showInactive();
-      auraBar.setAlwaysOnTop(true, "screen-saver");
-      auraBar.moveTop();
-    }
-  });
 }
+function applyHotkeys() {
+  for (const key of ["F9", "F10", RECORD_HOTKEY, BAR_HOTKEY]) { try { globalShortcut.unregister(key); } catch {} }
+  if (!globalShortcut.register(RECORD_HOTKEY, toggleRecordingHotkey)) console.log("Record hotkey is in use by another app:", RECORD_HOTKEY);
+  if (!globalShortcut.register(BAR_HOTKEY, toggleBar)) console.log("Bar hotkey is in use by another app:", BAR_HOTKEY);
+  if (appSettings.keyF9) globalShortcut.register("F9", toggleRecordingHotkey);
+  if (appSettings.keyF10) globalShortcut.register("F10", toggleBar);
+}
+function registerHotkeys() { applyHotkeys(); }
 
 
 let streamView = null;

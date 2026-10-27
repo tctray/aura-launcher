@@ -107,7 +107,7 @@ const LONG = "BOMBANANA: The Extremely Long Deluxe Edition With Every Expansion 
     check("nothing crashed", (await page.locator(".aura-fallback").count()) === 0 && thrown.length === 0, thrown);
 
     const source = fs.readFileSync(path.join(ROOT, "src", "App.jsx"), "utf8");
-    check("the row refreshes every 2 minutes, and stops when Home closes", /const playingTimer = setInterval\(fetch, 120000\);[\s\S]{0,120}return \(\) => clearInterval\(playingTimer\);/.test(source));
+    check("the row refreshes every 2 minutes (not while AURA is hidden), and stops when Home closes", /const playingTimer = setInterval\((?:fetch|\(\) => \{ if \(!window\.__auraHidden\) fetch\(\); \}), 120000\);[\s\S]{0,120}return \(\) => clearInterval\(playingTimer\);/.test(source)); // (Updated by aura-release-fixes-setup.cjs)
   } finally {
     await browser.close();
     server.close();

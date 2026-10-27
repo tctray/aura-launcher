@@ -9,9 +9,11 @@ const fs = require("fs");
 const { app, ipcMain, BrowserWindow } = require("electron");
 
 const INTERVAL_MS = 1000;
+const QUIET_MS = 5000; // while a game runs but nobody has the stats open (Added by aura-release-fixes-setup.cjs)
 const HISTORY_LEN = 60;
 
 let timer = null;
+let timerMs = 0;
 let sampling = false;
 let viewers = 0;
 let tick = 0;
@@ -188,7 +190,7 @@ async function sample() {
   const [load, mem, nets] = await Promise.all([
     si.currentLoad(),
     si.mem(),
-    si.networkStats().catch(() => []),
+    viewers > 0 ? si.networkStats().catch(() => []) : Promise.resolve([]), // (network only while someone is looking: Added by aura-release-fixes-setup.cjs)
   ]);
   const net = (nets || []).reduce((a, n) => ({
     down: a.down + Math.max(0, n.rx_sec || 0),
@@ -218,22 +220,23 @@ async function sample() {
   for (const samples of sessions.values()) {
     samples.push({ cpu: s.cpu, ram: s.ramUsed, fps: s.fps, fpsLow: s.fpsLow, gpu: s.gpu?.util ?? null });
   }
-  broadcast("perf-stats", s);
+  if (viewers > 0) broadcast("perf-stats", s); // nobody looking: the window isn't woken up (Added by aura-release-fixes-setup.cjs)
 }
 
+// Every second while the stats are on screen; every 5 seconds, without disk and network, while only
+// a game's session is being recorded, so AURA stays light while you play (Added by aura-release-fixes-setup.cjs)
 function update() {
   const needed = viewers > 0 || sessions.size > 0;
+  const every = viewers > 0 ? INTERVAL_MS : QUIET_MS;
+  if (viewers > 0) startDisk(); else stopDisk();
+  if (timer && (!needed || every !== timerMs)) { clearInterval(timer); timer = null; }
   if (needed && !timer) {
-    startDisk();
+    timerMs = every;
     timer = setInterval(() => {
       if (sampling) return;
       sampling = true;
       sample().catch(() => {}).finally(() => { sampling = false; });
-    }, INTERVAL_MS);
-  } else if (!needed && timer) {
-    clearInterval(timer);
-    timer = null;
-    stopDisk();
+    }, every);
   }
 }
 

@@ -92,7 +92,7 @@ function place() {
     if (pos === "none") host.style.display = "none";
     else { const [l, t, w, h] = pos.split(",").map(Number); Object.assign(host.style, { display: "block", left: l + "px", top: t + "px", width: w + "px", height: h + "px" }); }
   }
-  loop = requestAnimationFrame(place);
+  loop = window.__auraHidden ? setTimeout(place, 500) : requestAnimationFrame(place); // (resting while hidden: Added by aura-release-fixes-setup.cjs)
 }
 const kick = () => { if (!loop) loop = requestAnimationFrame(place); };
 export const setStage = (el) => { stageEl = el; kick(); };
@@ -590,7 +590,7 @@ export function MediaDock({ onOpen }) {
   const [pos, setPos] = useState(() => local.get("aura_media_dock", null));
   const [, force] = useState(0);
   // Show it whenever the Media tab's player isn't on screen
-  useEffect(() => { const t = setInterval(() => force((n) => n + 1), 500); return () => clearInterval(t); }, []);
+  useEffect(() => { const t = setInterval(() => { if (!window.__auraHidden) force((n) => n + 1); }, 500); return () => clearInterval(t); }, []); // (resting while hidden: Added by aura-release-fixes-setup.cjs)
   const visible = !!m.item && !stageVisible();
   const video = m.item && m.item.kind !== "audio";
   useEffect(() => { setMini(visible && video ? screen.current : null); return () => setMini(null); });

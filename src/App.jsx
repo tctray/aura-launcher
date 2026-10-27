@@ -147,6 +147,8 @@ const SETTINGS_DEFAULTS = {
   recQuality: "high",     // Standard (30 fps), High (60 fps) or Ultra (60 fps, most detail) (Added by aura-quality-setup.cjs)
   recordSourceId: "",     // screen/window chosen for the AURA Bar and F9
   recordSourceName: "",
+  keyF9: false,           // F9 also records (off by default: games keep F9) (Added by aura-release-fixes-setup.cjs)
+  keyF10: false,          // F10 also shows the AURA Bar
   // Camera (Added by aura-camera-setup.cjs)
   camDevice: "",         // the camera to use ("" = the one Windows picks)
   camDeviceName: "",
@@ -156,7 +158,7 @@ const SETTINGS_DEFAULTS = {
   camInRecordings: false,// put the camera in a corner of clips while it's on
   camCorner: "br",
 };
-const MAIN_SETTING_KEYS = ["windowMode","zoom","micDevice","systemDevice","micVolume","systemVolume","keepRunning","startWithWindows","trackAllGames"];
+const MAIN_SETTING_KEYS = ["windowMode","zoom","micDevice","systemDevice","micVolume","systemVolume","keepRunning","startWithWindows","trackAllGames","keyF9","keyF10"];
 const loadSettings = () => {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("aura_settings") || "{}"); } catch {}
@@ -165,6 +167,20 @@ const loadSettings = () => {
   return { ...SETTINGS_DEFAULTS, ...saved };
 };
 let SETTINGS = loadSettings();
+// While AURA's window is hidden (in the tray, or minimized behind a game) it rests: animations pause,
+// and the slideshow and stream refreshes wait until you come back. (Added by aura-release-fixes-setup.cjs)
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  window.__auraHidden = false;
+  try {
+    const rest = document.createElement("style");
+    rest.textContent = ".aura-resting *,.aura-resting *::before,.aura-resting *::after{animation-play-state:paused!important}";
+    document.head.appendChild(rest);
+  } catch {}
+  window.electronAPI?.onWindowShown?.((shown) => {
+    window.__auraHidden = !shown;
+    try { document.documentElement.classList.toggle("aura-resting", !shown); } catch {}
+  });
+}
 // Streamers typed into "+ Streamers" before favorites existed become favorites (Added by aura-twitch-favorites-setup.cjs)
 if (!Array.isArray(SETTINGS.twitchFavs)) {
   let typed = "";
@@ -1187,7 +1203,7 @@ function Spotlight({ games, onPlay, onFav, onSelect }) {
   }, [games]);
   useEffect(() => {
     if (featured.length <= 1) return;
-    const t = setInterval(() => setIdx(i => (i + 1) % featured.length), 5000);
+    const t = setInterval(() => { if (!window.__auraHidden) setIdx(i => (i + 1) % featured.length); }, 5000);
     return () => clearInterval(t);
   }, [featured.length]);
   if (!featured.length) return null;
@@ -1266,7 +1282,7 @@ function GMBanner({ games, onPlay, onFav, onSelect }) {
   }, [games]);
   useEffect(() => {
     if (featured.length <= 1) return;
-    const t = setInterval(() => setIdx(i => (i + 1) % featured.length), 6000);
+    const t = setInterval(() => { if (!window.__auraHidden) setIdx(i => (i + 1) % featured.length); }, 6000);
     return () => clearInterval(t);
   }, [featured.length]);
   if (!featured.length) return null;
@@ -1345,7 +1361,7 @@ function FriendActivityShelf() {
       setLoaded(true);
     };
     fetch();
-    const playingTimer = setInterval(fetch, 120000); // keep "Playing Now" current
+    const playingTimer = setInterval(() => { if (!window.__auraHidden) fetch(); }, 120000); // keep "Playing Now" current
     return () => clearInterval(playingTimer);
   }, []);
 
@@ -1572,7 +1588,7 @@ function TwitchShelf({ games, onStreamClick }) {
 
   useEffect(() => {
     fetchStreams();
-    const interval = setInterval(fetchStreams, 60000);
+    const interval = setInterval(() => { if (!window.__auraHidden) fetchStreams(); }, 60000);
     return () => clearInterval(interval);
   }, [fetchStreams]);
 
@@ -2323,7 +2339,7 @@ function RecordingIndicator({ game, elapsed, onStop }) {
         <span className="rec-label">REC {game}</span>
         <span className="rec-timer">{fmt(secs)}</span>
         <button onClick={onStop} style={{background:"rgba(235,4,0,.2)",border:"1px solid rgba(235,4,0,.4)",color:"#fff",borderRadius:6,padding:"3px 10px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"DM Sans,sans-serif"}}>■ Stop</button>
-        <span style={{fontSize:9,color:"rgba(255,255,255,.4)"}}>F9</span>
+        <span style={{fontSize:9,color:"rgba(255,255,255,.4)"}}>Alt+Shift+R</span>
       </div>
     </>
   );
@@ -2844,7 +2860,7 @@ function ClipsPage({ nowPlayingGame, toast }) {
       <div style={{padding:"8px 24px",borderBottom:"1px solid var(--border)",fontSize:10,color:"var(--t3)",display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
         <span>📁</span>
         <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{clipFolder}</span>
-        <span style={{color:"var(--t2)"}}>{clips.length} clips · Press <kbd style={{background:"var(--hover)",border:"1px solid var(--border)",borderRadius:4,padding:"1px 6px",fontFamily:"monospace",fontSize:10}}>F9</kbd> to record</span>
+        <span style={{color:"var(--t2)"}}>{clips.length} clips · Press <kbd style={{background:"var(--hover)",border:"1px solid var(--border)",borderRadius:4,padding:"1px 6px",fontFamily:"monospace",fontSize:10}}>Alt+Shift+R</kbd> to record</span>
       </div>
 
       {/* Clips grid */}
@@ -2883,7 +2899,7 @@ function ClipsPage({ nowPlayingGame, toast }) {
         <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12,color:"var(--t3)"}}>
           <div style={{fontSize:48}}>🎬</div>
           <div style={{fontSize:16,fontWeight:600,color:"var(--t2)"}}>No clips yet</div>
-          <div style={{fontSize:12}}>Press <strong>F9</strong> while in a game to start recording</div>
+          <div style={{fontSize:12}}>Press <strong>Alt + Shift + R</strong> while in a game to start recording</div>
           <button onClick={handleRecord} className="btn-p" style={{marginTop:8}}>⏺ Start Recording</button>
         </div>
       ) : (
@@ -3174,12 +3190,16 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       <div className="ss">
         <div className="ss-t">RECORDING</div>
         <div className="ss-card">
-          <div className="sr"><div><div className="sr-l">Recording Screen</div><div className="sr-s">{s.recordSourceName?`AURA Bar and F9 record: ${s.recordSourceName}`:"You'll be asked the first time you record with the bar or F9"}</div></div>
+          <div className="sr"><div><div className="sr-l">Recording Screen</div><div className="sr-s">{s.recordSourceName?`The AURA Bar and Alt + Shift + R record: ${s.recordSourceName}`:"You'll be asked the first time you record with the bar or Alt + Shift + R"}</div></div>
             {s.recordSourceId&&<button className="btn-gh" style={{fontSize:11,padding:"5px 12px"}} onClick={()=>set({recordSourceId:"",recordSourceName:""})}>Choose again</button>}</div>
+          {/* Shortcuts (Added by aura-release-fixes-setup.cjs) */}
+          <div className="sr"><div><div className="sr-l">Shortcuts</div><div className="sr-s">Alt + Shift + R starts and stops recording, Alt + Shift + B shows the AURA Bar. They work inside games too.</div></div></div>
+          <div className="sr"><div><div className="sr-l">Also Use F9 to Record</div><div className="sr-s">Off: games get F9 (many use it to quicksave). On: F9 records instead, in every game</div></div><Tog k="keyF9"/></div>
+          <div className="sr"><div><div className="sr-l">Also Use F10 for the AURA Bar</div><div className="sr-s">Off: games get F10. On: F10 shows and hides the AURA Bar, in every game</div></div><Tog k="keyF10"/></div>
           {/* Recording quality (Added by aura-quality-setup.cjs) */}
           <div className="sr"><div><div className="sr-l">Recording Quality</div><div className="sr-s">{({standard:"30 fps, smaller files (about 600 MB per 10 minutes). Best for older PCs",high:"60 fps and sharp (about 1.2 GB per 10 minutes)",ultra:"60 fps, the most detail (about 2.3 GB per 10 minutes)"})[s.recQuality]||"60 fps and sharp (about 1.2 GB per 10 minutes)"}</div></div>
             <Seg value={s.recQuality||"high"} options={[["standard","Standard"],["high","High"],["ultra","Ultra"]]} onChange={v=>set({recQuality:v})}/></div>
-          <div className="sr"><div><div className="sr-l">Microphone</div><div className="sr-s">{devices===null?"Looking for devices…":"Default mic for clips and the F9 hotkey"}</div></div>
+          <div className="sr"><div><div className="sr-l">Microphone</div><div className="sr-s">{devices===null?"Looking for devices…":"Default mic for clips and the record shortcut"}</div></div>
             <select className="fs set-select" value={s.micDevice} onChange={e=>set({micDevice:e.target.value})}>{deviceOptions(s.micDevice)}</select></div>
           <div className="sr"><div><div className="sr-l">System Audio</div><div className="sr-s">Game sound source, usually "Stereo Mix"</div></div>
             <select className="fs set-select" value={s.systemDevice} onChange={e=>set({systemDevice:e.target.value})}>{deviceOptions(s.systemDevice)}</select></div>
@@ -3515,7 +3535,7 @@ function SocialKeeper({ show, onShow }) {
     const watcher = typeof ResizeObserver === "function" && slot ? new ResizeObserver(measure) : null;
     watcher?.observe(slot);
     window.addEventListener("resize", measure);
-    const timer = setInterval(measure, 400); // the space can move without changing size (a side panel opening)
+    const timer = setInterval(() => { if (!window.__auraHidden) measure(); }, 400); // the space can move without changing size (a side panel opening)
     return () => { watcher?.disconnect(); window.removeEventListener("resize", measure); clearInterval(timer); };
   }, [show]);
   const on = show && !!box;
@@ -3610,7 +3630,7 @@ function AuraApp(){
       <div className="modal" style={{width:720}}>
         <div className="mh"><div className="mt">WHAT DO YOU WANT TO RECORD?</div><button className="mc" onClick={closeQuickPicker}><Ic.X/></button></div>
         <div className="mb">
-          <div style={{fontSize:11,color:"var(--t2)",marginBottom:14}}>AURA remembers your choice, so the bar button and F9 start recording straight away next time. You can change it in Settings.</div>
+          <div style={{fontSize:11,color:"var(--t2)",marginBottom:14}}>AURA remembers your choice, so the bar button and Alt + Shift + R start recording straight away next time. You can change it in Settings.</div>
           {quickPicker.loading?<div className="empty" style={{height:160}}>Loading screens…</div>:(
             ["Screens","Windows"].map(group=>{
               const list=quickPicker.sources.filter(x=>group==="Screens"?x.isScreen:!x.isScreen);
