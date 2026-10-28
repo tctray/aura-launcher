@@ -3,8 +3,13 @@ on:
   push:
     tags:
       - 'v*'
+# The release process (Added by aura-release-process-setup.cjs):
+#   1. AURA's checks run on Linux and on Windows. If any fail, nothing is built.
+#   2. The installers are built from the exact package versions in package-lock.json (npm ci).
+#   3. The Windows installer is installed and AURA started once, to check it opens with no errors.
+#   4. The release is published as a DRAFT. Nobody gets it until you press "Publish release" on GitHub.
 jobs:
-  # AURA's checks (the tests folder). If any fail, the builds below don't run and no release is made.
+  # AURA's checks (the tests folder) on Linux
   test:
     runs-on: ubuntu-24.04   # pinned: GitHub is moving ubuntu-latest to a new Ubuntu (Added by aura-ci-fix-setup.cjs)
     timeout-minutes: 30   # GitHub stops the job after this, instead of waiting for hours (more time: Added by aura-checks-time-setup.cjs)
@@ -15,7 +20,7 @@ jobs:
         with:
           node-version: 20
       - name: Install dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund   # the checks don't need the Electron program or ffmpeg downloaded
+        run: npm ci --ignore-scripts --no-audit --no-fund   # exact versions; the checks don't need the Electron program
       - name: Get FFmpeg for the media and clip checks   # (Added by aura-ci-ffmpeg-setup.cjs)
         run: node node_modules/ffmpeg-static/install.js
         timeout-minutes: 5
@@ -26,10 +31,32 @@ jobs:
         continue-on-error: true   # if this can't be fetched, the check uses the Chrome already on GitHub's machine
       - name: Run AURA's checks
         run: npm test
+  # The same checks on Windows, where AURA really runs (sound devices, game detection, Xbox, paths)
+  test-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Get FFmpeg for the media and clip checks
+        run: node node_modules/ffmpeg-static/install.js
+        timeout-minutes: 5
+        continue-on-error: true
+      - name: Install the browser the window check uses
+        run: npx playwright install chromium
+        timeout-minutes: 5
+        continue-on-error: true
+      - name: Run AURA's checks
+        run: npm test
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 45   # GitHub stops the job after this, instead of waiting for hours
-    needs: test
+    needs: [test, test-windows]
     permissions:
       contents: write
     steps:
@@ -39,15 +66,31 @@ jobs:
         with:
           node-version: 20
       - name: Install dependencies
-        run: npm install
-      - name: Build and Publish Windows
+        run: npm ci --no-audit --no-fund
+      - name: Build Windows and upload to the draft release
         run: npm run electron:build -- --publish always
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Install the new AURA and check it starts
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem dist\AURA-Installer-*.exe | Select-Object -First 1
+          if (-not $installer) { throw "The installer wasn't built" }
+          Start-Process $installer.FullName -ArgumentList "/S" -Wait
+          Start-Sleep -Seconds 3
+          Stop-Process -Name aura -Force -ErrorAction SilentlyContinue   # in case the installer started it
+          Start-Sleep -Seconds 2
+          $app = Join-Path $env:LOCALAPPDATA "Programs\aura\aura.exe"
+          if (-not (Test-Path $app)) { throw "AURA wasn't installed where expected: $app" }
+          $p = Start-Process $app -ArgumentList "--aura-smoke-test" -PassThru
+          if (-not $p.WaitForExit(120000)) { Stop-Process -Id $p.Id -Force; throw "AURA didn't finish its start-up check within 2 minutes" }
+          $result = Join-Path $env:APPDATA "aura\smoke-test.txt"
+          if (Test-Path $result) { Get-Content $result } else { "AURA wrote no result" }
+          if ($p.ExitCode -ne 0) { throw "AURA's start-up check failed (see above)" }
   build-linux:
     runs-on: ubuntu-24.04   # pinned: GitHub is moving ubuntu-latest to a new Ubuntu (Added by aura-ci-fix-setup.cjs)
     timeout-minutes: 45   # GitHub stops the job after this, instead of waiting for hours
-    needs: test
+    needs: [test, test-windows]
     permissions:
       contents: write
     steps:
@@ -57,12 +100,12 @@ jobs:
         with:
           node-version: 20
       - name: Install dependencies
-        run: npm install
+        run: npm ci --no-audit --no-fund
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm fakeroot
-      - name: Build and Publish Linux
+      - name: Build Linux and upload to the draft release
         run: npm run electron:build -- --publish always
         env:
           GH_TOKEN: ${{ github.token }}

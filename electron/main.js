@@ -571,6 +571,29 @@ ipcMain.handle("profile:save", cloudHandler(auraCloud.saveProfile));
 ipcMain.handle("profile:get", cloudHandler(auraCloud.getProfile));
 // The media player: Clips > Media (Added by aura-media-player-setup.cjs)
 require("./media").create({ app, ipcMain, dialog, getWindow: () => mainWin });
+// Release check: GitHub starts the freshly installed AURA with --aura-smoke-test. AURA opens as usual,
+// waits 25 seconds, checks its window shows something and nothing went into the error log, writes the
+// result to smoke-test.txt in its data folder, and closes. (Added by aura-release-process-setup.cjs)
+if (process.argv.includes("--aura-smoke-test")) {
+  const result = path.join(app.getPath("userData"), "smoke-test.txt");
+  try { fs.unlinkSync(result); } catch {}
+  const finish = (ok, why) => {
+    try { fs.mkdirSync(path.dirname(result), { recursive: true }); fs.writeFileSync(result, (ok ? "OK: " : "FAILED: ") + why + "\n"); } catch {}
+    app.exit(ok ? 0 : 1);
+  };
+  app.whenReady().then(() => setTimeout(async () => {
+    try {
+      let log = "";
+      try { log = fs.readFileSync(path.join(app.getPath("userData"), "logs", "aura-errors.log"), "utf8"); } catch {}
+      const errors = (log.match(/^\[\d{4}-\d\d-\d\d /gm) || []).length;
+      if (!mainWin || mainWin.isDestroyed()) return finish(false, "the window didn't open");
+      const shown = await mainWin.webContents.executeJavaScript("document.body ? document.body.innerText.trim().length : 0", true);
+      if (!(shown > 20)) return finish(false, "the window opened but showed nothing");
+      if (errors) return finish(false, errors + " error(s) in the error log:\n" + log.slice(-3000));
+      finish(true, "AURA " + app.getVersion() + " started, showed its window and logged no errors");
+    } catch (e) { finish(false, "the check itself failed: " + (e && e.message)); }
+  }, 25000));
+}
 ipcMain.handle("games:getMine", cloudHandler(auraCloud.getMyGames));
 ipcMain.handle("games:saveMine", cloudHandler(auraCloud.saveMyGames));
 ipcMain.handle("data:getMine", cloudHandler(auraCloud.getMyData));

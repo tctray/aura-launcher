@@ -39,6 +39,8 @@ if (fs.existsSync(soundFile) && fs.existsSync(path.join(__dirname, "sound-device
 // The media player (Added by aura-media-player-setup.cjs)
 const mediaFile = path.join(ROOT, "electron", "media.js");
 if (fs.existsSync(mediaFile) && fs.existsSync(path.join(__dirname, "media.cjs"))) add("files", "Media player: playlist files, what can be played, converting", "media.cjs", [mediaFile]);
+// Release process: checks on Windows too, npm ci, drafts, the start-up check (Added by aura-release-process-setup.cjs)
+if (fs.existsSync(path.join(__dirname, "release-process.cjs"))) add("files", "Release process: Windows checks, drafts, start-up check", "release-process.cjs");
 // Release fixes: light while gaming, F9/F10, clip folder, crash reload (Added by aura-release-fixes-setup.cjs)
 if (fs.existsSync(path.join(ROOT, "electron", "perf.js")) && fs.existsSync(path.join(__dirname, "release-fixes.cjs"))) add("files", "Release fixes: light while gaming, F9/F10, clip folder", "release-fixes.cjs", [path.join(ROOT, "electron", "perf.js")]);
 if (fs.existsSync(path.join(__dirname, "privacy.cjs"))) add("files", "Privacy policy: same in AURA and on GitHub, says what it should", "privacy.cjs"); // (Added by aura-privacy-update-setup.cjs)
