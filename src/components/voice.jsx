@@ -129,7 +129,7 @@ const CSS = `
 .vc-sign{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:9000;display:flex;align-items:center;gap:8px;padding:9px 16px;border-radius:999px;background:var(--surface,#1b1f2a);border:1px solid var(--ac,#ff5a1f);color:var(--t1,#fff);font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.35);pointer-events:none}
 .vc-sign svg{color:var(--ac,#ff5a1f)}
 .vc-sign.done{border-color:var(--border,#333)}
-.vc-err{color:#ff8a80}
+.sr-s.vc-err,.vc-err{color:#ff8a80} /* stays red with the white descriptions (Updated by aura-settings-text-setup.cjs) */
 .vc-say{display:grid;gap:8px;padding:12px 16px 14px;font-size:12.5px;color:var(--t2);text-align:left}
 .vc-say div{display:grid;grid-template-columns:130px 1fr;gap:10px}
 .vc-say b{color:var(--t1);font-weight:600}

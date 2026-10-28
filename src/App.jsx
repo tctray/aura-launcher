@@ -591,7 +591,7 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .sr:last-child{border-bottom:none;}
 .sr>div:first-child{flex:1;min-width:0;}
 .sr-l{font-size:13px;font-weight:500;color:var(--t1);text-align:left;}
-.sr-s{font-size:10.5px;color:var(--t3);margin-top:2px;text-align:left;}
+.sr-s{font-size:10.5px;color:rgba(255,255,255,.82);margin-top:2px;text-align:left;}/* white, easy to read (Updated by aura-settings-text-setup.cjs) */
 .tog{width:40px;height:22px;border-radius:11px;background:var(--hover);border:1px solid var(--border);cursor:pointer;position:relative;transition:all .2s;flex-shrink:0}
 .tog.on{background:var(--ac);border-color:var(--ac)}
 .tog::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .2s}
