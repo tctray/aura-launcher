@@ -117,7 +117,7 @@ const get = (url, headers = {}) => new Promise((resolve) => {
   check("...files in it that were added to a playlist still play", (await call("url", song)).success);
   check("...and other files from it don't", !(await call("url", path.join(music, "Album", "one.mp3"))).success && fs.existsSync(song));
 
-  fs.rmSync(root, { recursive: true, force: true });
+  try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); } catch {} // Windows may still hold a converted file (Updated by aura-windows-test-fix.cjs)
   console.log(failed ? `\n${failed} FAILED` : "\nall passed");
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

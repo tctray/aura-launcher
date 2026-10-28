@@ -169,7 +169,7 @@ const EMOJI = /\p{Extended_Pictographic}/u;
     await app.page.context().close();
 
     console.log("6. The code");
-    const source = (() => { try { return fs.readFileSync(path.join(ROOT, "src", "App.jsx"), "utf8"); } catch { return ""; } })();
+    const source = (() => { try { return fs.readFileSync(path.join(ROOT, "src", "App.jsx"), "utf8").replace(/\r\n/g, "\n"); } catch { return ""; } })(); // Windows line endings too (Updated by aura-windows-test-fix.cjs)
     const from = source.indexOf("const UPDATE_CSS"), to = source.indexOf("function UpdateButton");
     const end = to < 0 ? -1 : source.indexOf("\n}\n", to);
     const part = from >= 0 && end > from ? source.slice(from, end) : "";
