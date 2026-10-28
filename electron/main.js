@@ -265,6 +265,8 @@ let authServer    = null;
 let mainWin       = null;
 // Sound devices: Settings > Sound devices, Ctrl+Alt+S, the AURA bar button (Added by aura-sound-devices-setup.cjs)
 const soundDevices = require("./sounddevices").create({ app, ipcMain, globalShortcut, getWindow: () => mainWin, onChange: () => pushBarState(), openExternal: (u) => shell.openExternal(u) });
+// Voice commands: "Hey AURA, next song", off unless switched on in Settings (Added by aura-voice-setup.cjs)
+require("./voice").create({ app, ipcMain, getWindow: () => mainWin, onRecord: (want) => { if ((want === "start") !== isRecording) toggleRecordingHotkey(); }, onBar: () => toggleBar() });
 
 // ── Running in the tray ───────────────────────────────────────────────────────
 // Added by aura-tray-setup.cjs.

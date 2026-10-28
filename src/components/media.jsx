@@ -29,6 +29,7 @@ const subs = new Set();
 const emit = () => { snapshot = { ...S }; subs.forEach((f) => f()); };
 const subscribe = (f) => { subs.add(f); return () => subs.delete(f); };
 export const useMedia = () => useSyncExternalStore(subscribe, () => snapshot);
+export const mediaNow = () => snapshot; // what is playing right now, for voice commands (Added by aura-voice-setup.cjs)
 
 let host = null, video = null, frame = null, stageEl = null, miniEl = null, panelEl = null, loop = 0, lastPos = "", tried = new Set(), history = [];
 function ensureHost() {
@@ -195,12 +196,13 @@ export function playList(items, index = 0) {
   S.queue = list; S.index = Math.max(0, Math.min(index, list.length - 1)); history = [];
   load(S.queue[S.index]);
 }
-export function playYouTube(link) {
+export function playYouTube(link, name) {
   const link_ = youTube(link);
   if (!link_) return false;
   ensureHost();
   video.pause(); video.removeAttribute("src"); video.load();
-  S.item = { kind: "youtube", name: link_.list ? "YouTube playlist" : "YouTube video", path: "" }; S.queue = [S.item]; S.index = 0; S.error = ""; S.preparing = null; S.time = 0; S.duration = 0; S.playing = true; S.art = "";
+  // link: the tidy link that Save keeps (Added by aura-media-youtube-save-setup.cjs)
+  S.item = { kind: "youtube", name: name || (link_.list ? "YouTube playlist" : "YouTube video"), path: "", link: ytLink(link_) }; S.queue = [S.item]; S.index = 0; S.error = ""; S.preparing = null; S.time = 0; S.duration = 0; S.playing = true; S.art = "";
   const origin = /^https?:/.test(location.origin) ? "&origin=" + encodeURIComponent(location.origin) : "";
   const q = "autoplay=1&rel=0&modestbranding=1&enablejsapi=1" + origin + (link_.list ? "&list=" + encodeURIComponent(link_.list) : "");
   S.ytList = null;
@@ -214,6 +216,16 @@ export function playYouTube(link) {
   emit(); kick();
   return true;
 }
+// The tidy form of a YouTube link, the one your saved list keeps (Added by aura-media-youtube-save-setup.cjs)
+export function ytLink({ id, list }) {
+  return id ? `https://www.youtube.com/watch?v=${id}${list ? "&list=" + list : ""}` : `https://www.youtube.com/playlist?list=${list}`;
+}
+const YT_SAVED = "aura_media_youtube";
+const readSaved = () => {
+  const v = local.get(YT_SAVED, []);
+  return (Array.isArray(v) ? v : []).filter((s) => s && typeof s.id === "string" && typeof s.name === "string" && youTube(s.link))
+    .map((s) => ({ id: s.id.slice(0, 40), name: s.name.slice(0, 80), link: ytLink(youTube(s.link)) })).slice(0, 200);
+};
 export function youTube(link) {
   let u;
   try { u = new URL(String(link || "").trim()); } catch { return null; }
@@ -290,6 +302,7 @@ const I = {
   up: <path d="M12 19V5M6 11l6-6 6 6" />,
   down: <path d="M12 5v14M6 13l6 6 6-6" />,
   note: <><path d="M9 18V6l10-2v12" /><circle cx="6.5" cy="18" r="2.5" /><circle cx="16.5" cy="16" r="2.5" /></>,
+  edit: <path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />, // (Added by aura-media-youtube-save-setup.cjs)
   film: <><rect x="3.5" y="5" width="17" height="14" rx="2" /><path d="M7.5 5v14M16.5 5v14M3.5 9.5h4M3.5 14.5h4M16.5 9.5h4M16.5 14.5h4" /></>,
 };
 const Icon = ({ n, size = 18 }) => (
@@ -369,6 +382,10 @@ function MediaTab({ toast }) {
   const [query, setQuery] = useState("");
   const [shown, setShown] = useState(200);
   const [yt, setYt] = useState("");
+  // YouTube links you saved: kept on this PC, shown under YouTube on the left (Added by aura-media-youtube-save-setup.cjs)
+  const [saved, setSaved] = useState(readSaved);
+  const [renamingYt, setRenamingYt] = useState(null);
+  const keepSaved = (next) => { setSaved(next); local.set(YT_SAVED, next); };
   const [adding, setAdding] = useState(null); // the item a playlist is being picked for
   const [renaming, setRenaming] = useState(null);
   const [drag, setDrag] = useState(false);
@@ -474,6 +491,21 @@ function MediaTab({ toast }) {
     else if (!r.playlists?.length) say("There's no music or video in what you dropped.");
   };
   const playYt = () => { if (playYouTube(yt)) setYt(""); else say("That isn't a YouTube link."); };
+  // Saving what's playing from YouTube (Added by aura-media-youtube-save-setup.cjs)
+  const nowLink = m.item?.kind === "youtube" ? m.item.link || "" : "";
+  const isSaved = !!nowLink && saved.some((s) => s.link === nowLink);
+  const isList = (link) => /[?&]list=/.test(link);
+  const saveYt = () => {
+    if (!nowLink || isSaved) return;
+    if (saved.length >= 200) { say("You can save up to 200 YouTube links. Remove one first."); return; }
+    const name = (!isList(nowLink) && m.item.title) || `YouTube ${isList(nowLink) ? "playlist" : "video"} ${saved.length + 1}`;
+    const s = { id: (crypto.randomUUID?.() || String(Date.now())).slice(0, 36), name: name.slice(0, 80), link: nowLink };
+    keepSaved([...saved, s]);
+    setRenamingYt(s.id);
+    say("Saved under YouTube on the left. Type a name, or press Enter to keep this one.");
+  };
+  const removeYt = (s) => { keepSaved(saved.filter((x) => x.id !== s.id)); say(`Removed "${s.name}"`); };
+  const renameYt = (s, n) => { n = n.trim(); if (n) keepSaved(saved.map((x) => (x.id === s.id ? { ...x, name: n.slice(0, 80) } : x))); setRenamingYt(null); };
 
   const counts = { all: items.length, audio: items.filter((i) => i.kind === "audio").length, video: items.filter((i) => i.kind === "video").length };
   const title = current ? current.name : view === "audio" ? "Music" : view === "video" ? "Videos" : "Everything";
@@ -499,6 +531,22 @@ function MediaTab({ toast }) {
         ))}
         <button type="button" className="md-add" onClick={() => newPlaylist()}><Icon n="plus" size={14} /> New playlist</button>
         <button type="button" className="md-add" onClick={importList}><Icon n="plus" size={14} /> Import playlist file</button>
+        {saved.length > 0 && <>
+          <div className="md-h">YouTube</div>
+          {saved.map((s) => (renamingYt === s.id ? (
+            <input key={s.id} className="fi md-yt-name" autoFocus defaultValue={s.name} aria-label="Name for this YouTube link" onFocus={(e) => e.target.select()}
+              onBlur={(e) => renameYt(s, e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { e.currentTarget.value = s.name; e.currentTarget.blur(); } }} />
+          ) : (
+            <div key={s.id} className={`md-saved${nowLink === s.link ? " on" : ""}`}>
+              <button type="button" className="md-saved-play" onClick={() => playYouTube(s.link, s.name)} onDoubleClick={() => setRenamingYt(s.id)} title="Click to play. Double-click to rename." aria-label={`Play ${s.name}`}>
+                <b>{s.name}</b><span>{isList(s.link) ? "Playlist" : "Video"}</span>
+              </button>
+              <button type="button" onClick={() => setRenamingYt(s.id)} aria-label={`Rename ${s.name}`} title="Rename"><Icon n="edit" size={12} /></button>
+              <button type="button" onClick={() => removeYt(s)} aria-label={`Remove ${s.name}`} title="Remove from your list (nothing changes on YouTube)"><Icon n="close" size={12} /></button>
+            </div>
+          )))}
+        </>}
       </aside>
 
       <section className="md-main">
@@ -534,6 +582,7 @@ function MediaTab({ toast }) {
         <div className="md-yt">
           <input className="fi" placeholder="Paste a YouTube video or playlist link" value={yt} onChange={(e) => setYt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && playYt()} aria-label="YouTube link" />
           <button type="button" className="btn-gh md-small" disabled={!yt.trim()} onClick={playYt}>Play</button>
+          {nowLink && <button type="button" className="btn-gh md-small" disabled={isSaved} onClick={saveYt} title={isSaved ? "It's in your YouTube list on the left" : "Keep what's playing in your YouTube list on the left"}>{isSaved ? "Saved" : "Save"}</button>}
         </div>
         {note && <div className="md-note" role="status">{note}</div>}
 
@@ -639,6 +688,16 @@ const CSS = `
 .md-folder button:hover{color:var(--t1);background:var(--hover)}
 .md-add{display:flex;align-items:center;gap:6px;background:transparent;border:0;color:var(--ac);font:inherit;font-size:12.5px;padding:7px 10px;border-radius:8px;cursor:pointer;text-align:left}
 .md-add:hover{background:var(--hover)}
+.md-saved{display:flex;align-items:center;border-radius:8px}
+.md-saved:hover{background:var(--hover)}
+.md-saved-play{flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:8px;background:transparent;border:0;color:var(--t1);font:inherit;font-size:13px;padding:8px 4px 8px 10px;cursor:pointer;text-align:left}
+.md-saved.on .md-saved-play{color:var(--ac)}
+.md-saved-play b{font-weight:400;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.md-saved-play span{font-size:11px;color:var(--t2);flex-shrink:0}
+.md-saved>button:not(.md-saved-play){background:transparent;border:0;color:var(--t2);cursor:pointer;padding:4px;border-radius:6px;display:flex;opacity:0}
+.md-saved:hover>button:not(.md-saved-play),.md-saved>button:not(.md-saved-play):focus-visible{opacity:1}
+.md-saved>button:not(.md-saved-play):hover{color:var(--t1);background:var(--hover)}
+.md-yt-name{width:100%;margin:2px 0;font-size:13px}
 .md-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;min-height:0}
 .md-now{display:flex;gap:18px;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px}
 .md-now.video{flex-direction:column;align-items:stretch}

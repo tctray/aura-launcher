@@ -77,6 +77,13 @@ export const PRIVACY_SECTIONS = [
     ],
   },
   {
+    title: "Voice commands",
+    body: [
+      "Voice commands are off unless you switch them on in Settings. While they're on, AURA listens through your microphone for “Hey AURA” and its own short list of commands, using the speech recognition built into Windows, on your PC. Windows shows that the microphone is in use.",
+      "What you say isn't recorded, saved or sent anywhere, including to the developer. To know which games you can start by voice, AURA gives Windows the names of the games in your library, on your PC.",
+    ],
+  },
+  {
     title: "Sharing clips",
     body: [
       "When you press Share on a clip, AURA uploads it to Catbox (catbox.moe), a free file host, and gives you a link. Anyone with the link can watch the clip, and AURA can't delete it afterwards. If Catbox isn't taking uploads, the clip goes to Litterbox, run by the same people, and is deleted after 3 days.",

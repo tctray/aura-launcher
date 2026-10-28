@@ -11,6 +11,7 @@ import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { ClipsAndMedia, MediaDock } from "./components/media"; // Clips > Media, and the mini player (Added by aura-media-player-setup.cjs)
 import { SettingsTabs, SoundDevicesTab, useSettingsTab } from "./components/sounddevices"; // Settings > Sound devices (Added by aura-sound-devices-setup.cjs)
+import { VoiceSettings, VoiceSign, useVoiceCommands } from "./components/voice"; // "Hey AURA" voice commands (Added by aura-voice-setup.cjs)
 import { useCloudGames, useCloudProfile } from "./cloudsync";
 import { backgroundForTheme, resolveThemeBackground, forgetThemePicture, themePicture, isWebPicture } from "./components/themebg"; // a saved theme keeps its background (Added by aura-theme-backgrounds-setup.cjs)
 import { CameraButton, CameraPanel, CameraSettings, cameraOverlay } from "./components/camera"; // the camera (Added by aura-camera-setup.cjs)
@@ -3187,6 +3188,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
             <SetRange value={s.streamVolume} min={0} max={1} step={0.05} onChange={v=>set({streamVolume:v})} format={pct}/></div>
         </div>
       </div>
+      <VoiceSettings/>{/* (Added by aura-voice-setup.cjs) */}
       <div className="ss">
         <div className="ss-t">RECORDING</div>
         <div className="ss-card">
@@ -3879,6 +3881,8 @@ function AuraApp(){
       setTimeout(()=>{setLaunching(null);toast(`${game.title} launched!`);setNowPlaying(game);},2200);
     }
   },[toast,checkAchievements,unlockedAch]);
+  // "Hey AURA, launch …", "open library", music (Added by aura-voice-setup.cjs)
+  useVoiceCommands({games,play:doPlay,go:(id)=>{setView(id);setHeroGame(null);setSrch("");},toast});
 
   const doFav=useCallback(id=>{
     setGames(gs=>{
@@ -4104,6 +4108,7 @@ function AuraApp(){
         <ControllerHUD/>
         <CameraPanel settings={settings} onSettings={updateSettings}/>
         <MediaDock onOpen={()=>goTo("clips")}/>{/* (Added by aura-media-player-setup.cjs) */}
+        <VoiceSign/>{/* (Added by aura-voice-setup.cjs) */}
         {isRecording&&<RecordingIndicator game={recGame} elapsed={recElapsed} onStop={async()=>{ if(isQuickRecording()) stopQuickRecording(); else await window.electronAPI?.stopRecording(); setIsRecording(false);}}/>}
         <div className="tc">
           {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
@@ -4268,6 +4273,7 @@ function AuraApp(){
       <ControllerHUD/>
       <CameraPanel settings={settings} onSettings={updateSettings}/>
       <MediaDock onOpen={()=>goTo("clips")}/>{/* (Added by aura-media-player-setup.cjs) */}
+      <VoiceSign/>{/* (Added by aura-voice-setup.cjs) */}
       <div className="tc">
         {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
         {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}

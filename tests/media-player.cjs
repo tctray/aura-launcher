@@ -189,6 +189,34 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
     await page.getByRole("button", { name: "Play", exact: true }).last().click(); await page.waitForTimeout(300);
     check("other links aren't played", (await host()).frame.includes("dQw4w9WgXcQ"));
 
+    console.log("6b. Saving YouTube links (Added by aura-media-youtube-save-setup.cjs)");
+    const side = page.locator(".md-side");
+    const saveBtn = page.locator(".md-yt").getByRole("button", { name: "Save", exact: true });
+    check("while YouTube plays there's a Save button, and no YouTube list yet", await saveBtn.isVisible() && !(await side.locator(".md-h", { hasText: "YouTube" }).count()));
+    await saveBtn.click(); await page.waitForTimeout(300);
+    const nameBox = side.getByLabel("Name for this YouTube link");
+    check("Save puts it under YouTube on the left and asks for a name", await side.locator(".md-h", { hasText: "YouTube" }).isVisible() && (await nameBox.inputValue()) === "YouTube playlist 1");
+    await nameBox.fill("Late Night"); await nameBox.press("Enter"); await page.waitForTimeout(300);
+    const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem("aura_media_youtube") || "[]"));
+    check("...with the name you typed, kept on this PC", (await side.locator(".md-saved").innerText()).includes("Late Night") && (await stored()).length === 1 && (await stored())[0].link === "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG", await stored());
+    check("...and the button now says Saved", await page.locator(".md-yt").getByRole("button", { name: "Saved", exact: true }).isDisabled());
+    await page.getByLabel("YouTube link").fill("https://youtu.be/abcdefghijk");
+    await page.getByRole("button", { name: "Play", exact: true }).last().click(); await page.waitForTimeout(1800);
+    check("another link can be saved too", await saveBtn.isEnabled());
+    await saveBtn.click(); await page.waitForTimeout(300);
+    check("...a video is named after its title", (await nameBox.inputValue()) === "Late Night Mix", await nameBox.inputValue().catch(() => ""));
+    await nameBox.press("Escape"); await page.waitForTimeout(300);
+    check("...and both are listed, a playlist and a video", (await side.locator(".md-saved").allInnerTexts()).join("|").replace(/\s+/g, " ") === "Late Night Playlist|Late Night Mix Video", await side.locator(".md-saved").allInnerTexts());
+    await side.getByRole("button", { name: "Play Late Night", exact: true }).click(); await page.waitForTimeout(500);
+    check("clicking a saved one plays it", /list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG/.test((await host()).frame) && /\bon\b/.test(await side.locator(".md-saved").first().getAttribute("class")));
+    await side.locator(".md-saved").first().hover();
+    await side.getByRole("button", { name: "Rename Late Night", exact: true }).click(); await page.waitForTimeout(200);
+    await nameBox.fill("Chill"); await nameBox.press("Enter"); await page.waitForTimeout(300);
+    check("Rename changes its name", (await stored())[0].name === "Chill" && (await side.locator(".md-saved").first().innerText()).includes("Chill"));
+    await side.locator(".md-saved").nth(1).hover();
+    await side.getByRole("button", { name: "Remove Late Night Mix", exact: true }).click(); await page.waitForTimeout(300);
+    check("Remove takes it off the list", (await stored()).length === 1 && (await side.locator(".md-saved").count()) === 1);
+
     console.log("7. Clips still there");
     await page.locator('[role="tab"]', { hasText: "Clips" }).click(); await page.waitForTimeout(500);
     check("the Clips tab shows your clips page again", !(await page.locator(".md").isVisible()));

@@ -124,7 +124,7 @@ function makeWorld() {
   const tellAll = (g, event, extra = []) => { for (const m of [...g.members.map((x) => x.id), ...extra]) tell(m, event); };
   const shapeMsg = (m) => ({ id: m.id, conversationId: m.conversationId, senderId: m.senderId, content: m.content, createdAt: m.createdAt, readAt: null, deleted: false, media: null, reactions: m.reactions.map((r) => ({ ...r })) });
   const post = (g, me, content) => {
-    const m = { id: uuid(), conversationId: g.id, senderId: me, content, createdAt: new Date(Date.now() + msgs.length).toISOString(), reactions: [] };
+    const m = { id: uuid(), conversationId: g.id, senderId: me, content, createdAt: new Date(Date.now() + msgs.length + 1).toISOString(), reactions: [] }; // always after the join time, like the database (Updated by aura-group-test-fix.cjs)
     msgs.push(m);
     tellAll(g, { type: "message", message: shapeMsg(m) });
     return m;
@@ -331,7 +331,7 @@ async function person(browser, world, base, id, name) {
 
     console.log("2. Everyone has it");
     check("Bri's list shows the group straight away", await until(async () => (await listed(B)).some((t) => /Squad/.test(t))), await listed(B));
-    check("...saying who made it, as new", (await listed(B)).some((t) => /Alex created the group/.test(t)) && (await B.locator(".mx-conv.unread", { hasText: "Squad" }).count()) === 1, await listed(B));
+    check("...saying who made it, as new", await until(async () => (await listed(B)).some((t) => /Alex created the group/.test(t)) && (await B.locator(".mx-conv.unread", { hasText: "Squad" }).count()) === 1), await listed(B)); // (Updated by aura-group-test-fix.cjs)
     check("Cam's too", await until(async () => (await listed(C)).some((t) => /Squad/.test(t))));
     await open(B, "Squad");
     check("in the group, the line reads as a sentence", /Alex created the group/.test(await thread(B)));
