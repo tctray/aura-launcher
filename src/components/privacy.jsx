@@ -80,7 +80,8 @@ export const PRIVACY_SECTIONS = [
     title: "Voice commands",
     body: [
       "Voice commands are off unless you switch them on in Settings. While they're on, AURA listens through your microphone for “Hey AURA” and its own short list of commands, using the speech recognition built into Windows, on your PC. Windows shows that the microphone is in use.",
-      "What you say isn't recorded, saved or sent anywhere, including to the developer. To know which games you can start by voice, AURA gives Windows the names of the games in your library, on your PC.",
+      "What you say isn't recorded, saved or sent anywhere, including to the developer. To know which games you can start and which friends you can call or message by voice, AURA gives Windows the names of your games and friends, on your PC.",
+      "When you type a message by voice (“Hey AURA, message …”), Windows turns everything you say into text, on your PC, until you say “send” or “cancel” or stop talking for 20 seconds. The text goes into the message box, and it's only sent when you say “send” or press Enter, like any message you type.",
     ],
   },
   {

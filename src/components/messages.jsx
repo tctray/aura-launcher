@@ -527,6 +527,16 @@ function tidy(raw) {
 const MAX_LENGTH = 4000;
 
 // How many friends you have, for First Friend (Added by aura-new-achievements-setup.cjs)
+// Voice commands: who your friends are, opening a chat, and typing into the one that's open (Added by aura-voice-more-setup.cjs)
+export const useFriendsForVoice = () => useSyncExternalStore(subscribe, () => state.friends);
+export const openChatWith = (userId) => actions.openWith(userId);
+let voiceTarget = null;
+export const voiceCompose = {
+  add(words) { if (!voiceTarget) return false; voiceTarget.add(words); return true; },
+  send() { if (!voiceTarget) return false; voiceTarget.send(); return true; },
+  clear() { if (voiceTarget) voiceTarget.clear(); },
+};
+
 export function useFriendCount() {
   const s = useSocial();
   return (s.friends || []).filter((f) => f.state === "friend").length;
@@ -1824,6 +1834,13 @@ function Thread({ conversation, nowPlaying }) {
   const onKey = (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } // Enter sends, Shift+Enter makes a new line
   };
+  // Typing by voice goes into this chat's box; "send" sends it like Enter (Added by aura-voice-more-setup.cjs)
+  useEffect(() => {
+    if (!conversation.isFriend) return;
+    const me = { add: (words) => setText((x) => (x && !/\s$/.test(x) ? x + " " : x) + words), send: () => send(), clear: () => setText("") };
+    voiceTarget = me;
+    return () => { if (voiceTarget === me) voiceTarget = null; };
+  });
   const remove = async (m) => {
     if (!window.confirm(group ? "Delete this message for everyone in the group? This can't be undone." : "Delete this message for both of you? This can't be undone.")) return;
     try { await actions.deleteMessage(conversation.id, m.id); }

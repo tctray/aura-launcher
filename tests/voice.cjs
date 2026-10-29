@@ -1,6 +1,7 @@
 // Voice commands (electron/voice.js): what AURA listens for, what it does with what it hears, and
 // that it stays off until you switch it on. The Windows helper is replaced by a pretend one that
-// "hears" phrases, so this runs anywhere. Added by aura-voice-setup.cjs.
+// "hears" phrases, so this runs anywhere. Added by aura-voice-setup.cjs. Every page, calls and typing
+// messages by voice: updated by aura-voice-more-setup.cjs.
 "use strict";
 const fs = require("fs");
 const os = require("os");
@@ -28,7 +29,7 @@ function fakeSpawn() {
   fn.runs = runs;
   return fn;
 }
-function setup({ platform = "win32", enabled = null } = {}) {
+function setup({ platform = "win32", enabled = null, quietMs } = {}) {
   const dir = fs.mkdtempSync(path.join(tmp, "d"));
   const prefsFile = path.join(dir, "aura-voice.json"), helperFile = path.join(dir, "aura-voice.ps1");
   if (enabled !== null) fs.writeFileSync(prefsFile, JSON.stringify({ enabled }));
@@ -38,7 +39,7 @@ function setup({ platform = "win32", enabled = null } = {}) {
   const win = { isDestroyed: () => false, webContents: { send: (ch, d) => sent.push([ch, d]) } };
   const v = voice.create({
     ipcMain: { handle: (ch, fn) => { handlers[ch] = fn; } }, getWindow: () => win, platform, spawnFn, prefsFile, helperFile,
-    onRecord: (a) => record.push(a), onBar: () => bar.push(1), now: () => clock,
+    onRecord: (a) => record.push(a), onBar: () => bar.push(1), now: () => clock, ...(quietMs ? { quietMs } : {}),
   });
   return { v, handlers, sent, record, bar, spawnFn, prefsFile, helperFile, tick: (ms) => { clock += ms; }, call: (ch, ...a) => handlers[ch](null, ...a) };
 }
@@ -113,6 +114,46 @@ const commands = (sent) => sent.filter(([c]) => c === "voice-command").map(([, d
   r = await t.call("voice:games", Array.from({ length: 900 }, (_x, i) => "Game number " + i));
   check("at most 500 games are listened for", r.count === 500);
 
+  console.log("3b. Every page, calls and messages (Added by aura-voice-more-setup.cjs)");
+  const pages = ["home", "library", "recent", "favorites", "streams", "social", "messages", "clips", "media", "sessions", "performance", "achievements", "customize", "settings"];
+  check("every page on the left can be opened: “open …” and “go to …”", pages.every((pg) => Object.entries(voice.COMMANDS).some(([k, [a, d]]) => a === "open" && d === pg && k.startsWith("open ")) && Object.entries(voice.COMMANDS).some(([k, [a, d]]) => a === "open" && d === pg && k.startsWith("go to "))));
+  h.say({ type: "heard", text: "hey aura go to recently played", conf: 0.9 });
+  check("“go to recently played” opens it", commands(t.sent).at(-1).action === "open" && commands(t.sent).at(-1).detail === "recent");
+  r = await t.call("voice:friends", ["JordanK", "SniperKing_99", "x", "next", null, "JordanK"]);
+  check("friends' names become words you can say", JSON.stringify([...t.v.friends.keys()]) === JSON.stringify(["jordan k", "sniper king 99"]), [...t.v.friends.keys()]);
+  check("...and the helper hears “call …” and “message …” for them", h.asked.at(-1).cmd === "phrases" && h.asked.at(-1).phrases.includes("hey aura call sniper king 99") && h.asked.at(-1).phrases.includes("hey aura message jordan k") && h.asked.at(-1).phrases.includes("hey aura launch pokemon legends") === false);
+  h.say({ type: "heard", text: "hey aura call jordan k", conf: 0.8 });
+  check("“call Jordan K” calls JordanK, by their username", commands(t.sent).at(-1).action === "call" && commands(t.sent).at(-1).detail === "start" && commands(t.sent).at(-1).who === "JordanK");
+  const nCalls = commands(t.sent).length;
+  h.say({ type: "heard", text: "hey aura call sniper king 99", conf: 0.65 });
+  h.say({ type: "heard", text: "hey aura call somebody", conf: 0.95 });
+  check("calling needs Windows to be sure, and only friends can be called", commands(t.sent).length === nCalls);
+  for (const [said, detail] of [["hang up", "hangup"], ["answer", "answer"], ["decline", "decline"], ["mute my mic", "mute"], ["unmute my mic", "unmute"]]) h.say({ type: "heard", text: "hey aura " + said, conf: 0.9 });
+  check("answer, decline, hang up, mute my mic, unmute my mic", JSON.stringify(commands(t.sent).slice(-5).map((c) => c.detail)) === JSON.stringify(["hangup", "answer", "decline", "mute", "unmute"]));
+
+  console.log("3c. Typing a message by voice");
+  t = setup({ quietMs: 120 }); await t.call("voice:set", true); h = t.spawnFn.runs[0]; h.say({ type: "ready", text: "en-US", conf: 1 });
+  await t.call("voice:friends", ["JordanK"]);
+  h.say({ type: "heard", text: "hey aura what's up", conf: 0.9, g: "dictation" });
+  check("free speech does nothing unless you're typing a message", commands(t.sent).length === 0);
+  h.say({ type: "heard", text: "hey aura message jordan k", conf: 0.85, g: "aura" });
+  check("“message Jordan K” opens the chat and starts typing", commands(t.sent).at(-1).action === "message" && commands(t.sent).at(-1).who === "JordanK" && h.asked.at(-1).cmd === "typing" && h.asked.at(-1).on === true && JSON.stringify(h.asked.at(-1).phrases) === JSON.stringify([...voice.SEND, ...voice.CANCEL]));
+  check("...and the window shows it's typing", t.sent.some(([c, d]) => c === "voice-status" && d.state === "typing"));
+  h.say({ type: "heard", text: "You on tonight for some ranked?", conf: 0.42, g: "dictation" });
+  check("what you say goes to the message box as you said it", commands(t.sent).at(-1).action === "type" && commands(t.sent).at(-1).detail === "text" && commands(t.sent).at(-1).text === "You on tonight for some ranked?");
+  h.say({ type: "heard", text: "next song", conf: 0.95, g: "aura" });
+  check("...commands don't work while typing (so “next song” can be part of a message)", commands(t.sent).at(-1).detail === "text");
+  h.say({ type: "heard", text: "send", conf: 0.9, g: "aura" });
+  check("“send” sends it and goes back to commands", commands(t.sent).at(-1).detail === "send" && h.asked.at(-1).cmd === "typing" && h.asked.at(-1).on === false);
+  h.say({ type: "heard", text: "you there", conf: 0.9, g: "dictation" });
+  check("...after which free speech does nothing again", commands(t.sent).at(-1).detail === "send");
+  h.say({ type: "heard", text: "hey aura start typing", conf: 0.9 });
+  h.say({ type: "heard", text: "cancel", conf: 0.9, g: "aura" });
+  check("“start typing”, then “cancel”", commands(t.sent).at(-1).detail === "cancel" && h.asked.at(-1).on === false);
+  h.say({ type: "heard", text: "hey aura start typing", conf: 0.9 });
+  await new Promise((r) => setTimeout(r, 300));
+  check("20 quiet seconds stop typing (and nothing is sent)", commands(t.sent).at(-1).detail === "stop" && h.asked.at(-1).on === false);
+
   console.log("4. Media keys, and problems");
   check("Windows media keys: only the six known ones", (await t.call("voice:key", "next")).success && h.asked.at(-1).key === "next" && !(await t.call("voice:key", "calc")).success);
   h.say({ type: "error", text: "no-english", conf: 0 });
@@ -131,10 +172,12 @@ const commands = (sent) => sent.filter(([c]) => c === "voice-command").map(([, d
   const s = voice.SCRIPT;
   check("it uses Windows' own speech recognition, on this PC", /System\.Speech/.test(s) && /SpeechRecognitionEngine/.test(s) && /SetInputToDefaultAudioDevice/.test(s));
   check("it never reaches the internet or runs other programs", !/Invoke-WebRequest|Invoke-RestMethod|Net\.WebClient|HttpClient|Start-Process|Invoke-Expression|\biex\b/i.test(s));
-  check("it only knows the phrases AURA gives it", /new Choices\(\)/.test(s) && /choices\.Add\(phrases\)/.test(s) && !/DictationGrammar/.test(s));
+  check("it only knows the phrases AURA gives it", /new Choices\(\)/.test(s) && /choices\.Add\(typing && control\.Length > 0 \? control : phrases\)/.test(s));
+  check("...and free speech only while you type a message by voice", /if \(typing\) rec\.LoadGrammar\(new DictationGrammar\(\)/.test(s) && (s.match(/DictationGrammar/g) || []).length === 1);
   check("media keys are a fixed list", /case "next": vk = 0xB0/.test(s) && /default: return;/.test(s));
   const policy = (() => { try { return fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8"); } catch { return ""; } })();
   if (policy) check("the privacy policy says how voice commands work", /## Voice commands/.test(policy) && /isn't recorded, saved or sent anywhere/.test(policy));
+  if (policy) check("...including typing messages by voice", /When you type a message by voice/.test(policy) && /only sent when you say “send” or press Enter/.test(policy));
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(failed ? `\n${failed} FAILED` : "\nall passed");

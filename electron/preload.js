@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   voiceGet: () => ipcRenderer.invoke("voice:get"),
   voiceSet: (on) => ipcRenderer.invoke("voice:set", on === true),
   voiceGames: (titles) => ipcRenderer.invoke("voice:games", titles),
+  voiceFriends: (names) => ipcRenderer.invoke("voice:friends", names), // (Added by aura-voice-more-setup.cjs)
   voiceKey: (key) => ipcRenderer.invoke("voice:key", key),
   onVoiceStatus: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("voice-status", h); return () => ipcRenderer.removeListener("voice-status", h); },
   onVoiceCommand: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("voice-command", h); return () => ipcRenderer.removeListener("voice-command", h); },

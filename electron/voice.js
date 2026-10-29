@@ -6,7 +6,7 @@
 // the names of the games in your library, so it can't take any other command. Nothing is recorded,
 // saved or sent anywhere, and nothing is downloaded or installed. On Linux and Mac this does nothing.
 //
-// Added by aura-voice-setup.cjs. Wired up from the main file with one line:
+// Added by aura-voice-setup.cjs; pages, calls and typing messages by voice added by aura-voice-more-setup.cjs. Wired up from the main file with one line:
 //   const voice = require("./voice").create({ app, ipcMain, getWindow: () => mainWin, onRecord: (a) => ..., onBar: () => toggleBar() });
 "use strict";
 const fs = require("fs");
@@ -18,6 +18,11 @@ const AWAKE_MS = 6000;     // after "Hey AURA" on its own, a command is heard fo
 const SURE = 0.6;          // how sure Windows must be about what it heard (0 to 1)
 const SURE_LAUNCH = 0.7;   // ...and for starting a game
 const MAX_GAMES = 500;
+const MAX_FRIENDS = 300;
+const SURE_TYPE = 0.3;     // typing a message by voice: Windows is rarely very sure about free speech
+const QUIET_MS = 20000;    // typing by voice stops after this long without speech
+const SEND = ["send", "send it", "send message"];
+const CANCEL = ["cancel", "stop typing", "never mind"];
 
 // What you can say after "Hey AURA". [action, detail]
 const COMMANDS = {
@@ -30,11 +35,22 @@ const COMMANDS = {
   "mute": ["media", "mute"], "unmute": ["media", "unmute"],
   "start recording": ["record", "start"], "record": ["record", "start"], "stop recording": ["record", "stop"],
   "show the bar": ["bar", "toggle"], "hide the bar": ["bar", "toggle"],
-  "open home": ["open", "home"], "go home": ["open", "home"],
-  "open library": ["open", "library"], "show library": ["open", "library"],
-  "open clips": ["open", "clips"], "open media": ["open", "media"], "open messages": ["open", "messages"],
-  "open settings": ["open", "settings"],
+  "go home": ["open", "home"], "show library": ["open", "library"],
+  // Calls
+  "answer": ["call", "answer"], "answer the call": ["call", "answer"], "pick up": ["call", "answer"],
+  "decline": ["call", "decline"], "decline the call": ["call", "decline"],
+  "hang up": ["call", "hangup"], "end call": ["call", "hangup"], "end the call": ["call", "hangup"],
+  "mute my mic": ["call", "mute"], "unmute my mic": ["call", "unmute"],
+  // Typing a message by voice, into the chat that's open
+  "start typing": ["type", "start"], "type a message": ["type", "start"],
 };
+// Every page in the left panel: "open …" or "go to …"
+const PAGES = {
+  home: ["home"], library: ["library"], recent: ["recently played", "recent"], favorites: ["favorites"], streams: ["live streams", "streams"],
+  social: ["social"], messages: ["messages"], clips: ["clips"], media: ["media"], sessions: ["sessions"], performance: ["performance"],
+  achievements: ["achievements"], customize: ["customize"], settings: ["settings"],
+};
+for (const [page, words] of Object.entries(PAGES)) for (const w of words) { COMMANDS["open " + w] = ["open", page]; COMMANDS["go to " + w] = ["open", page]; }
 // Windows media keys, for when AURA's own player has nothing loaded (Spotify, a browser, ...)
 const KEYS = ["next", "prev", "playpause", "up", "down", "mute"];
 
@@ -45,14 +61,31 @@ function spoken(title) {
     .replace(/&/g, " and ").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
   return s.length >= 2 && s.length <= 60 && /[a-z]/.test(s) ? s : "";
 }
+// A friend's username the way it's said: "SniperKing_99" → "sniper king 99"
+function spokenName(name) {
+  if (typeof name !== "string") return "";
+  return spoken(name.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Za-z])(\d)/g, "$1 $2").replace(/(\d)([A-Za-z])/g, "$1 $2").replace(/[_.\-]+/g, " "));
+}
 // Everything the helper listens for
-function phrases(games) {
-  const said = [...Object.keys(COMMANDS), ...[...games.keys()].map((g) => "launch " + g)];
+function phrases(games, friends = new Map()) {
+  const said = [...Object.keys(COMMANDS), ...[...games.keys()].map((g) => "launch " + g), ...[...friends.keys()].flatMap((f) => ["call " + f, "message " + f])];
   return [WAKE, ...said, ...said.map((p) => WAKE + " " + p)];
 }
-// What a heard phrase means. state.awakeUntil is when a command without "Hey AURA" stops counting.
-function interpret(text, conf, state, games, now = Date.now()) {
+// What a heard phrase means. state.awakeUntil is when a command without "Hey AURA" stops counting;
+// state.typing is on while a message is being typed by voice. grammar: "dictation" for free speech.
+function interpret(text, conf, state, lists = {}, now = Date.now(), grammar = "aura") {
+  const games = lists.games || new Map(), friends = lists.friends || new Map();
   const t = typeof text === "string" ? text.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim() : "";
+  if (state.typing) {
+    if (grammar === "dictation") {
+      const words = String(text || "").replace(/[\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
+      return words && conf >= SURE_TYPE ? { kind: "command", action: "type", detail: "text", text: words, said: words } : null;
+    }
+    if (conf >= SURE && SEND.includes(t)) return { kind: "command", action: "type", detail: "send", said: t };
+    if (conf >= SURE && CANCEL.includes(t)) return { kind: "command", action: "type", detail: "cancel", said: t };
+    return null;
+  }
+  if (grammar === "dictation") return null;
   if (!t || !(conf >= SURE)) return null;
   if (t === WAKE) { state.awakeUntil = now + AWAKE_MS; return { kind: "wake" }; }
   let said;
@@ -61,7 +94,10 @@ function interpret(text, conf, state, games, now = Date.now()) {
   else return null; // without "Hey AURA" first, nothing happens
   state.awakeUntil = 0;
   if (COMMANDS[said]) { const [action, detail] = COMMANDS[said]; return { kind: "command", action, detail, said }; }
-  if (said.startsWith("launch ") && conf >= SURE_LAUNCH && games.has(said.slice(7))) return { kind: "command", action: "launch", detail: games.get(said.slice(7)), said };
+  if (conf < SURE_LAUNCH) return null; // starting a game or a call, or opening a chat: Windows must be more sure
+  if (said.startsWith("launch ") && games.has(said.slice(7))) return { kind: "command", action: "launch", detail: games.get(said.slice(7)), said };
+  if (said.startsWith("call ") && friends.has(said.slice(5))) return { kind: "command", action: "call", detail: "start", who: friends.get(said.slice(5)), said };
+  if (said.startsWith("message ") && friends.has(said.slice(8))) return { kind: "command", action: "message", detail: "start", who: friends.get(said.slice(8)), said };
   return null;
 }
 
@@ -85,6 +121,8 @@ namespace AuraVoice
     {
         static SpeechRecognitionEngine rec;
         static string[] phrases = new string[0];
+        static string[] control = new string[0];   // "send" and "cancel" while typing by voice
+        static bool typing;
         static readonly object gate = new object();
 
         static string Esc(string s)
@@ -100,9 +138,10 @@ namespace AuraVoice
             return b.ToString();
         }
 
-        public static void Emit(string type, string text, double conf)
+        public static void Emit(string type, string text, double conf) { Emit(type, text, conf, ""); }
+        public static void Emit(string type, string text, double conf, string grammar)
         {
-            string line = "{\\"type\\":\\"" + Esc(type) + "\\",\\"text\\":\\"" + Esc(text) + "\\",\\"conf\\":" + conf.ToString("0.###", CultureInfo.InvariantCulture) + "}";
+            string line = "{\\"type\\":\\"" + Esc(type) + "\\",\\"text\\":\\"" + Esc(text) + "\\",\\"g\\":\\"" + Esc(grammar) + "\\",\\"conf\\":" + conf.ToString("0.###", CultureInfo.InvariantCulture) + "}";
             lock (gate) { Console.Out.WriteLine(line); Console.Out.Flush(); }
         }
 
@@ -110,8 +149,10 @@ namespace AuraVoice
         {
             rec.UnloadAllGrammars();
             var choices = new Choices();
-            choices.Add(phrases);
+            choices.Add(typing && control.Length > 0 ? control : phrases);
             rec.LoadGrammar(new Grammar(new GrammarBuilder(choices)) { Name = "aura" });
+            // Typing a message by voice: free speech too, turned into text by Windows on this PC
+            if (typing) rec.LoadGrammar(new DictationGrammar() { Name = "dictation" });
         }
 
         // Returns the language it listens in, or "" when this PC has no English speech recognition
@@ -128,7 +169,7 @@ namespace AuraVoice
             rec = new SpeechRecognitionEngine(pick);
             rec.SetInputToDefaultAudioDevice();
             Load();
-            rec.SpeechRecognized += (s, e) => Emit("heard", e.Result.Text, e.Result.Confidence);
+            rec.SpeechRecognized += (s, e) => Emit("heard", e.Result.Text, e.Result.Confidence, e.Result.Grammar != null ? e.Result.Grammar.Name : "");
             rec.RecognizerUpdateReached += (s, e) => { try { Load(); } catch (Exception x) { Emit("error", x.Message, 0); } };
             rec.RecognizeAsync(RecognizeMode.Multiple);
             return pick.Culture.Name;
@@ -138,6 +179,14 @@ namespace AuraVoice
         public static void SetPhrases(string[] said)
         {
             phrases = said;
+            if (rec != null) rec.RequestRecognizerUpdate();
+        }
+
+        // Typing a message by voice on or off
+        public static void SetTyping(bool on, string[] said)
+        {
+            typing = on;
+            control = said;
             if (rec != null) rec.RequestRecognizerUpdate();
         }
 
@@ -190,6 +239,7 @@ while ($true) {
         if ($lang) { [AuraVoice.Engine]::Emit('ready', $lang, 1) } else { [AuraVoice.Engine]::Emit('error', 'no-english', 0) }
       }
       'phrases' { [AuraVoice.Engine]::SetPhrases([string[]]@($req.phrases)) }
+      'typing' { [AuraVoice.Engine]::SetTyping([bool]$req.on, [string[]]@($req.phrases)) }
       'key' { [AuraVoice.Engine]::Key([string]$req.key) }
     }
   } catch {
@@ -209,7 +259,7 @@ function explain(text) {
 }
 
 // ── Voice commands ────────────────────────────────────────────────────────────
-function create({ app, ipcMain, getWindow = () => null, onRecord = () => {}, onBar = () => {}, platform = process.platform, spawnFn = spawn, prefsFile, helperFile, now = () => Date.now() } = {}) {
+function create({ app, ipcMain, getWindow = () => null, onRecord = () => {}, onBar = () => {}, platform = process.platform, spawnFn = spawn, prefsFile, helperFile, now = () => Date.now(), quietMs = QUIET_MS } = {}) {
   const windows = platform === "win32";
   const dataDir = () => { try { return app.getPath("userData"); } catch { return null; } };
   const prefsPath = () => prefsFile || (dataDir() ? path.join(dataDir(), "aura-voice.json") : null);
@@ -219,19 +269,31 @@ function create({ app, ipcMain, getWindow = () => null, onRecord = () => {}, onB
   const save = () => { try { fs.writeFileSync(prefsPath(), JSON.stringify(prefs)); } catch {} };
 
   let proc = null, buffer = "", state = "off", error = "", lang = "";
-  const heard = { awakeUntil: 0 };
-  let games = new Map();
+  const heard = { awakeUntil: 0, typing: false };
+  let games = new Map(), friends = new Map(), quiet = null;
   const status = () => ({ supported: windows, enabled: prefs.enabled, state, error, language: lang });
   const tell = (channel, data) => { try { const w = getWindow(); if (w && !w.isDestroyed()) w.webContents.send(channel, data); } catch {} };
   const setState = (s, e = "") => { state = s; error = e; tell("voice-status", status()); };
   const send = (msg) => { try { proc?.stdin.write(JSON.stringify(msg) + "\n"); } catch {} };
 
+  // Typing a message by voice: free speech goes into the message box until "send", "cancel" or 20 quiet seconds
+  function typing(on) {
+    clearTimeout(quiet);
+    if (on) { quiet = setTimeout(() => { typing(false); tell("voice-command", { action: "type", detail: "stop", said: "" }); }, quietMs); quiet.unref?.(); }
+    if (heard.typing === on) return;
+    heard.typing = on;
+    send({ cmd: "typing", on, phrases: on ? [...SEND, ...CANCEL] : [] });
+    tell("voice-status", on ? { ...status(), state: "typing" } : status());
+  }
   function act(m) {
     if (m.kind === "wake") { tell("voice-status", { ...status(), state: "awake" }); return; }
-    tell("voice-status", status()); // back to listening
+    if (!heard.typing) tell("voice-status", status()); // back to listening
     if (m.action === "record") { try { onRecord(m.detail); } catch {} }
     else if (m.action === "bar") { try { onBar(); } catch {} }
-    tell("voice-command", { action: m.action, detail: m.detail, said: m.said });
+    else if (m.action === "message" || (m.action === "type" && m.detail === "start")) typing(true);
+    else if (m.action === "type" && m.detail === "text") typing(true); // still talking: wait another 20 seconds
+    else if (m.action === "type") typing(false); // send or cancel
+    tell("voice-command", { action: m.action, detail: m.detail, said: m.said, ...(m.who ? { who: m.who } : {}), ...(m.text ? { text: m.text } : {}) });
   }
 
   function start() {
@@ -257,18 +319,18 @@ function create({ app, ipcMain, getWindow = () => null, onRecord = () => {}, onB
         let msg; try { msg = JSON.parse(line); } catch { continue; }
         if (msg.type === "ready") { lang = String(msg.text || "").slice(0, 20); setState("listening"); }
         else if (msg.type === "error") { const e = explain(msg.text); stop(); setState("error", e); return; }
-        else if (msg.type === "heard" && state === "listening") { const m = interpret(msg.text, Number(msg.conf), heard, games, now()); if (m) act(m); }
+        else if (msg.type === "heard" && state === "listening") { const m = interpret(msg.text, Number(msg.conf), heard, { games, friends }, now(), String(msg.g || "aura")); if (m) act(m); }
       }
     });
     me.stderr?.on?.("data", () => {});
     const gone = () => { if (proc !== me) return; proc = null; if (prefs.enabled) setState("error", "Voice commands stopped. Switch them off and on to try again."); };
     me.on("error", gone);
     me.on("exit", gone);
-    send({ cmd: "start", phrases: phrases(games) });
+    send({ cmd: "start", phrases: phrases(games, friends) });
   }
   function stop() {
     const me = proc;
-    proc = null; buffer = ""; heard.awakeUntil = 0;
+    proc = null; buffer = ""; heard.awakeUntil = 0; heard.typing = false; clearTimeout(quiet);
     if (me) { try { me.stdin.end(); } catch {} try { me.kill(); } catch {} }
   }
   function setEnabled(on) {
@@ -286,14 +348,28 @@ function create({ app, ipcMain, getWindow = () => null, onRecord = () => {}, onB
     }
     const same = next.size === games.size && [...next].every(([k, v]) => games.get(k) === v);
     games = next;
-    if (!same && proc) send({ cmd: "phrases", phrases: phrases(games) });
+    if (!same && proc) send({ cmd: "phrases", phrases: phrases(games, friends) });
     return games.size;
+  }
+  // Your friends' usernames, so "call …" and "message …" know who you mean
+  function setFriends(names) {
+    const next = new Map();
+    for (const n of Array.isArray(names) ? names.slice(0, 1000) : []) {
+      const s = spokenName(n);
+      if (s && !next.has(s) && !COMMANDS[s]) next.set(s, String(n).slice(0, 60));
+      if (next.size >= MAX_FRIENDS) break;
+    }
+    const same = next.size === friends.size && [...next].every(([k, v]) => friends.get(k) === v);
+    friends = next;
+    if (!same && proc) send({ cmd: "phrases", phrases: phrases(games, friends) });
+    return friends.size;
   }
 
   if (ipcMain) {
     ipcMain.handle("voice:get", () => ({ success: true, ...status(), commands: Object.keys(COMMANDS) }));
     ipcMain.handle("voice:set", (_e, on) => ({ success: true, ...setEnabled(on === true) }));
     ipcMain.handle("voice:games", (_e, titles) => ({ success: true, count: setGames(titles) }));
+    ipcMain.handle("voice:friends", (_e, names) => ({ success: true, count: setFriends(names) }));
     ipcMain.handle("voice:key", (_e, key) => {
       if (!KEYS.includes(key)) return { success: false, error: "That isn't a media key." };
       if (!proc || state !== "listening") return { success: false, error: "Voice commands are off." };
@@ -304,7 +380,7 @@ function create({ app, ipcMain, getWindow = () => null, onRecord = () => {}, onB
   if (windows && prefs.enabled) { if (app?.whenReady) app.whenReady().then(start).catch(() => {}); else start(); }
   if (app?.on) app.on("will-quit", stop);
 
-  return { start, stop, setEnabled, setGames, status, get games() { return games; } };
+  return { start, stop, setEnabled, setGames, setFriends, status, get games() { return games; }, get friends() { return friends; } };
 }
 
-module.exports = { create, interpret, phrases, spoken, explain, COMMANDS, KEYS, SCRIPT, WAKE, AWAKE_MS };
+module.exports = { create, interpret, phrases, spoken, spokenName, explain, COMMANDS, PAGES, KEYS, SEND, CANCEL, SCRIPT, WAKE, AWAKE_MS };

@@ -1,6 +1,7 @@
 // Settings > Voice Commands, the Listening sign, and what AURA does with a command: pages, music,
 // starting a game. Opens the built window (dist) in a real browser, as AURA on Windows, and plays
-// the part of the main process. Added by aura-voice-setup.cjs.
+// the part of the main process. Added by aura-voice-setup.cjs. Every page, calls and typing messages
+// by voice: updated by aura-voice-more-setup.cjs.
 "use strict";
 const fs = require("fs");
 const http = require("http");
@@ -19,7 +20,7 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
   let chromium;
   try { ({ chromium } = require("playwright")); } catch { note("the test browser isn't installed here"); return done(process.env.CI ? 1 : 3); }
   let browser = null;
-  for (const options of [process.env.AURA_TEST_BROWSER ? { executablePath: process.env.AURA_TEST_BROWSER } : {}, { channel: "msedge" }, { channel: "chrome" }]) {
+  for (const options of [process.env.AURA_TEST_BROWSER ? { executablePath: process.env.AURA_TEST_BROWSER } : {}, { channel: "msedge" }, { channel: "chrome" }].map((o) => ({ ...o, args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] }))) {
     try { browser = await chromium.launch(options); break; } catch {}
   }
   if (!browser) { note("no browser to test with. Run  npx playwright install chromium  once to add one."); return done(process.env.CI ? 1 : 3); }
@@ -56,8 +57,20 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
       } catch {}
       window.__calls = [];
       const ok = (data) => Promise.resolve({ success: true, data });
-      const answers = { getSession: () => ok({ id: "user-1", email: "me@example.com" }), getMyProfile: () => ok({ username: "tctray", avatar_url: null }) };
-      const fake = (name) => new Proxy({}, { get: (_t, key) => (key === "then" ? undefined : (...args) => { if (/^on[A-Z]/.test(String(key))) return () => {}; return (name === "auraCloud" && answers[key]) ? answers[key](...args) : ok(null); }) });
+      // A friend, JordanK, and your chat with them (Added by aura-voice-more-setup.cjs)
+      const now = new Date().toISOString();
+      const chat = { id: "c1", isGroup: false, userId: "user-j", username: "JordanK", avatarUrl: "", online: true, isFriend: true, lastMessage: "", lastSenderId: null, lastMessageAt: now, unread: 0, lastMedia: "", background: null };
+      window.__sent = [];
+      const answers = {
+        "auraCloud.getSession": () => ok({ id: "user-1", email: "me@example.com" }), "auraCloud.getMyProfile": () => ok({ username: "tctray", avatar_url: null }),
+        "auraSocial.start": () => ok({ id: "user-1", username: "tctray", live: true }),
+        "auraSocial.listFriends": () => ok([{ friendshipId: "f1", userId: "user-j", username: "JordanK", avatarUrl: "", state: "friend", since: null, online: true, lastSeenAt: now }]),
+        "auraSocial.listConversations": () => ok([chat]), "auraSocial.listBlocked": () => ok([]), "auraSocial.openConversation": () => ok("c1"),
+        "auraSocial.getMessages": () => ok({ messages: [], hasMore: false }),
+        "auraSocial.sendMessage": (id, content) => { window.__sent.push([id, content]); return ok({ id: "m" + window.__sent.length, conversationId: id, senderId: "user-1", content, createdAt: new Date().toISOString(), readAt: null, deleted: false, media: null, reactions: [] }); },
+        "auraSocial.startCall": (userId) => { window.__calls.push(["startCall", [userId]]); return ok({ id: "call-1" }); },
+      };
+      const fake = (name) => new Proxy({}, { get: (_t, key) => (key === "then" ? undefined : (...args) => { if (/^on[A-Z]/.test(String(key))) return () => {}; const a = answers[name + "." + String(key)]; return a ? a(...args) : ok(null); }) });
       window.auraCloud = fake("auraCloud");
       window.auraSocial = fake("auraSocial");
       // The voice part of AURA's bridge; the test plays the main process
@@ -68,6 +81,7 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
         voiceGet: async () => st(),
         voiceSet: async (on) => { v.enabled = on; v.state = on ? "starting" : "off"; return st(); },
         voiceGames: async (titles) => ({ success: true, count: titles.length }),
+        voiceFriends: async (names) => ({ success: true, count: names.length }),
         voiceKey: async () => ({ success: true }),
         onVoiceStatus: (cb) => { v.status.push(cb); return () => { v.status = v.status.filter((x) => x !== cb); }; },
         onVoiceCommand: (cb) => { v.command.push(cb); return () => { v.command = v.command.filter((x) => x !== cb); }; },
@@ -110,6 +124,8 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
     check("a problem is shown in Status", /couldn't use your microphone/.test(await page.locator(".sr", { hasText: "Status" }).innerText()) && await page.locator(".vc-err").isVisible());
     if (process.env.AURA_SHOT_DIR) await page.screenshot({ path: path.join(process.env.AURA_SHOT_DIR, "voice-settings.png") });
     check("AURA tells it the games it can launch (ones with a file to start)", JSON.stringify((await calls(page, "voiceGames")).at(-1)) === JSON.stringify([["Fortnite"]]));
+    check("...and your friends' names, for calls and messages", JSON.stringify((await calls(page, "voiceFriends")).at(-1)) === JSON.stringify([["JordanK"]]), await calls(page, "voiceFriends"));
+    check("the list of what you can say has every page, calls and messages", /recently played · favorites · live streams/.test(await page.locator(".vc-say").innerText()) && /call Jordan/.test(await page.locator(".vc-say").innerText()) && /Say “send” to send it/.test(await page.locator(".vc-say").innerText()));
 
     console.log("2. Doing what you said");
     await fire(page, "status", { state: "awake" });
@@ -137,9 +153,47 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
     check("“pause” pauses AURA's player, not Windows'", (await yt()).includes("pauseVideo") && (await calls(page, "voiceKey")).length === keys, await yt());
     await fire(page, "command", { action: "media", detail: "down", said: "volume down" });
     check("“volume down” turns AURA's player down", (await page.locator(".md-now").getByLabel("Volume").inputValue()) === String(Math.round((0.8 - 0.1) * 100) / 100), await page.locator(".md-now").getByLabel("Volume").inputValue());
+    console.log("4. Every page on the left");
+    for (const [detail, title] of [["recent", "Recently Played"], ["favorites", "Favorites"], ["streams", "Live Streams"], ["social", "Social"], ["sessions", "Sessions"], ["performance", "Performance"], ["achievements", "Achievements"], ["customize", "Customize"], ["home", "Home"]]) {
+      await fire(page, "command", { action: "open", detail, said: "open " + detail });
+      if ((await onPage(page)) !== title) { check(`“open ${detail}” opens ${title}`, false, await onPage(page)); break; }
+    }
+    check("“open …” works for every page on the left", (await onPage(page)) === "Home");
+
+    console.log("5. Messages by voice");
+    await fire(page, "command", { action: "message", detail: "start", who: "JordanK", said: "message jordan k" });
+    await page.waitForTimeout(800);
+    check("“message Jordan” opens your chat with Jordan", (await onPage(page)) === "Messages" && /JordanK/.test(await page.locator(".mx-head").innerText().catch(() => "")));
+    await fire(page, "status", { state: "typing" });
+    check("...with a sign saying to say send or cancel", /Typing your message… say “send” or “cancel”/.test(await page.locator(".vc-sign").innerText()));
+    await fire(page, "command", { action: "type", detail: "text", text: "you on tonight", said: "you on tonight" });
+    await fire(page, "command", { action: "type", detail: "text", text: "for some ranked?", said: "for some ranked?" });
+    const box = page.locator(".mx-compose textarea");
+    check("what you say is typed into the message box", (await box.inputValue()) === "you on tonight for some ranked?", await box.inputValue());
+    check("...and nothing is sent yet", (await page.evaluate(() => window.__sent.length)) === 0);
+    await fire(page, "status", { state: "listening" });
+    await fire(page, "command", { action: "type", detail: "send", said: "send" });
+    await page.waitForTimeout(500);
+    check("“send” sends it, like Enter", JSON.stringify(await page.evaluate(() => window.__sent)) === JSON.stringify([["c1", "you on tonight for some ranked?"]]) && (await box.inputValue()) === "");
+    await fire(page, "command", { action: "type", detail: "text", text: "never mind that", said: "never mind that" });
+    await fire(page, "command", { action: "type", detail: "cancel", said: "cancel" });
+    check("“cancel” clears the box without sending", (await box.inputValue()) === "" && (await page.evaluate(() => window.__sent.length)) === 1);
+    await fire(page, "command", { action: "type", detail: "stop", said: "" });
+    check("after 20 quiet seconds, it says typing stopped", /Stopped typing/.test(await page.locator(".vc-sign").innerText()));
+
+    console.log("6. Calls by voice");
+    await fire(page, "command", { action: "call", detail: "start", who: "Nobody", said: "call nobody" });
+    check("calling someone who isn't a friend: AURA says so", /Nobody isn't one of your friends/.test(await page.locator(".tc").innerText()));
+    await fire(page, "command", { action: "call", detail: "start", who: "JordanK", said: "call jordan k" });
+    await page.waitForTimeout(1500);
+    check("“call Jordan” calls Jordan", JSON.stringify((await calls(page, "startCall")).at(-1)) === JSON.stringify(["user-j"]), await page.locator(".tc").innerText());
+    await fire(page, "command", { action: "call", detail: "hangup", said: "hang up" });
+    await page.waitForTimeout(800);
+    check("“hang up” ends it", !(await page.locator(".cx-bar.ringing, .cx-bar.live").count()));
+
     await fire(page, "command", { action: "open", detail: "../../evil", said: "x" });
     await fire(page, "command", { action: "rm", detail: "-rf", said: "x" });
-    check("anything else is ignored", (await onPage(page)) === "Clips");
+    check("anything else is ignored", (await onPage(page)) === "Messages");
   } catch (e) {
     check("the test ran to the end", false, String(e?.message || e).slice(0, 400));
   }

@@ -1,9 +1,11 @@
 // AURA — voice commands in the window: Settings > Voice Commands, the "Listening" sign, and doing
 // what you said (AURA's own player, pages, starting a game). Recording and the AURA Bar are done
 // by the main process. The listening happens in electron/voice.js. Windows only.
-// Added by aura-voice-setup.cjs.
+// Added by aura-voice-setup.cjs. Every page, calls and typing messages by voice: added by aura-voice-more-setup.cjs.
 import { useEffect, useRef, useState } from "react";
 import { mediaNow, next, prev, toggle, setVolume, toggleMute, setTab } from "./media";
+import { callActions, callsAvailable, useCall } from "./calls";
+import { useFriendsForVoice, openChatWith, voiceCompose } from "./messages";
 
 const api = () => (typeof window !== "undefined" ? window.electronAPI : null);
 export const voiceAvailable = () =>
@@ -12,14 +14,46 @@ export const voiceAvailable = () =>
 const SAY = [
   ["Music and videos", "next song · previous song · pause · play · volume up · volume down · mute · unmute"],
   ["Recording", "start recording · stop recording"],
-  ["Getting around", "open home · open library · open clips · open media · open messages · open settings · show the bar"],
+  ["Getting around", "open, or go to, then any page on the left: home · library · recently played · favorites · live streams · social · messages · clips · media · sessions · performance · achievements · customize · settings. And show the bar"],
   ["Games", "launch, then a game's name from your library, like “launch Fortnite”"],
+  ["Calls", "call, then a friend's name, like “call Jordan” · answer · decline · hang up · mute my mic · unmute my mic"],
+  ["Messages", "message, then a friend's name, then say your message. Say “send” to send it or “cancel” to clear it. “start typing” types into the chat that's open"],
 ];
-const PAGES = { home: "home", library: "library", clips: "clips", media: "clips", messages: "messages", settings: "settings" };
+const PAGES = {
+  home: "home", library: "library", recent: "recent", favorites: "favorites", streams: "streams", social: "social", messages: "messages",
+  clips: "clips", media: "clips", sessions: "sessions", performance: "performance", achievements: "achievements", customize: "customize", settings: "settings",
+};
 const WINDOWS_KEY = { next: "next", prev: "prev", pause: "playpause", play: "playpause", up: "up", down: "down", mute: "mute", unmute: "mute" };
 
-function run(c, { games, play, go, toast }) {
+function run(c, { games, play, go, toast, friends, call }) {
   if (!c || typeof c !== "object") return;
+  const friend = () => (friends || []).find((f) => f.state === "friend" && f.username === c.who);
+  if (c.action === "call") {
+    if (!callsAvailable()) { toast("Calls don't work on this PC", "err"); return; }
+    if (c.detail === "start") {
+      const f = friend();
+      if (!f) toast(`${c.who || "That person"} isn't one of your friends`, "err");
+      else if (call && call.phase !== "over") toast("You're already in a call", "err");
+      else callActions.start({ userId: f.userId, username: f.username, avatarUrl: f.avatarUrl || "" });
+    }
+    else if (c.detail === "answer") callActions.accept();
+    else if (c.detail === "decline") callActions.decline();
+    else if (c.detail === "hangup") callActions.hangUp();
+    else if (c.detail === "mute") { if (call && !call.muted) callActions.toggleMute(); }
+    else if (c.detail === "unmute") { if (call && call.muted) callActions.toggleMute(); }
+    return;
+  }
+  if (c.action === "message") {
+    const f = friend();
+    if (f) openChatWith(f.userId); else toast(`${c.who || "That person"} isn't one of your friends`, "err");
+    return;
+  }
+  if (c.action === "type") {
+    if (c.detail === "text" && typeof c.text === "string") { if (!voiceCompose.add(c.text)) toast("Open a chat first, then say what to type", "err"); }
+    else if (c.detail === "send") voiceCompose.send();
+    else if (c.detail === "cancel") voiceCompose.clear();
+    return;
+  }
   if (c.action === "media") {
     const m = mediaNow();
     if (!m.item) { const key = WINDOWS_KEY[c.detail]; if (key) api().voiceKey?.(key); return; } // nothing in AURA's player: Windows' media keys (Spotify, a browser…)
@@ -46,10 +80,14 @@ function run(c, { games, play, go, toast }) {
 
 // Does what you said, and keeps the list of game names up to date
 export function useVoiceCommands({ games, play, go, toast }) {
-  const live = useRef({ games, play, go, toast });
-  live.current = { games, play, go, toast };
+  const friends = useFriendsForVoice();
+  const call = useCall();
+  const live = useRef({ games, play, go, toast, friends, call });
+  live.current = { games, play, go, toast, friends, call };
   const titles = JSON.stringify((games || []).filter((g) => g.exePath && g.title).map((g) => g.title));
   useEffect(() => { if (voiceAvailable()) api().voiceGames?.(JSON.parse(titles))?.catch?.(() => {}); }, [titles]);
+  const names = JSON.stringify((friends || []).filter((f) => f.state === "friend" && f.username).map((f) => f.username));
+  useEffect(() => { if (voiceAvailable()) api().voiceFriends?.(JSON.parse(names))?.catch?.(() => {}); }, [names]);
   useEffect(() => {
     if (!voiceAvailable() || typeof api().onVoiceCommand !== "function") return;
     return api().onVoiceCommand((c) => { try { run(c, live.current); } catch {} });
@@ -62,10 +100,19 @@ export function VoiceSign() {
   useEffect(() => {
     if (!voiceAvailable()) return;
     let timer = 0;
-    const show = (s, ms) => { clearTimeout(timer); setSign(s); timer = setTimeout(() => setSign(null), ms); };
+    let typing = false;
+    const show = (s, ms) => { clearTimeout(timer); setSign(s); if (ms) timer = setTimeout(() => setSign(null), ms); };
     const offs = [
-      api().onVoiceStatus?.((s) => { if (s?.state === "awake") show({ text: "Listening… say a command" }, 6000); }),
-      api().onVoiceCommand?.((c) => { if (c?.said) show({ text: c.said, done: true }, 1800); }),
+      api().onVoiceStatus?.((s) => {
+        if (s?.state === "awake") show({ text: "Listening… say a command" }, 6000);
+        else if (s?.state === "typing") { typing = true; show({ text: "Typing your message… say “send” or “cancel”", typing: true }, 0); }
+        else if (typing) { typing = false; show(null, 0); }
+      }),
+      api().onVoiceCommand?.((c) => {
+        if (c?.action === "type" && c.detail === "text") return; // the words go into the message box
+        if (c?.action === "type" && c.detail === "stop") { typing = false; show({ text: "Stopped typing. Your message wasn't sent", done: true, plain: true }, 2500); return; }
+        if (c?.said && !typing) show({ text: c.said, done: true }, 1800);
+      }),
     ];
     return () => { clearTimeout(timer); offs.forEach((off) => { try { off?.(); } catch {} }); };
   }, []);
@@ -74,7 +121,7 @@ export function VoiceSign() {
     <div className={`vc-sign${sign.done ? " done" : ""}`} role="status" aria-live="polite">
       <style>{CSS}</style>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">{sign.done ? <path d="M5 12.5l4.5 4.5L19 7.5" /> : <><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" /></>}</svg>
-      <span>{sign.done ? `“${sign.text}”` : sign.text}</span>
+      <span>{sign.done && !sign.plain ? `“${sign.text}”` : sign.text}</span>
     </div>
   );
 }
