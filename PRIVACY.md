@@ -1,7 +1,7 @@
 <!-- Added by aura-messages-setup.cjs; updated by aura-privacy-update-setup.cjs. The same words are shown inside AURA (src/components/privacy.jsx). -->
 # AURA privacy policy
 
-Last updated October 27, 2026
+Last updated October 29, 2026
 
 ## The short version
 
@@ -16,7 +16,7 @@ Most of what AURA does stays on your PC. If you create an AURA account, the thin
 - Your login, kept encrypted by Windows so you stay signed in.
 - How you've set up the Messages page, including a background picture of your own.
 - Which camera, microphone and speakers you chose, the sound devices you picked in Settings > Sound devices, and your Quick Switch favourites.
-- Your music and video library in Clips > Media: the folders you added, your playlists, and copies AURA converts so a file can play. None of it is uploaded.
+- Your music and video library in Clips > Media: the folders you added, your playlists, YouTube links you saved, and copies AURA converts so a file can play. None of it is uploaded.
 - Sign-ins and cookies for websites you open in AURA's Social browser (Instagram, X and others), kept the way any web browser keeps them.
 
 ## What is saved to your account
@@ -44,7 +44,7 @@ Messages are protected on their way to and from AURA, but they are not end-to-en
 
 ## Calls
 
-You can call your AURA friends with your voice and, if you choose, your camera, and you can share your screen. AURA uses your microphone, camera or screen only while you're in a call and have them switched on, or while you record a clip with the camera on.
+You can call your AURA friends with your voice and, if you choose, your camera, and you can share your screen. AURA uses your microphone, camera or screen only while you're in a call and have them switched on, or while you record a clip with the camera on. Voice commands also use your microphone while you have them switched on (see Voice commands).
 
 When a call is accepted, the PCs connect to each other and the sound and picture travel between them, encrypted. They don't pass through AURA's database and they aren't recorded.
 

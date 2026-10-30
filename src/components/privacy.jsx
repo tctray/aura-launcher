@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-const UPDATED = "October 27, 2026";
+const UPDATED = "October 29, 2026"; // (Updated by aura-privacy-voice-setup.cjs)
 const EMAIL = "aura.launcherofficial@gmail.com"; // support, privacy questions and account removal (Updated by aura-privacy-update-setup.cjs)
 const ISSUES = "https://github.com/tctray/aura-launcher/issues";
 
@@ -36,7 +36,7 @@ export const PRIVACY_SECTIONS = [
         "Your login, kept encrypted by Windows so you stay signed in.",
         "How you've set up the Messages page, including a background picture of your own.",
         "Which camera, microphone and speakers you chose, the sound devices you picked in Settings > Sound devices, and your Quick Switch favourites.",
-        "Your music and video library in Clips > Media: the folders you added, your playlists, and copies AURA converts so a file can play. None of it is uploaded.",
+        "Your music and video library in Clips > Media: the folders you added, your playlists, YouTube links you saved, and copies AURA converts so a file can play. None of it is uploaded.",
         "Sign-ins and cookies for websites you open in AURA's Social browser (Instagram, X and others), kept the way any web browser keeps them.",
       ],
     ],
@@ -70,7 +70,7 @@ export const PRIVACY_SECTIONS = [
   {
     title: "Calls",
     body: [
-      "You can call your AURA friends with your voice and, if you choose, your camera, and you can share your screen. AURA uses your microphone, camera or screen only while you're in a call and have them switched on, or while you record a clip with the camera on.",
+      "You can call your AURA friends with your voice and, if you choose, your camera, and you can share your screen. AURA uses your microphone, camera or screen only while you're in a call and have them switched on, or while you record a clip with the camera on. Voice commands also use your microphone while you have them switched on (see Voice commands).",
       "When a call is accepted, the PCs connect to each other and the sound and picture travel between them, encrypted. They don't pass through AURA's database and they aren't recorded.",
       "To connect, each PC is told the other's internet (IP) address. This happens only after a call is accepted, and only with the people in the call. In a call with three people, a friend can add one of their own friends, so you may connect to, and share your IP address with, someone who isn't your friend. If you'd rather not, leave the call.",
       "On a few networks PCs can't connect directly. If AURA has a relay set up for that, the encrypted call passes through it instead. The relay can't listen to it or watch it.",

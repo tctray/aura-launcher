@@ -1,7 +1,7 @@
 // Voice commands (electron/voice.js): what AURA listens for, what it does with what it hears, and
 // that it stays off until you switch it on. The Windows helper is replaced by a pretend one that
 // "hears" phrases, so this runs anywhere. Added by aura-voice-setup.cjs. Every page, calls and typing
-// messages by voice: updated by aura-voice-more-setup.cjs.
+// messages by voice: updated by aura-voice-more-setup.cjs; the sign mid-sentence by aura-voice-bubble-setup.cjs.
 "use strict";
 const fs = require("fs");
 const os = require("os");
@@ -85,6 +85,18 @@ const commands = (sent) => sent.filter(([c]) => c === "voice-command").map(([, d
   h.say({ type: "heard", text: "hey aura", conf: 0.8 }); t.tick(7000);
   h.say({ type: "heard", text: "next", conf: 0.9 });
   check("after 6 seconds it stops waiting", commands(t.sent).length === 2);
+  // Said in one go: the sign shows while you're still talking (Added by aura-voice-bubble-setup.cjs)
+  const awake = () => t.sent.filter(([c, d]) => c === "voice-status" && d.state === "awake").length;
+  t.tick(10000); let shown = awake();
+  h.say({ type: "hyp", text: "hey", conf: 0.2 });
+  h.say({ type: "hyp", text: "hey aura next", conf: 0.3 });
+  check("“Hey AURA, next song” in one go: the Listening sign shows as soon as “Hey AURA” is heard", awake() === shown + 1);
+  h.say({ type: "hyp", text: "hey aura next song", conf: 0.4 });
+  check("...once, not again for every word", awake() === shown + 1);
+  t.tick(4000); shown = awake();
+  h.say({ type: "hyp", text: "next song", conf: 0.5 });
+  check("...and not for words without “Hey AURA”", awake() === shown);
+  check("...it only shows the sign: nothing is done until the whole sentence is heard", commands(t.sent).length === 2);
   h.say({ type: "heard", text: "hey aura start recording", conf: 0.9 });
   h.say({ type: "heard", text: "hey aura stop recording", conf: 0.9 });
   check("recording is started and stopped by AURA itself", JSON.stringify(t.record) === JSON.stringify(["start", "stop"]));

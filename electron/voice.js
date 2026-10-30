@@ -6,7 +6,7 @@
 // the names of the games in your library, so it can't take any other command. Nothing is recorded,
 // saved or sent anywhere, and nothing is downloaded or installed. On Linux and Mac this does nothing.
 //
-// Added by aura-voice-setup.cjs; pages, calls and typing messages by voice added by aura-voice-more-setup.cjs. Wired up from the main file with one line:
+// Added by aura-voice-setup.cjs; pages, calls and typing messages by voice added by aura-voice-more-setup.cjs; the sign mid-sentence by aura-voice-bubble-setup.cjs. Wired up from the main file with one line:
 //   const voice = require("./voice").create({ app, ipcMain, getWindow: () => mainWin, onRecord: (a) => ..., onBar: () => toggleBar() });
 "use strict";
 const fs = require("fs");
@@ -170,6 +170,8 @@ namespace AuraVoice
             rec.SetInputToDefaultAudioDevice();
             Load();
             rec.SpeechRecognized += (s, e) => Emit("heard", e.Result.Text, e.Result.Confidence, e.Result.Grammar != null ? e.Result.Grammar.Name : "");
+            // While you're still talking: what Windows thinks it's hearing so far (for the Listening sign)
+            rec.SpeechHypothesized += (s, e) => { if (!typing) Emit("hyp", e.Result.Text, e.Result.Confidence, ""); };
             rec.RecognizerUpdateReached += (s, e) => { try { Load(); } catch (Exception x) { Emit("error", x.Message, 0); } };
             rec.RecognizeAsync(RecognizeMode.Multiple);
             return pick.Culture.Name;
@@ -271,6 +273,7 @@ function create({ app, ipcMain, getWindow = () => null, onRecord = () => {}, onB
   let proc = null, buffer = "", state = "off", error = "", lang = "";
   const heard = { awakeUntil: 0, typing: false };
   let games = new Map(), friends = new Map(), quiet = null;
+  let signAt = -1e9; // when the Listening sign was last shown for "Hey AURA" heard mid-sentence
   const status = () => ({ supported: windows, enabled: prefs.enabled, state, error, language: lang });
   const tell = (channel, data) => { try { const w = getWindow(); if (w && !w.isDestroyed()) w.webContents.send(channel, data); } catch {} };
   const setState = (s, e = "") => { state = s; error = e; tell("voice-status", status()); };
@@ -319,6 +322,12 @@ function create({ app, ipcMain, getWindow = () => null, onRecord = () => {}, onB
         let msg; try { msg = JSON.parse(line); } catch { continue; }
         if (msg.type === "ready") { lang = String(msg.text || "").slice(0, 20); setState("listening"); }
         else if (msg.type === "error") { const e = explain(msg.text); stop(); setState("error", e); return; }
+        // "Hey AURA, next song" said in one go: show the Listening sign as soon as "Hey AURA" is heard,
+        // not only after the whole sentence (aura-voice-bubble-setup.cjs)
+        else if (msg.type === "hyp" && state === "listening" && !heard.typing) {
+          const t = String(msg.text || "").toLowerCase().replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
+          if ((t === WAKE || t.startsWith(WAKE + " ")) && now() - signAt > 3000) { signAt = now(); tell("voice-status", { ...status(), state: "awake" }); }
+        }
         else if (msg.type === "heard" && state === "listening") { const m = interpret(msg.text, Number(msg.conf), heard, { games, friends }, now(), String(msg.g || "aura")); if (m) act(m); }
       }
     });
