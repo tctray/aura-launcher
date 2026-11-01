@@ -197,6 +197,8 @@ contextBridge.exposeInMainWorld("auraCloud", {
   getMyProfile: () => ipcRenderer.invoke("profile:getMine"),
   saveProfile: (username, avatarUrl) => ipcRenderer.invoke("profile:save", username, avatarUrl),
   getProfile: (username) => ipcRenderer.invoke("profile:get", username),
+  getAvatarDecorations: (ids) => ipcRenderer.invoke("profile:decorations", ids), // seasonal avatar decorations (Added by aura-seasonal-setup.cjs)
+  saveAvatarDecoration: (decor) => ipcRenderer.invoke("profile:saveDecoration", decor),
   getMyGames: () => ipcRenderer.invoke("games:getMine"),
   saveMyGames: (games) => ipcRenderer.invoke("games:saveMine", games),
   getMyData: () => ipcRenderer.invoke("data:getMine"),

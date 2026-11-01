@@ -12,6 +12,8 @@ import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { ClipsAndMedia, MediaDock } from "./components/media"; // Clips > Media, and the mini player (Added by aura-media-player-setup.cjs)
 import { SettingsTabs, SoundDevicesTab, useSettingsTab } from "./components/sounddevices"; // Settings > Sound devices (Added by aura-sound-devices-setup.cjs)
 import { VoiceSettings, VoiceSign, useVoiceCommands } from "./components/voice"; // "Hey AURA" voice commands (Added by aura-voice-setup.cjs)
+import { SeasonalLayer, SeasonalLogo, SeasonalSettings, NavAccentStyle } from "./components/seasonal"; // seasonal decorations (Added by aura-seasonal-setup.cjs)
+import { DecoratedAvatar, AvatarDecorations } from "./components/avatardecor";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
 import { backgroundForTheme, resolveThemeBackground, forgetThemePicture, themePicture, isWebPicture } from "./components/themebg"; // a saved theme keeps its background (Added by aura-theme-backgrounds-setup.cjs)
 import { CameraButton, CameraPanel, CameraSettings, cameraOverlay } from "./components/camera"; // the camera (Added by aura-camera-setup.cjs)
@@ -1692,16 +1694,17 @@ function ProfileModal({ profile, onClose, onSave }) {
   const [username, setUsername] = useState(profile?.username || "");
   const [avatar, setAvatar] = useState(profile?.avatar || "");
   const [avatarErr, setAvatarErr] = useState(false);
+  const decorRef = useRef(null); // Avatar Decorations, saved with the profile (Added by aura-seasonal-setup.cjs)
   return (
     <div className="mbk" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal">
         <div className="mh"><div className="mt">EDIT PROFILE</div><button className="mc" onClick={onClose}><Ic.X/></button></div>
         <div className="mb">
           <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
-            {avatar && !avatarErr
+            <DecoratedAvatar self size={64}>{avatar && !avatarErr
               ? <img src={avatar} alt="avatar" style={{width:64,height:64,borderRadius:"50%",objectFit:"cover",border:"3px solid var(--ac)"}} onError={()=>setAvatarErr(true)}/>
               : <div style={{width:64,height:64,borderRadius:"50%",background:"var(--card)",border:"3px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>🎮</div>
-            }
+            }</DecoratedAvatar>
           </div>
           <div className="fg"><label className="fl">Username *</label><input className="fi" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Your username"/></div>
           <div className="fg" style={{marginBottom:0}}>
@@ -1711,8 +1714,9 @@ function ProfileModal({ profile, onClose, onSave }) {
               <button className="btn-p" style={{flexShrink:0}} onClick={async()=>{const result=await pickImageFile();if(result){setAvatar(result);setAvatarErr(false);}}}>Browse</button>
             </div>
           </div>
+          <AvatarDecorations ref={decorRef} picture={avatar && !avatarErr ? avatar : ""} Seg={Seg} SetRange={SetRange}/>{/* (Added by aura-seasonal-setup.cjs) */}
         </div>
-        <div className="mf">{account?.requestDelete&&account.user&&!account.user.offline&&<button className="btn-gh aura-delete-account" style={{marginRight:"auto",color:"#ff8fa3",borderColor:"rgba(255,77,109,.35)"}} onClick={()=>{onClose();account.requestDelete();}}>Delete account</button>}{/* (Added by aura-account-delete-setup.cjs) */}<button className="btn-gh" onClick={onClose}>Cancel</button><button className="btn-p" onClick={()=>{if(!username.trim()) return;onSave({...profile, username:username.trim(), avatar:avatar.trim()});}}>Save</button></div>
+        <div className="mf">{account?.requestDelete&&account.user&&!account.user.offline&&<button className="btn-gh aura-delete-account" style={{marginRight:"auto",color:"#ff8fa3",borderColor:"rgba(255,77,109,.35)"}} onClick={()=>{onClose();account.requestDelete();}}>Delete account</button>}{/* (Added by aura-account-delete-setup.cjs) */}<button className="btn-gh" onClick={onClose}>Cancel</button><button className="btn-p" onClick={async()=>{if(!username.trim()) return;const problem=await decorRef.current?.save?.();if(problem) return;onSave({...profile, username:username.trim(), avatar:avatar.trim()});}}>Save</button></div>
       </div>
     </div>
   );
@@ -3167,6 +3171,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
           <div className="sr"><div><div className="sr-l">Show Play Counts</div><div className="sr-s">Display playtime or session counts on each card</div></div><Tog k="counts"/></div>
         </div>
       </div>
+      <SeasonalSettings Seg={Seg} SetRange={SetRange}/>{/* Settings > Seasonal Decorations (Added by aura-seasonal-setup.cjs) */}
       <div className="ss">
         <div className="ss-t">CALLS AND MESSAGES</div>
         <div className="ss-card">
@@ -4048,14 +4053,14 @@ function AuraApp(){
               {sidebarOpen?<Ic.MenuClose/>:<Ic.Menu/>}
             </button>
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",marginBottom:16,gap:4,width:"100%"}}>
-              <div className="gm-rail-logo" style={{background:"transparent",boxShadow:"none",overflow:"hidden",padding:2,width:sidebarOpen?"auto":48,height:sidebarOpen?76:68,maxWidth:"100%",marginBottom:sidebarOpen?0:16}}><img src="./aura-logo.png" alt="AURA" style={{width:sidebarOpen?"auto":"100%",height:"100%",maxWidth:"100%",objectFit:"contain"}}/></div>
+              <div className="gm-rail-logo" style={{background:"transparent",boxShadow:"none",overflow:"visible",padding:2,width:sidebarOpen?"auto":48,height:sidebarOpen?76:68,maxWidth:"100%",marginBottom:sidebarOpen?0:16}}><SeasonalLogo style={{height:"100%",maxWidth:"100%"}}><img src="./aura-logo.png" alt="AURA" style={{width:sidebarOpen?"auto":"100%",height:"100%",maxWidth:"100%",objectFit:"contain"}}/></SeasonalLogo></div>
             </div>
             {/* Profile, centered at the top of the rail */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,width:"100%",marginBottom:8}}>
-              {profile.avatar
+              <DecoratedAvatar self size={profile.avatar?56:36}>{profile.avatar
                 ? <img src={profile.avatar} alt={profile.username} className="gm-rail-avatar" style={{margin:0}} onClick={()=>setShowProfileModal(true)}/>
                 : <div className="gm-rail-avatar-ph" style={{margin:0}} onClick={()=>setShowProfileModal(true)}>🎮</div>
-              }
+              }</DecoratedAvatar>
             </div>
             {navItems.map(it=>(
               <div key={it.id} className={`gm-rail-item ${view===it.id?"on":""}`} onClick={()=>goTo(it.id)} title={it.label}>
@@ -4109,6 +4114,7 @@ function AuraApp(){
         <CameraPanel settings={settings} onSettings={updateSettings}/>
         <MediaDock onOpen={()=>goTo("clips")}/>{/* (Added by aura-media-player-setup.cjs) */}
         <VoiceSign/>{/* (Added by aura-voice-setup.cjs) */}
+        <SeasonalLayer playing={!!nowPlaying}/><NavAccentStyle/>{/* seasonal decorations (Added by aura-seasonal-setup.cjs) */}
         {isRecording&&<RecordingIndicator game={recGame} elapsed={recElapsed} onStop={async()=>{ if(isQuickRecording()) stopQuickRecording(); else await window.electronAPI?.stopRecording(); setIsRecording(false);}}/>}
         <div className="tc">
           {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
@@ -4130,17 +4136,17 @@ function AuraApp(){
           <div className="sb-logo">
             {sidebarOpen
               ? <>
-                  <img src="./aura-logo.png" alt="AURA" style={{align:"center",height:44,width:"auto",maxWidth:"calc(100% - 44px)",objectFit:"contain"}}/>
+                  <SeasonalLogo style={{maxWidth:"calc(100% - 44px)"}}><img src="./aura-logo.png" alt="AURA" style={{align:"center",height:44,width:"auto",maxWidth:"100%",objectFit:"contain"}}/></SeasonalLogo>
                   <button className="sb-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu"><Ic.MenuClose/></button>
                 </>
               : <>
                   <button className="sb-toggle" onClick={()=>setSidebarOpen(o=>!o)} title="Toggle menu" style={{margin:"0 auto"}}><Ic.Menu/></button>
-                  <img src="./aura-logo.png" alt="AURA" style={{width:48,height:48,objectFit:"contain",margin:"0 auto"}}/>
+                  <SeasonalLogo style={{margin:"0 auto"}}><img src="./aura-logo.png" alt="AURA" style={{width:48,height:48,objectFit:"contain",margin:"0 auto"}}/></SeasonalLogo>
                 </>
             }
           </div>
           <div className="sb-profile" style={{flexDirection:"column",justifyContent:"center",textAlign:"center",gap:8}} onClick={()=>setShowProfileModal(true)}>
-            {profile.avatar?<img src={profile.avatar} alt={profile.username} className="sb-pav"/>:<div className="sb-pav-ph">🎮</div>}
+            <DecoratedAvatar self size={36}>{profile.avatar?<img src={profile.avatar} alt={profile.username} className="sb-pav"/>:<div className="sb-pav-ph">🎮</div>}</DecoratedAvatar>
             {sidebarOpen&&<div style={{minWidth:0,maxWidth:"100%"}}><div className="sb-pname">{profile.username}</div><div className="sb-pedit">Edit profile</div></div>}
           </div>
           <div className="sb-sec">
@@ -4274,6 +4280,7 @@ function AuraApp(){
       <CameraPanel settings={settings} onSettings={updateSettings}/>
       <MediaDock onOpen={()=>goTo("clips")}/>{/* (Added by aura-media-player-setup.cjs) */}
       <VoiceSign/>{/* (Added by aura-voice-setup.cjs) */}
+      <SeasonalLayer playing={!!nowPlaying}/><NavAccentStyle/>{/* seasonal decorations (Added by aura-seasonal-setup.cjs) */}
       <div className="tc">
         {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}
         {toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="tdot"/><span>{t.msg}</span></div>))}

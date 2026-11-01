@@ -571,6 +571,7 @@ ipcMain.handle("auth:resetPasswordWithCode", cloudHandler(auraCloud.resetPasswor
 ipcMain.handle("profile:getMine", cloudHandler(auraCloud.getMyProfile));
 ipcMain.handle("profile:save", cloudHandler(auraCloud.saveProfile));
 ipcMain.handle("profile:get", cloudHandler(auraCloud.getProfile));
+require("./decor").register(ipcMain, cloudHandler, auraCloud); // avatar decorations (Added by aura-seasonal-setup.cjs)
 // The media player: Clips > Media (Added by aura-media-player-setup.cjs)
 require("./media").create({ app, ipcMain, dialog, getWindow: () => mainWin });
 // Release check: GitHub starts the freshly installed AURA with --aura-smoke-test. AURA opens as usual,

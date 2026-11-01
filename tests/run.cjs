@@ -33,6 +33,9 @@ if (fs.existsSync(shareFile) && fs.existsSync(path.join(__dirname, "share-errors
 const accountFile = path.join(ROOT, "electron", "account.js");
 if (fs.existsSync(accountFile) && fs.existsSync(path.join(__dirname, "account-delete.cjs"))) add("files", "Deleting your account: password first, files, then the account", "account-delete.cjs", [accountFile]);
 if (fs.existsSync(path.join(sqlDir, "aura-account-delete.sql")) && fs.existsSync(path.join(sqlDir, "aura-messages-groups.sql")) && fs.existsSync(path.join(sqlDir, "aura-calls-group.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-account-delete.mjs"))) add("messages", "Database rules: deleting your account", "messages/sql-account-delete.mjs");
+// Seasonal decorations and avatar decorations (Added by aura-seasonal-setup.cjs)
+if (fs.existsSync(path.join(ROOT, "electron", "decor.js")) && fs.existsSync(path.join(__dirname, "seasonal-decor.cjs"))) add("files", "Avatar decorations: what is saved and passed on", "seasonal-decor.cjs");
+if (fs.existsSync(path.join(sqlDir, "aura-seasonal.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-seasonal.mjs"))) add("messages", "Database rules: avatar decorations", "messages/sql-seasonal.mjs");
 // Voice commands (Added by aura-voice-setup.cjs)
 if (fs.existsSync(path.join(ROOT, "electron", "voice.js")) && fs.existsSync(path.join(__dirname, "voice.cjs"))) add("files", "Voice commands: what AURA listens for and does", "voice.cjs");
 // Choosing sound devices (Added by aura-sound-devices-setup.cjs)
@@ -116,6 +119,7 @@ if (fs.existsSync(path.join(__dirname, "release-window.cjs"))) add("window", "F9
 if (fs.existsSync(path.join(__dirname, "media-player.cjs"))) add("window", "Clips > Media: playing, the mini player, playlists", "media-player.cjs"); // (Added by aura-media-player-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "sound-settings.cjs"))) add("window", "Settings > Sound devices, and the bar's sound button", "sound-settings.cjs"); // (Added by aura-sound-devices-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "voice-window.cjs"))) add("window", "Settings > Voice Commands, and doing what you said", "voice-window.cjs"); // (Added by aura-voice-setup.cjs)
+if (fs.existsSync(path.join(__dirname, "seasonal-window.cjs"))) add("window", "Seasonal decorations and avatar decorations", "seasonal-window.cjs"); // (Added by aura-seasonal-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "delete-account.cjs"))) add("window", "Deleting your account", "delete-account.cjs"); // (Added by aura-account-delete-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "twitch-favorites.cjs"))) add("window", "Twitch favorites and live notices", "twitch-favorites.cjs");
 if (fs.existsSync(path.join(__dirname, "achievements.cjs"))) add("window", "Achievements count everything", "achievements.cjs");

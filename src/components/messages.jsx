@@ -22,6 +22,7 @@ import { createPortal } from "react-dom";
 import { PrivacyButton } from "./privacy";
 import { chime } from "./sounds"; // your message sound (Settings > Calls and messages)
 import { CallButton, IconPhone, MISSED_CALL, callActions, callHooks, callsAvailable, mountCallLayer, useCall } from "./calls";
+import { DecoratedAvatar } from "./avatardecor"; // seasonal avatar decorations (Added by aura-seasonal-setup.cjs)
 
 // ── Talking to the main process ───────────────────────────────────────────────
 async function call(name, ...args) {
@@ -639,14 +640,16 @@ const IconDislike = ({ size = 15 }) => <Svg d={<path d="M10 15v4a3 3 0 0 0 3 3l4
 const IconSearch = () => <Svg d={<><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></>} size={15} />;
 const IconGame = () => <Svg d={<><rect x="2.5" y="7" width="19" height="10" rx="5"/><path d="M7.5 10.5v3M6 12h3M15.5 11h.01M17.5 13h.01"/></>} />;
 
-function Avatar({ name, url, size = 38, online = null }) {
+function Avatar({ name, url, size = 38, online = null, userId = null }) {
   const [broken, setBroken] = useState(false);
   const letter = (String(name || "?").trim()[0] || "?").toUpperCase();
   return (
+    <DecoratedAvatar userId={userId} size={size}>{/* their seasonal decorations, if they chose any (Added by aura-seasonal-setup.cjs) */}
     <span className="mx-av" style={{ width: size, height: size, fontSize: Math.round(size * 0.42) }}>
       {url && !broken ? <img src={url} alt="" onError={() => setBroken(true)} /> : <span className="mx-av-l">{letter}</span>}
       {online !== null && <span className={`mx-dot ${online ? "on" : ""}`} title={online ? "Online" : "Offline"} />}
     </span>
+    </DecoratedAvatar>
   );
 }
 
@@ -655,12 +658,12 @@ function GroupAvatar({ conversation, size = 40 }) {
   const me = state.me?.id;
   const others = (conversation.members || []).filter((m) => m.userId !== me);
   const [a, b] = others.length ? others : [{ username: conversation.title }];
-  if (!b) return <Avatar name={a.username} url={a.avatarUrl} size={size} />;
+  if (!b) return <Avatar name={a.username} userId={a.userId} url={a.avatarUrl} size={size} />;
   const small = Math.round(size * 0.68);
   return (
     <span className="mx-gav" style={{ width: size, height: size }} aria-hidden="true">
-      <Avatar name={a.username} url={a.avatarUrl} size={small} />
-      <Avatar name={b.username} url={b.avatarUrl} size={small} />
+      <Avatar name={a.username} userId={a.userId} url={a.avatarUrl} size={small} />
+      <Avatar name={b.username} userId={b.userId} url={b.avatarUrl} size={small} />
     </span>
   );
 }
@@ -976,7 +979,7 @@ function FriendsManager({ variant = "panel", onMessaged }) {
   const friends = s.friends.filter((f) => f.state === "friend").sort((a, b) => Number(b.online) - Number(a.online) || a.username.localeCompare(b.username));
   const Row = ({ f, sub, children }) => (
     <div className="mx-fr">
-      <Avatar name={f.username} url={f.avatarUrl} size={34} online={f.state === "friend" ? f.online : null} />
+      <Avatar name={f.username} userId={f.userId} url={f.avatarUrl} size={34} online={f.state === "friend" ? f.online : null} />
       <div className="mx-fr-i"><div className="mx-fr-n">{f.username}</div><div className="mx-fr-s">{sub}</div></div>
       <div className="mx-fr-a">{children}</div>
     </div>
@@ -1028,7 +1031,7 @@ function FriendsManager({ variant = "panel", onMessaged }) {
       )}
       {showBlocked && s.blocked.map((b) => (
         <div className="mx-fr" key={b.userId}>
-          <Avatar name={b.username} url={b.avatarUrl} size={34} />
+          <Avatar name={b.username} userId={b.userId} url={b.avatarUrl} size={34} />
           <div className="mx-fr-i"><div className="mx-fr-n">{b.username}</div><div className="mx-fr-s">Can't message or add you</div></div>
           <div className="mx-fr-a"><button type="button" className="mx-mini" onClick={() => unblock(b)} disabled={!!busy}>Unblock</button></div>
         </div>
@@ -1073,7 +1076,7 @@ function CallPicker({ onClose }) {
       <div className="mx-callpick-list" role="list">
         {shown.map((f) => (
           <button key={f.friendshipId} type="button" role="listitem" className={`mx-callpick-row ${f.online ? "" : "off"}`} disabled={busy} onClick={() => { callActions.start(toPerson(f)); onClose(); }} title={`Call ${f.username}`}>
-            <Avatar name={f.username} url={f.avatarUrl} size={36} online={f.online} />
+            <Avatar name={f.username} userId={f.userId} url={f.avatarUrl} size={36} online={f.online} />
             <span className="mx-callpick-i"><span className="mx-callpick-n">{f.username}</span><span className="mx-callpick-s">{f.online ? "Online" : "Offline"}</span></span>
             <span className="mx-callpick-go"><IconPhone size={14} /> Call</span>
           </button>
@@ -1111,7 +1114,7 @@ function ConversationList() {
           : missed || lastText;
         return (
           <button key={c.id} type="button" role="listitem" className={`mx-conv ${s.activeId === c.id ? "on" : ""} ${c.unread ? "unread" : ""}`} onClick={() => actions.open(c.id)}>
-            {c.isGroup ? <GroupAvatar conversation={c} size={40} /> : <Avatar name={c.username} url={c.avatarUrl} size={40} online={c.isFriend ? c.online : null} />}
+            {c.isGroup ? <GroupAvatar conversation={c} size={40} /> : <Avatar name={c.username} userId={c.userId} url={c.avatarUrl} size={40} online={c.isFriend ? c.online : null} />}
             <span className="mx-conv-m">
               <span className="mx-conv-top"><span className="mx-conv-n">{c.username}</span><span className="mx-conv-t">{last ? shortTime(c.lastMessageAt) : ""}</span></span>
               <span className="mx-conv-bot">
@@ -1154,7 +1157,7 @@ function ProfileCard({ conversation, onClose, onReport }) {
   };
   return (
     <div className="mx-pop mx-profile" ref={box} role="dialog" aria-label={`${conversation.username}'s profile`}>
-      <Avatar name={conversation.username} url={profile?.avatarUrl || conversation.avatarUrl} size={64} />
+      <Avatar name={conversation.username} userId={conversation.userId} url={profile?.avatarUrl || conversation.avatarUrl} size={64} />
       <div className="mx-profile-n">{profile?.username || conversation.username}</div>
       <div className="mx-profile-s">{conversation.isFriend ? (conversation.online ? "Online" : "Offline") : "Not in your friends"}</div>
       {error && <div className="mx-note err">{error}</div>}
@@ -1450,7 +1453,7 @@ function FriendTicks({ picked, setPicked, room, skip = [] }) {
           return (
             <label key={f.userId} className={`mx-tick ${on ? "on" : ""} ${!on && picked.length >= room ? "full" : ""}`}>
               <input type="checkbox" checked={on} disabled={!on && picked.length >= room} onChange={() => toggle(f.userId)} />
-              <Avatar name={f.username} url={f.avatarUrl} size={32} online={f.online} />
+              <Avatar name={f.username} userId={f.userId} url={f.avatarUrl} size={32} online={f.online} />
               <span className="mx-tick-n">{f.username}</span>
             </label>
           );
@@ -1536,7 +1539,7 @@ function GroupCard({ conversation, onClose }) {
       <div className="mx-gpeople" role="list">
         {conversation.members.map((m) => (
           <div key={m.userId} className="mx-gperson" role="listitem">
-            <Avatar name={m.username} url={m.avatarUrl} size={32} online={m.userId === me ? null : m.isFriend ? m.online : null} />
+            <Avatar name={m.username} userId={m.userId} url={m.avatarUrl} size={32} online={m.userId === me ? null : m.isFriend ? m.online : null} />
             <span className="mx-gperson-n">{m.userId === me ? "You" : m.username}{m.owner && <small>Made the group</small>}{m.userId !== me && !m.isFriend && <small>Not in your friends</small>}</span>
             {owner && m.userId !== me && <button type="button" className="mx-link" onClick={() => remove(m)} disabled={busy}>Remove</button>}
           </div>
@@ -1586,7 +1589,7 @@ function GroupCallPicker({ conversation, onClose }) {
           return (
             <label key={m.userId} className={`mx-tick ${on ? "on" : ""}`}>
               <input type="checkbox" checked={on} disabled={busy || (!on && picked.length >= room)} onChange={() => setPicked((cur) => (on ? cur.filter((x) => x !== m.userId) : [...cur, m.userId]))} />
-              <Avatar name={m.username} url={m.avatarUrl} size={32} online={m.online} />
+              <Avatar name={m.username} userId={m.userId} url={m.avatarUrl} size={32} online={m.online} />
               <span className="mx-tick-n">{m.username}<small>{m.online ? "Online" : "Offline"}</small></span>
             </label>
           );
@@ -1871,7 +1874,7 @@ function Thread({ conversation, nowPlaying }) {
     <section className={`mx-thread ${dropping ? "dropping" : ""}`} aria-label={`Conversation with ${conversation.username}`} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
       <header className="mx-head">
         <button type="button" className="mx-who" data-mx-profile onClick={() => setShowProfile((v) => !v)} title="View profile" aria-expanded={showProfile}>
-          {group ? <GroupAvatar conversation={conversation} size={40} /> : <Avatar name={conversation.username} url={conversation.avatarUrl} size={40} online={conversation.isFriend ? conversation.online : null} />}
+          {group ? <GroupAvatar conversation={conversation} size={40} /> : <Avatar name={conversation.username} userId={conversation.userId} url={conversation.avatarUrl} size={40} online={conversation.isFriend ? conversation.online : null} />}
           <span><span className="mx-who-n">{conversation.username}</span><span className="mx-who-s">{group
             ? `${conversation.members.length} people · ${conversation.members.filter((m) => m.userId !== s.me?.id).map((m) => m.username).join(", ")}`
             : conversation.isFriend ? (conversation.online ? "Online" : "Offline") : "Not in your friends"}</span></span>
@@ -1898,7 +1901,7 @@ function Thread({ conversation, nowPlaying }) {
         {t.error && <div className="mx-note err center">{t.error} <button type="button" className="mx-link" onClick={() => actions.loadThread(conversation.id)}>Try again</button></div>}
         {t.loaded && !t.error && t.items.length === 0 && (
           <div className="mx-hello">
-            <Avatar name={conversation.username} url={conversation.avatarUrl} size={72} />
+            <Avatar name={conversation.username} userId={conversation.userId} url={conversation.avatarUrl} size={72} />
             <div className="mx-hello-t">Say hi to {conversation.username}</div>
             <p>This is the start of your conversation.</p>
           </div>
@@ -1945,7 +1948,7 @@ function Thread({ conversation, nowPlaying }) {
                 </div>
               );
             })}
-            <div className="mx-meta">{group && s.me && b.senderId !== s.me.id && <Avatar name={nameOf(b.senderId)} url={conversation.members.find((x) => x.userId === b.senderId)?.avatarUrl} size={18} />}<b>{s.me && b.senderId === s.me.id ? "You" : nameOf(b.senderId)}</b>{b.items[b.items.length - 1].failed ? "" : b.items[b.items.length - 1].pending ? "Sending…" : clock(b.items[b.items.length - 1].createdAt)}</div>
+            <div className="mx-meta">{group && s.me && b.senderId !== s.me.id && <Avatar name={nameOf(b.senderId)} userId={b.senderId} url={conversation.members.find((x) => x.userId === b.senderId)?.avatarUrl} size={18} />}<b>{s.me && b.senderId === s.me.id ? "You" : nameOf(b.senderId)}</b>{b.items[b.items.length - 1].failed ? "" : b.items[b.items.length - 1].pending ? "Sending…" : clock(b.items[b.items.length - 1].createdAt)}</div>
           </div>
         ))}
       </div>

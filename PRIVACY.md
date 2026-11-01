@@ -1,7 +1,7 @@
 <!-- Added by aura-messages-setup.cjs; updated by aura-privacy-update-setup.cjs. The same words are shown inside AURA (src/components/privacy.jsx). -->
 # AURA privacy policy
 
-Last updated October 29, 2026
+Last updated November 1, 2026
 
 ## The short version
 
@@ -24,7 +24,7 @@ Most of what AURA does stays on your PC. If you create an AURA account, the thin
 These are stored with Supabase, the database service AURA uses.
 
 - Sign-up details: your email address, username and password. The password is stored scrambled; nobody, including the developer, can read it.
-- Your profile: username, bio and profile picture. Anyone signed in to AURA can see these, which is how friends find you by username. A profile picture you choose from your PC is stored with its own web address, so anyone who has that address can see it.
+- Your profile: username, bio, profile picture, and the avatar decorations you choose. Anyone signed in to AURA can see these, which is how friends find you by username. A profile picture you choose from your PC is stored with its own web address, so anyone who has that address can see it.
 - Your library: game titles, favorites, how often and how long you've played, and when you last played.
 - Play sessions: the game, when it started and ended, and the game's file location on your PC. To notice a game you started outside AURA, AURA checks which programs are running on your PC and compares their names with your library. That check stays on your PC; only the sessions it finds are saved.
 - Achievements, streaks, themes, settings, and your AURA background if it is a web address.

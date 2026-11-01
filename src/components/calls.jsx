@@ -21,6 +21,7 @@ import { ringtone, soundPrefs } from "./sounds"; // your ringtone (Settings > Ca
 import { cameraEffects } from "./camfx"; // your camera background in calls (Added by aura-camera-backgrounds-setup.cjs)
 import { holdCamera, borrowCamera, cameraBusy } from "./camfx"; // one camera shared by the preview and calls (Added by aura-camera-busy-setup.cjs)
 import { watchStreamRoom } from "./streamroom"; // a Twitch stream makes room for call panels (Added by aura-stream-room-setup.cjs)
+import { DecoratedAvatar } from "./avatardecor"; // seasonal avatar decorations (Added by aura-seasonal-setup.cjs)
 
 const RING_OUT_MS = 30000;    // a call you make rings this long before "didn't answer"
 const RING_IN_MS = 50000;     // a call ringing for you is given up on after this, if nothing ends it first
@@ -1129,9 +1130,11 @@ function Face({ person, size }) {
   useEffect(() => { setBroken(false); }, [person.avatarUrl]);
   const letter = (String(person.username || "?").trim()[0] || "?").toUpperCase();
   return (
+    <DecoratedAvatar userId={person.userId} size={size}>{/* (Added by aura-seasonal-setup.cjs) */}
     <span className="cx-face" style={{ width: size, height: size, fontSize: Math.round(size * 0.44) }}>
       {person.avatarUrl && !broken ? <img src={person.avatarUrl} alt="" onError={() => setBroken(true)} /> : <span>{letter}</span>}
     </span>
+    </DecoratedAvatar>
   );
 }
 function Clock({ since }) {
