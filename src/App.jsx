@@ -511,8 +511,8 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .gc{flex:1;overflow-y:auto;padding:20px 24px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:14px}
 
-.card{position:relative;border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:transform .28s cubic-bezier(.34,1.56,.64,1),box-shadow .25s ease;background:var(--card);border:1px solid var(--border);animation:fadeUp .4s ease both}
-.card:hover{transform:translateY(-8px) scale(1.02);box-shadow:0 24px 48px rgba(0,0,0,.7),0 0 0 1px var(--borderb),0 0 30px var(--acg);border-color:var(--borderb);z-index:2}
+.card{position:relative;border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:transform .28s cubic-bezier(.34,1.56,.64,1),box-shadow .25s ease;background:var(--card);border:1px solid var(--border);animation:fadeUp .4s ease backwards}/* backwards: after fading in, the card can lift on hover (Updated by aura-neon-cards-setup.cjs) */
+.card:hover{transform:translateY(-5px);box-shadow:0 24px 48px rgba(0,0,0,.7),0 0 0 1px var(--borderb),0 0 30px var(--acg);border-color:var(--borderb);z-index:2}
 .card-img-w{position:relative;aspect-ratio:3/4;overflow:hidden;cursor:pointer;}
 .card-img{width:100%;height:100%;object-fit:cover;transition:transform .4s ease;pointer-events:none;}
 .card:hover .card-img{transform:scale(1.08)}
@@ -713,7 +713,7 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .gm-shelf-row{display:flex;gap:12px;padding:4px 40px 8px;overflow-x:auto;scrollbar-width:none;}
 .gm-shelf-row::-webkit-scrollbar{display:none;}
 .gm-card{flex-shrink:0;width:140px;border-radius:10px;overflow:hidden;cursor:pointer;transition:transform .25s cubic-bezier(.34,1.56,.64,1),box-shadow .2s;background:var(--card);border:1px solid var(--border);position:relative;}
-.gm-card:hover{transform:translateY(-8px) scale(1.04);box-shadow:0 20px 40px rgba(0,0,0,.7),0 0 0 1px var(--borderb),0 0 20px var(--acg);z-index:2;}
+.gm-card:hover{transform:translateY(-5px);box-shadow:0 20px 40px rgba(0,0,0,.7),0 0 0 1px var(--borderb),0 0 20px var(--acg);z-index:2;}
 .gm-card-img{width:100%;aspect-ratio:3/4;object-fit:cover;}
 .gm-card-grad{position:absolute;bottom:0;left:0;right:0;height:55%;background:linear-gradient(to top,rgba(0,0,0,.95) 0%,transparent 100%);}
 .gm-card-info{position:absolute;bottom:0;left:0;right:0;padding:10px 10px 8px;}
@@ -914,6 +914,17 @@ body:has(.now-playing) .streams-page{padding-bottom:72px;}
 .reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{animation-duration:0s!important;animation-delay:0s!important;transition:none!important;scroll-behavior:auto!important}
 .reduce-motion .card:hover,.reduce-motion .gm-card:hover,.reduce-motion .twitch-card:hover,.reduce-motion .gm-mf-card:hover{transform:none!important}
 .reduce-motion .card:hover .card-img,.reduce-motion .twitch-card:hover .twitch-thumb{transform:none!important}
+/* Neon border: a purple-and-cyan streak (your theme's two accent colours) travels round a game card
+   while you point at it or tab to it. One lap every 1.8 seconds. It stands still while a game is
+   running, with reduce motion on, and while AURA is hidden. (Added by aura-neon-cards-setup.cjs) */
+@property --aura-neon{syntax:'<angle>';inherits:false;initial-value:0deg}
+.card::after,.gm-card::after{content:"";position:absolute;inset:0;z-index:6;border-radius:inherit;padding:2px;pointer-events:none;opacity:0;transition:opacity .18s ease;
+  background:conic-gradient(from var(--aura-neon),transparent 0deg 210deg,color-mix(in srgb,var(--ac2) 35%,transparent) 250deg,var(--ac2) 295deg,var(--ac) 330deg,color-mix(in srgb,var(--ac) 40%,#fff) 345deg,transparent 360deg);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0);filter:drop-shadow(0 0 3px var(--ac)) drop-shadow(0 0 6px var(--ac2))}
+.card:hover::after,.card:focus-within::after,.gm-card:hover::after,.gm-card:focus-within::after{opacity:1;animation:aura-neon 1.8s linear infinite}
+@keyframes aura-neon{to{--aura-neon:360deg}}
+.aura-playing .card::after,.aura-playing .gm-card::after,.reduce-motion .card::after,.reduce-motion .gm-card::after{animation:none!important;background:linear-gradient(135deg,var(--ac2),var(--ac))}
+@media (prefers-reduced-motion:reduce){.card::after,.gm-card::after{animation:none!important;background:linear-gradient(135deg,var(--ac2),var(--ac))}}
 .no-blur *,.no-blur *::before,.no-blur *::after{backdrop-filter:none!important}
 .no-blur .spotlight-bg,.no-blur .hero-bg{filter:brightness(.3)!important}
 .no-blur .app-bg-overlay{background:rgba(0,0,0,.7)}
@@ -3671,6 +3682,7 @@ function AuraApp(){
   },[]);
 
   const [nowPlaying, setNowPlaying] = useState(null);
+  useEffect(()=>{ try { document.documentElement.classList.toggle("aura-playing",!!nowPlaying); } catch {} },[nowPlaying]); // the card border stands still while a game runs (Added by aura-neon-cards-setup.cjs)
   const [isRecording, setIsRecording] = useState(false);
   const [recGame, setRecGame] = useState("");
   const [recElapsed, setRecElapsed] = useState(0);
