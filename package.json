@@ -38,6 +38,12 @@
       "!node_modules/ffprobe-static/bin/{darwin,linux}/**",
       "!**/*.bak"
     ],
+    "extraResources": [
+      {
+        "from": "THIRD-PARTY-NOTICES.md",
+        "to": "THIRD-PARTY-NOTICES.md"
+      }
+    ],
     "publish": [
       {
         "provider": "github",

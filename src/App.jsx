@@ -23,6 +23,7 @@ import { FavStar, FavEditor, cleanFavs, toggleFav, isFav, loginOf, migrateFavs, 
 import MessagesPage, { AuraFriendsTab, MessagesIcon, useAuraSocial, useFriendCount } from "./components/messages";
 import { useCall } from "./components/calls"; // a call in progress counts as a party (Added by aura-new-achievements-setup.cjs)
 import { PrivacyButton } from "./components/privacy";
+import { CreditsButton } from "./components/credits"; // Settings > About > Credits and licenses (Added by aura-credits-setup.cjs)
 import { CallSoundSettings } from "./components/sounds";
 import { FeedbackButton } from "./components/feedback";
 import { PageBoundary, AppBoundary, ErrorLogButton } from "./components/safety";
@@ -3235,6 +3236,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
         <div className="ss-card">
           <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · <AppVersion/></div></div><UpdateButton/></div>
           <div className="sr"><div><div className="sr-l">Privacy</div><div className="sr-s">What AURA stores about you and who can see it</div></div><PrivacyButton/></div>
+          <div className="sr"><div><div className="sr-l">Credits</div><div className="sr-s">Game info and covers from IGDB, streams from Twitch, trailers from YouTube, GIFs from KLIPY, and the open-source software in AURA</div></div><CreditsButton/></div>{/* (Added by aura-credits-setup.cjs) */}
           <div className="sr"><div><div className="sr-l">Feedback</div><div className="sr-s">Found a bug or have an idea? Tell the developer.</div></div><FeedbackButton/></div>
           {import.meta.env.DEV && <div className="sr"><div><div className="sr-l">Error log</div><div className="sr-s">If something goes wrong, AURA notes it in a file on this PC. Nothing is sent anywhere. (This row only shows while developing.)</div></div><ErrorLogButton/></div>}
           <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
