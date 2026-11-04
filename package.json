@@ -3,7 +3,7 @@
   "description": "Aura Gaming Hub: your games, friends, messages, calls, clips and voice commands in one launcher",
   "author": "Traylor Digital",
   "private": true,
-  "version": "1.37.0",
+  "version": "1.38.0",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -66,9 +66,18 @@
       "displayName": "Aura Gaming Hub",
       "applicationId": "AuraGamingHub",
       "backgroundColor": "#151821",
-      "languages": ["en-US"],
+      "languages": [
+        "en-US"
+      ],
       "showNameOnTiles": false,
-      "capabilities": ["runFullTrust", "internetClient", "internetClientServer", "privateNetworkClientServer", "microphone", "webcam"],
+      "capabilities": [
+        "runFullTrust",
+        "internetClient",
+        "internetClientServer",
+        "privateNetworkClientServer",
+        "microphone",
+        "webcam"
+      ],
       "addAutoLaunchExtension": false,
       "customExtensionsPath": "build/appx-extensions.xml",
       "artifactName": "AURA-Store-${version}.${ext}"
