@@ -130,8 +130,10 @@ if (fs.existsSync(path.join(__dirname, "voice-window.cjs"))) add("window", "Sett
 if (fs.existsSync(path.join(__dirname, "seasonal-window.cjs"))) add("window", "Seasonal decorations and avatar decorations", "seasonal-window.cjs"); // (Added by aura-seasonal-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "credits.cjs")) && fs.existsSync(path.join(ROOT, "THIRD-PARTY-NOTICES.md"))) add("window", "Credits and licenses (IGDB, FFmpeg's GPL, open-source notices)", "credits.cjs"); // (Added by aura-credits-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "neon-cards.cjs"))) add("window", "Neon border on game cards", "neon-cards.cjs"); // (Added by aura-neon-cards-setup.cjs)
+if (fs.existsSync(path.join(__dirname, "store.cjs"))) add("window", "Microsoft Store version: package, differences, Settings", "store.cjs"); // (Added by aura-store-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "msg-search-window.cjs"))) add("window", "Message search and friend streaks in the window", "msg-search-window.cjs"); // (Added by aura-messages-search-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "emoji-voice-window.cjs"))) add("window", "Emoji reactions and voice messages in the window", "emoji-voice-window.cjs"); // (Added by aura-messages-emoji-voice-setup.cjs)
+if (fs.existsSync(path.join(__dirname, "settings-layout.cjs"))) add("window", "Settings: sidebar, search, folding groups, every setting still there", "settings-layout.cjs"); // (Added by aura-settings-layout-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "delete-account.cjs"))) add("window", "Deleting your account", "delete-account.cjs"); // (Added by aura-account-delete-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "twitch-favorites.cjs"))) add("window", "Twitch favorites and live notices", "twitch-favorites.cjs");
 if (fs.existsSync(path.join(__dirname, "achievements.cjs"))) add("window", "Achievements count everything", "achievements.cjs");

@@ -1,5 +1,7 @@
 {
   "name": "aura",
+  "description": "Aura Gaming Hub: your games, friends, messages, calls, clips and voice commands in one launcher",
+  "author": "Traylor Digital",
   "private": true,
   "version": "1.37.0",
   "main": "electron/main.js",
@@ -8,6 +10,7 @@
     "build": "vite build",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development npx @dotenvx/dotenvx run -- electron .\"",
     "electron:build": "cross-env NODE_ENV=production npm run build && electron-builder --publish always",
+    "electron:build:store": "cross-env NODE_ENV=production npm run build && electron-builder --win appx --publish always",
     "test": "node tests/run.cjs"
   },
   "publish": [
@@ -55,6 +58,20 @@
     "win": {
       "target": "nsis",
       "icon": "public/icon.png"
+    },
+    "appx": {
+      "identityName": "TraylorDigital.AuraGamingHub",
+      "publisher": "CN=E6B56AB7-1B45-4740-A412-E234538BDD63",
+      "publisherDisplayName": "Traylor Digital",
+      "displayName": "Aura Gaming Hub",
+      "applicationId": "AuraGamingHub",
+      "backgroundColor": "#151821",
+      "languages": ["en-US"],
+      "showNameOnTiles": false,
+      "capabilities": ["runFullTrust", "internetClient", "internetClientServer", "privateNetworkClientServer", "microphone", "webcam"],
+      "addAutoLaunchExtension": false,
+      "customExtensionsPath": "build/appx-extensions.xml",
+      "artifactName": "AURA-Store-${version}.${ext}"
     },
     "linux": {
       "target": "AppImage",

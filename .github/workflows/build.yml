@@ -87,6 +87,47 @@ jobs:
           $result = Join-Path $env:APPDATA "aura\smoke-test.txt"
           if (Test-Path $result) { Get-Content $result } else { "AURA wrote no result" }
           if ($p.ExitCode -ne 0) { throw "AURA's start-up check failed (see above)" }
+  # The Microsoft Store package (.appx), uploaded to the same draft release. Runs after the Windows
+  # installer is built, and on its own: if it fails, the normal installers are already out.
+  # (Added by aura-store-setup.cjs)
+  build-store:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    needs: [build-windows]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build the Microsoft Store package and upload to the draft release
+        run: npm run electron:build:store
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Check what's inside the Store package
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem dist\AURA-Store-*.appx | Select-Object -First 1
+          if (-not $pkg) { throw "The Store package wasn't built" }
+          Copy-Item $pkg.FullName pkg.zip
+          Expand-Archive pkg.zip -DestinationPath pkg -Force
+          [xml]$m = Get-Content pkg\AppxManifest.xml
+          $id = $m.Package.Identity
+          "Identity: $($id.Name)  $($id.Publisher)  version $($id.Version)"
+          if ($id.Name -ne "TraylorDigital.AuraGamingHub") { throw "Wrong package name: $($id.Name)" }
+          if ($id.Publisher -ne "CN=E6B56AB7-1B45-4740-A412-E234538BDD63") { throw "Wrong publisher: $($id.Publisher)" }
+          $text = Get-Content pkg\AppxManifest.xml -Raw
+          foreach ($need in @('runFullTrust', 'Name="microphone"', 'Name="webcam"', 'Name="internetClient"', 'TaskId="AuraGamingHubStartup" Enabled="false"', 'Executable="app\aura.exe"')) {
+            if (-not $text.Contains($need)) { throw "The package is missing: $need" }
+          }
+          if (-not (Test-Path pkg\app\aura.exe)) { throw "aura.exe isn't in the package" }
+          if (-not (Test-Path pkg\app\resources\THIRD-PARTY-NOTICES.md)) { throw "THIRD-PARTY-NOTICES.md isn't in the package" }
+          "The Store package looks right: $($pkg.Name), $([math]::Round($pkg.Length / 1MB)) MB"
+
   build-linux:
     runs-on: ubuntu-24.04   # pinned: GitHub is moving ubuntu-latest to a new Ubuntu (Added by aura-ci-fix-setup.cjs)
     timeout-minutes: 45   # GitHub stops the job after this, instead of waiting for hours

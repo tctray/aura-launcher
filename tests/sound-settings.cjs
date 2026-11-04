@@ -1,4 +1,4 @@
-// Settings > Sound devices: the tab, choosing devices, volume, favourites and Quick Switch, and the
+// Settings > Sound devices: the group, choosing devices, volume, favourites and Quick Switch, and the
 // AURA bar's sound button. Opens the built window (dist) in a real browser, as AURA on Windows,
 // with pretend sound devices.
 // Added by aura-sound-devices-setup.cjs.
@@ -94,15 +94,14 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
   const soundCalls = (page, k) => page.evaluate((k) => window.__calls.filter(([n]) => n === "electronAPI." + k).map(([, a]) => a), k);
   let page;
   try {
-    console.log("1. The tab");
+    console.log("1. The Sound devices group"); // (a group under Sound & Voice since aura-settings-layout-setup.cjs; it used to be a tab)
     page = await open();
     await toSettings(page);
-    const tabs = page.locator('[role="tablist"][aria-label="Settings"]');
-    check("Settings has General and Sound devices tabs at the top", await tabs.isVisible() && (await tabs.locator('[role="tab"]').allInnerTexts()).join("|") === "General|Sound devices");
-    check("General is open first, with the usual settings", (await tabs.locator('[aria-selected="true"]').innerText()) === "General" && await page.getByText("UI Scale").isVisible());
-    await tabs.getByText("Sound devices").click();
+    const group = page.locator('.sg[data-sg="sound-devices"]');
+    check("Settings > Sound & Voice has Sound devices, folded at first, with the usual settings around it", (await group.count()) === 1 && (await group.getAttribute("class")).includes("closed") && await page.getByText("UI Scale").isVisible() && !(await page.getByText("Output · what you hear").count()));
+    await group.locator(".sg-tog").click();
     await page.waitForTimeout(500);
-    check("Sound devices shows what you hear and your mics, not the general settings", await page.getByText("Output · what you hear").isVisible() && await page.getByText("Input · your mic").isVisible() && !(await page.getByText("UI Scale").isVisible()));
+    check("opening it shows what you hear and your mics", await page.getByText("Output · what you hear").isVisible() && await page.getByText("Input · your mic").isVisible());
     const outRows = page.locator(".snd-dev");
     check("every device is listed by name", (await outRows.count()) === 6 && /Arctis Nova 7 Gen 2/.test(await outRows.first().innerText()));
     check("the one in use is marked", /In use/.test(await page.locator(".snd-dev.on").first().innerText()) && /IHTB138/.test(await page.locator(".snd-dev.on").first().innerText()));
@@ -146,11 +145,11 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
     await page.context().close();
     page = await open({ tab: "sound" });
     await toSettings(page);
-    check("Settings opens on the tab you used last", await page.getByText("Output · what you hear").isVisible());
+    check("if you used the Sound devices tab last, Sound devices starts open", await page.getByText("Output · what you hear").isVisible());
     await page.context().close();
     page = await open({ windows: false, tab: "sound" });
     await toSettings(page);
-    check("not on Windows: no tabs, just the usual settings", !(await page.locator('[role="tablist"][aria-label="Settings"]').isVisible()) && await page.getByText("UI Scale").isVisible());
+    check("not on Windows: no Sound devices, just the usual settings", !(await page.locator('.sg[data-sg="sound-devices"]').count()) && await page.getByText("UI Scale").isVisible());
     await page.context().close();
 
     console.log("5. The AURA bar");

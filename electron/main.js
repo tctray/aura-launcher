@@ -216,6 +216,9 @@ function getClipFolder() {
   // in the old place (AURA's data folder), which then stays in use. (Added by aura-release-fixes-setup.cjs)
   if (appSettings.clipFolder && path.isAbsolute(appSettings.clipFolder)) return appSettings.clipFolder;
   const old = path.join(app.getPath("userData"), "Clips");
+  // The Microsoft Store version never keeps clips in its data folder: Windows deletes that folder
+  // when the app is uninstalled. (Added by aura-store-setup.cjs)
+  if (process.windowsStore) { try { return path.join(app.getPath("videos"), "AURA"); } catch { return old; } }
   try { if (fs.existsSync(old) && fs.readdirSync(old).length) return old; } catch {}
   try { return path.join(app.getPath("videos"), "AURA"); } catch { return old; }
 }
@@ -327,6 +330,7 @@ function createTray() {
 }
 function applyStartWithWindows() {
   if (process.platform !== "win32" || !app.isPackaged) return;
+  if (process.windowsStore) return; // the Store version starts with Windows through Windows Settings > Apps > Startup (Added by aura-store-setup.cjs)
   try { app.setLoginItemSettings({ openAtLogin: appSettings.startWithWindows === true, args: [START_HIDDEN_ARG] }); }
   catch (e) { console.error("Start with Windows:", e.message); }
 }
@@ -480,6 +484,7 @@ function createWindow() {
 // ── Auto-updater ──────────────────────────────────────────────────────────────
 function setupAutoUpdater(win) {
   if (!app.isPackaged) return;
+  if (process.windowsStore) return; // the Microsoft Store keeps the Store version up to date (Added by aura-store-setup.cjs)
   autoUpdater.checkForUpdates();
   autoUpdater.on("update-available",  (info) => win.webContents.send("update-available", info.version));
   autoUpdater.on("download-progress", (p)    => win.webContents.send("update-progress", p.percent));
@@ -790,6 +795,8 @@ app.whenReady().then(() => {
   applyStartWithWindows();
 
   ipcMain.handle("download-update", async () => {
+    // The Microsoft Store version: open AURA's page in the Store, which does the updating (Added by aura-store-setup.cjs)
+    if (process.windowsStore) { shell.openExternal(STORE_PAGE); return { success: false, store: true, openedPage: true }; }
     // Auto-update only works in the installed app; in dev mode, open the release page
     if (!app.isPackaged) {
       shell.openExternal("https://github.com/tctray/aura-launcher/releases/latest");
@@ -1950,7 +1957,13 @@ ipcMain.handle("chat-close", async () => {
 });
 
 
+// The Microsoft Store version (Added by aura-store-setup.cjs)
+const STORE_ID = "9N7JVRJDPSPX";
+const STORE_PAGE = "ms-windows-store://pdp/?productid=" + STORE_ID;
+ipcMain.handle("app:store-info", () => ({ store: process.windowsStore === true, storeId: STORE_ID }));
+ipcMain.handle("app:open-startup-settings", () => { if (process.windowsStore) shell.openExternal("ms-settings:startupapps"); return { success: true }; });
 ipcMain.handle("check-update", async () => {
+  if (process.windowsStore) return { success: true, store: true, hasUpdate: false, current: app.getVersion() }; // no GitHub check in the Store version
   try {
     const res     = await axios.get("https://api.github.com/repos/tctray/aura-launcher/releases/latest");
     const latest  = res.data.tag_name?.replace(/^v/, "");

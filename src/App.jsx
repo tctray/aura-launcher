@@ -10,7 +10,8 @@ import { achievementStats } from "./achievements"; // Added by aura-achievements
 import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { ClipsAndMedia, MediaDock } from "./components/media"; // Clips > Media, and the mini player (Added by aura-media-player-setup.cjs)
-import { SettingsTabs, SoundDevicesTab, useSettingsTab } from "./components/sounddevices"; // Settings > Sound devices (Added by aura-sound-devices-setup.cjs)
+import { SoundDevicesTab, soundTabAvailable } from "./components/sounddevices"; // Settings > Sound devices (Added by aura-sound-devices-setup.cjs)
+import { SetCategory, SetGroup, SettingsLayout } from "./components/settingsnav"; // the Settings sidebar, search and groups (Added by aura-settings-layout-setup.cjs)
 import { VoiceSettings, VoiceSign, useVoiceCommands } from "./components/voice"; // "Hey AURA" voice commands (Added by aura-voice-setup.cjs)
 import { SeasonalLayer, SeasonalLogo, SeasonalSettings, NavAccentStyle } from "./components/seasonal"; // seasonal decorations (Added by aura-seasonal-setup.cjs)
 import { DecoratedAvatar, AvatarDecorations } from "./components/avatardecor";
@@ -3101,6 +3102,7 @@ function UpdateButton() {
     if (!window.electronAPI?.isElectron) return;
     setStatus("checking");
     const res = await window.electronAPI.checkUpdate();
+    if (res.success && res.store) { setStatus("store"); return; } // the Microsoft Store version (Added by aura-store-setup.cjs)
     if (res.success) { setLatest(res.latest); setStatus(res.hasUpdate ? "update" : "latest"); }
     else setStatus("error");
   };
@@ -3108,6 +3110,7 @@ function UpdateButton() {
   useEffect(() => { check(); }, []);
 
   if (status === "checking") return <span style={{fontSize:11,color:"var(--t3)"}}>Checking...</span>;
+  if (status === "store") return <button className="btn-gh" onClick={()=>window.electronAPI.downloadUpdate?.()} style={{fontSize:11,padding:"5px 12px"}} title="The Microsoft Store keeps AURA up to date">Check in the Microsoft Store</button>;
   if (status === "latest")   return <><style>{UPDATE_CSS}</style><span className="update-ok"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Up to date</span></>;
   if (status === "error")    return <button className="btn-gh" onClick={check} style={{fontSize:11,padding:"5px 12px"}}>Retry</button>;
   if (status === "update")   return (
@@ -3139,12 +3142,12 @@ function SetRange({value,min,max,step,onChange,format}){
 function Seg({value,options,onChange}){
   return (
     <div className="seg">
-      {options.map(([v,label])=>(<button key={v} className={value===v?"on":""} onClick={()=>onChange(v)}>{label}</button>))}
+      {options.map(([v,label])=>(<button key={v} type="button" aria-pressed={value===v} className={value===v?"on":""} onClick={()=>onChange(v)}>{label}</button>))}
     </div>
   );
 }
 
-function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetchCovers,coverProgress}){
+function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetchCovers,coverProgress,profile,onEditProfile}){ // (profile, onEditProfile: the Account category, Added by aura-settings-layout-setup.cjs)
   const s=useSettings();
   const set=(patch)=>updateSettings(patch);
   const pct=(v)=>`${Math.round(v*100)}%`;
@@ -3158,12 +3161,51 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
     const opts=current&&!list.includes(current)?[current,...list]:list;
     return [<option key="" value="">Automatic</option>,...opts.map(d=><option key={d} value={d}>{d}</option>)];
   };
-  const Tog=({k})=>(<div className={`tog ${s[k]?"on":""}`} onClick={()=>set({[k]:!s[k]})}/>);
-  const [tab,setTab]=useSettingsTab(); // General | Sound devices (Added by aura-sound-devices-setup.cjs)
+  // A switch for one setting. (A plain function, not a component, so a switch keeps the keyboard
+  // after you flip it.) (Updated by aura-settings-layout-setup.cjs)
+  const tog=(k,label)=>(<div className={`tog ${s[k]?"on":""}`} role="switch" aria-checked={!!s[k]} aria-label={label} tabIndex={0} onClick={()=>set({[k]:!s[k]})} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();set({[k]:!s[k]});}}}/>);
+  const [storeApp,setStoreApp]=useState(false); // the Microsoft Store version? (Added by aura-store-setup.cjs)
+  useEffect(()=>{ let live=true; window.electronAPI?.storeInfo?.().then(r=>{ if(live) setStoreApp(r?.store===true); }).catch(()=>{}); return ()=>{live=false;}; },[]);
+  // Categories in the sidebar, in the order they appear (Added by aura-settings-layout-setup.cjs)
+  const account=useAccount();
+  const signedIn=!!(account.enabled&&account.user&&!account.user.offline);
+  const soundDevices=soundTabAvailable();
+  const cats=[
+    account.enabled&&{id:"account",label:"Account"},
+    {id:"appearance",label:"Appearance"},
+    {id:"social",label:"Social & Calls"},
+    {id:"notifications",label:"Notifications"},
+    {id:"sound",label:"Sound & Voice"},
+    {id:"capture",label:"Capture"},
+    {id:"library",label:"Games & Library"},
+    {id:"performance",label:"Performance"},
+    {id:"privacy",label:"Privacy"},
+    {id:"about",label:"About"},
+  ].filter(Boolean);
+  const winRow=(mode,label)=>({role:"switch","aria-checked":s.windowMode===mode,"aria-label":label,tabIndex:0,
+    onClick:()=>set({windowMode:s.windowMode===mode?"maximized":mode}),
+    onKeyDown:e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();set({windowMode:s.windowMode===mode?"maximized":mode});}}});
   return(
     <div className="sc">
-      <SettingsTabs tab={tab} onTab={setTab}/>
-      {tab==="sound"?<SoundDevicesTab/>:<>
+      <SettingsLayout cats={cats}>
+      {account.enabled&&<SetCategory id="account" title="Account" note="Your AURA profile and signing in">
+        <SetGroup id="account" title="ACCOUNT">
+        <div className="ss">
+          <div className="ss-t">ACCOUNT</div>
+          <div className="ss-card">
+            <div className="sr"><div><div className="sr-l">Signed in as {profile?.username||account.user?.email||"…"}</div><div className="sr-s">{signedIn?"Your username, picture, bio and avatar decorations":account.user?.offline?"Offline. Your profile can be changed once AURA is back online":"Not signed in"}</div></div>
+              {onEditProfile&&<button className="btn-gh" style={{fontSize:11,padding:"5px 12px"}} onClick={onEditProfile}>Edit profile</button>}</div>
+            {account.user&&<div className="sr"><div><div className="sr-l">Log Out</div><div className="sr-s">Sign out of AURA on this PC. Your library stays here</div></div>
+              <button className="btn-gh" style={{fontSize:11,padding:"5px 12px"}} onClick={()=>account.requestLogout()}>Log out</button></div>}
+            {signedIn&&account.requestDelete&&<div className="sr"><div><div className="sr-l">Delete Account</div><div className="sr-s">Delete your account and everything saved to it. You'll be asked to confirm</div></div>
+              <button className="btn-d" style={{fontSize:11,padding:"5px 12px"}} onClick={()=>account.requestDelete()}>Delete account</button></div>}
+          </div>
+        </div>
+        </SetGroup>
+      </SetCategory>}
+
+      <SetCategory id="appearance" title="Appearance" note="How AURA looks and opens">
+      <SetGroup id="display" title="DISPLAY">
       <div className="ss">
         <div className="ss-t">DISPLAY</div>
         <div className="ss-card">
@@ -3173,29 +3215,51 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
             <Seg value={s.cardSize} options={[["sm","Small"],["md","Medium"],["lg","Large"]]} onChange={v=>set({cardSize:v})}/></div>
           {/* Full screen as a switch, and F11 to switch anytime (Added by aura-look-setup.cjs) */}
           <div className="sr"><div><div className="sr-l">Full Screen <kbd style={{background:"var(--hover)",border:"1px solid var(--border)",borderRadius:4,padding:"1px 6px",fontFamily:"monospace",fontSize:10,marginLeft:6,color:"var(--t2)"}}>F11</kbd></div><div className="sr-s">AURA fills your whole screen. Press F11 anytime to switch between full screen and maximized</div></div>
-            <div className={`tog ${s.windowMode==="fullscreen"?"on":""}`} role="switch" aria-checked={s.windowMode==="fullscreen"} aria-label="Full screen" tabIndex={0} onClick={()=>set({windowMode:s.windowMode==="fullscreen"?"maximized":"fullscreen"})} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();(()=>set({windowMode:s.windowMode==="fullscreen"?"maximized":"fullscreen"}))();}}}/></div>
+            <div className={`tog ${s.windowMode==="fullscreen"?"on":""}`} {...winRow("fullscreen","Full screen")}/></div>
           {s.windowMode!=="fullscreen"&&<div className="sr"><div><div className="sr-l">Open in a Window</div><div className="sr-s">Off: AURA opens maximized. On: it opens in a smaller window you can move</div></div>
-            <div className={`tog ${s.windowMode==="windowed"?"on":""}`} role="switch" aria-checked={s.windowMode==="windowed"} aria-label="Open in a window" tabIndex={0} onClick={()=>set({windowMode:s.windowMode==="windowed"?"maximized":"windowed"})} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();(()=>set({windowMode:s.windowMode==="windowed"?"maximized":"windowed"}))();}}}/></div>}
-          <div className="sr"><div><div className="sr-l">Reduce Animations</div><div className="sr-s">Turn off motion, hover lifts and transitions</div></div><Tog k="reduceMotion"/></div>
-          <div className="sr"><div><div className="sr-l">Disable Blur Effects</div><div className="sr-s">Faster on older PCs and integrated graphics</div></div><Tog k="noBlur"/></div>
-          <div className="sr"><div><div className="sr-l">Home Banner</div><div className="sr-s">The game slideshow at the top of Home. Turn it off to see your whole background</div></div><Tog k="homeBanner"/></div>
-          <div className="sr"><div><div className="sr-l">Launch Animation</div><div className="sr-s">Show launch overlay when starting a game</div></div><Tog k="anim"/></div>
-          <div className="sr"><div><div className="sr-l">Show Play Counts</div><div className="sr-s">Display playtime or session counts on each card</div></div><Tog k="counts"/></div>
+            <div className={`tog ${s.windowMode==="windowed"?"on":""}`} {...winRow("windowed","Open in a window")}/></div>}
+          <div className="sr"><div><div className="sr-l">Home Banner</div><div className="sr-s">The game slideshow at the top of Home. Turn it off to see your whole background</div></div>{tog("homeBanner","Home banner")}</div>
+          <div className="sr"><div><div className="sr-l">Launch Animation</div><div className="sr-s">Show launch overlay when starting a game</div></div>{tog("anim","Launch animation")}</div>
+          <div className="sr"><div><div className="sr-l">Show Play Counts</div><div className="sr-s">Display playtime or session counts on each card</div></div>{tog("counts","Show play counts")}</div>
         </div>
       </div>
-      <SeasonalSettings Seg={Seg} SetRange={SetRange}/>{/* Settings > Seasonal Decorations (Added by aura-seasonal-setup.cjs) */}
+      </SetGroup>
+      <SetGroup id="seasonal" title="SEASONAL DECORATIONS"><SeasonalSettings Seg={Seg} SetRange={SetRange}/></SetGroup>{/* Settings > Seasonal Decorations (Added by aura-seasonal-setup.cjs) */}
+      </SetCategory>
+
+      <SetCategory id="social" title="Social & Calls" note="Staying reachable for friends' calls and messages">
+      <SetGroup id="calls" title="CALLS AND MESSAGES">
       <div className="ss">
         <div className="ss-t">CALLS AND MESSAGES</div>
         <div className="ss-card">
-          <div className="sr"><div><div className="sr-l">Keep AURA Running When Closed</div><div className="sr-s">Closing AURA keeps it running by the clock, so friends' calls and messages still reach you. To quit, right-click the AURA icon there</div></div><Tog k="keepRunning"/></div>
-          <div className="sr"><div><div className="sr-l">Start AURA When Windows Starts</div><div className="sr-s">Opens AURA quietly by the clock when you sign in, so you can get calls right away</div></div><Tog k="startWithWindows"/></div>
+          <div className="sr"><div><div className="sr-l">Keep AURA Running When Closed</div><div className="sr-s">Closing AURA keeps it running by the clock, so friends' calls and messages still reach you. To quit, right-click the AURA icon there</div></div>{tog("keepRunning","Keep AURA running when closed")}</div>
+          {storeApp ? <div className="sr"><div><div className="sr-l">Start AURA When Windows Starts</div><div className="sr-s">In the Microsoft Store version, switch on Aura Gaming Hub in Windows Settings &gt; Apps &gt; Startup</div></div><button className="btn-gh" style={{fontSize:11,padding:"5px 12px"}} onClick={()=>window.electronAPI?.openStartupSettings?.()}>Open Startup settings</button></div>
+          : <div className="sr"><div><div className="sr-l">Start AURA When Windows Starts</div><div className="sr-s">Opens AURA quietly by the clock when you sign in, so you can get calls right away</div></div>{tog("startWithWindows","Start AURA when Windows starts")}</div>}{/* (Added by aura-store-setup.cjs) */}
+        </div>
+      </div>
+      </SetGroup>
+      </SetCategory>
+
+      <SetCategory id="notifications" title="Notifications" note="What you hear when a friend calls or messages">
+      <SetGroup id="alerts" title="CALL AND MESSAGE ALERTS">
+      <div className="ss">
+        <div className="ss-t">CALL AND MESSAGE ALERTS</div>
+        <div className="ss-card">
           <CallSoundSettings/>
         </div>
       </div>
+      </SetGroup>
+      </SetCategory>
+
+      <SetCategory id="sound" title="Sound & Voice" note="Your speakers and mic, AURA's sounds, and talking to AURA">
+      {soundDevices&&<SetGroup id="sound-devices" title="SOUND DEVICES" lazy defaultOpen={(()=>{try{return localStorage.getItem("aura_settings_tab")==="sound";}catch{return false;}})()/* open if Sound devices was the tab you used last */} note="Pick what you hear and talk through, and flip between favourites" keywords="output input speakers headphones headset mic microphone favourites favorites quick switch ctrl alt s windows sound devices volume mute">
+        <SoundDevicesTab/>{/* (Added by aura-sound-devices-setup.cjs) */}
+      </SetGroup>}
+      <SetGroup id="sound-ui" title="SOUND">
       <div className="ss">
         <div className="ss-t">SOUND</div>
         <div className="ss-card">
-          <div className="sr"><div><div className="sr-l">UI Sounds</div><div className="sr-s">Clicks, game launch, notifications and achievements</div></div><Tog k="uiSounds"/></div>
+          <div className="sr"><div><div className="sr-l">UI Sounds</div><div className="sr-s">Clicks, game launch, notifications and achievements</div></div>{tog("uiSounds","UI sounds")}</div>
           <div className="sr" style={{opacity:s.uiSounds?1:.5}}><div><div className="sr-l">UI Sound Volume</div><div className="sr-s">How loud AURA's own sounds are</div></div>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <SetRange value={s.uiVolume} min={0} max={1} step={0.05} onChange={v=>set({uiVolume:v})} format={pct}/>
@@ -3205,7 +3269,12 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
             <SetRange value={s.streamVolume} min={0} max={1} step={0.05} onChange={v=>set({streamVolume:v})} format={pct}/></div>
         </div>
       </div>
-      <VoiceSettings/>{/* (Added by aura-voice-setup.cjs) */}
+      </SetGroup>
+      <SetGroup id="voice" title="VOICE COMMANDS"><VoiceSettings/></SetGroup>{/* (Added by aura-voice-setup.cjs) */}
+      </SetCategory>
+
+      <SetCategory id="capture" title="Capture" note="Recording clips, shortcuts and your camera">
+      <SetGroup id="recording" title="RECORDING">
       <div className="ss">
         <div className="ss-t">RECORDING</div>
         <div className="ss-card">
@@ -3213,23 +3282,28 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
             {s.recordSourceId&&<button className="btn-gh" style={{fontSize:11,padding:"5px 12px"}} onClick={()=>set({recordSourceId:"",recordSourceName:""})}>Choose again</button>}</div>
           {/* Shortcuts (Added by aura-release-fixes-setup.cjs) */}
           <div className="sr"><div><div className="sr-l">Shortcuts</div><div className="sr-s">Alt + Shift + R starts and stops recording, Alt + Shift + B shows the AURA Bar. They work inside games too.</div></div></div>
-          <div className="sr"><div><div className="sr-l">Also Use F9 to Record</div><div className="sr-s">Off: games get F9 (many use it to quicksave). On: F9 records instead, in every game</div></div><Tog k="keyF9"/></div>
-          <div className="sr"><div><div className="sr-l">Also Use F10 for the AURA Bar</div><div className="sr-s">Off: games get F10. On: F10 shows and hides the AURA Bar, in every game</div></div><Tog k="keyF10"/></div>
+          <div className="sr"><div><div className="sr-l">Also Use F9 to Record</div><div className="sr-s">Off: games get F9 (many use it to quicksave). On: F9 records instead, in every game</div></div>{tog("keyF9","Also use F9 to record")}</div>
+          <div className="sr"><div><div className="sr-l">Also Use F10 for the AURA Bar</div><div className="sr-s">Off: games get F10. On: F10 shows and hides the AURA Bar, in every game</div></div>{tog("keyF10","Also use F10 for the AURA Bar")}</div>
           {/* Recording quality (Added by aura-quality-setup.cjs) */}
           <div className="sr"><div><div className="sr-l">Recording Quality</div><div className="sr-s">{({standard:"30 fps, smaller files (about 600 MB per 10 minutes). Best for older PCs",high:"60 fps and sharp (about 1.2 GB per 10 minutes)",ultra:"60 fps, the most detail (about 2.3 GB per 10 minutes)"})[s.recQuality]||"60 fps and sharp (about 1.2 GB per 10 minutes)"}</div></div>
             <Seg value={s.recQuality||"high"} options={[["standard","Standard"],["high","High"],["ultra","Ultra"]]} onChange={v=>set({recQuality:v})}/></div>
           <div className="sr"><div><div className="sr-l">Microphone</div><div className="sr-s">{devices===null?"Looking for devices…":"Default mic for clips and the record shortcut"}</div></div>
-            <select className="fs set-select" value={s.micDevice} onChange={e=>set({micDevice:e.target.value})}>{deviceOptions(s.micDevice)}</select></div>
+            <select className="fs set-select" aria-label="Microphone for recordings" value={s.micDevice} onChange={e=>set({micDevice:e.target.value})}>{deviceOptions(s.micDevice)}</select></div>
           <div className="sr"><div><div className="sr-l">System Audio</div><div className="sr-s">Game sound source, usually "Stereo Mix"</div></div>
-            <select className="fs set-select" value={s.systemDevice} onChange={e=>set({systemDevice:e.target.value})}>{deviceOptions(s.systemDevice)}</select></div>
+            <select className="fs set-select" aria-label="System audio for recordings" value={s.systemDevice} onChange={e=>set({systemDevice:e.target.value})}>{deviceOptions(s.systemDevice)}</select></div>
           <div className="sr"><div><div className="sr-l">Mic Volume</div><div className="sr-s">Your voice in recordings</div></div>
             <SetRange value={s.micVolume} min={0} max={2} step={0.05} onChange={v=>set({micVolume:v})} format={pct}/></div>
           <div className="sr"><div><div className="sr-l">Game Volume</div><div className="sr-s">Game and system sound in recordings</div></div>
             <SetRange value={s.systemVolume} min={0} max={2} step={0.05} onChange={v=>set({systemVolume:v})} format={pct}/></div>
         </div>
       </div>
+      </SetGroup>
       {/* The camera (Added by aura-camera-setup.cjs) */}
-      <CameraSettings settings={s} onChange={set} Seg={Seg}/>
+      <SetGroup id="camera" title="CAMERA"><CameraSettings settings={s} onChange={set} Seg={Seg}/></SetGroup>
+      </SetCategory>
+
+      <SetCategory id="library" title="Games & Library" note="Importing games, covers and playtime">
+      <SetGroup id="library" title="LIBRARY">
       <div className="ss">
         <div className="ss-t">LIBRARY</div>
         <div className="ss-card">
@@ -3237,23 +3311,52 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
           <div className="sr"><div><div className="sr-l">Import Steam Games</div><div className="sr-s">Auto-import all installed Steam games</div></div><button className="btn-p" onClick={onImportSteam} style={{fontSize:11,padding:"6px 14px",display:"flex",alignItems:"center",gap:"5px"}}><Ic.Steam/> Import</button></div>
           <div className="sr"><div><div className="sr-l">Import Epic Games</div><div className="sr-s">Auto-import all installed Epic Games</div></div><button className="btn-p" onClick={onImportEpic} style={{fontSize:11,padding:"6px 14px"}}>Import</button></div>
           <div className="sr"><div><div className="sr-l">Import Xbox Game Pass</div><div className="sr-s">Auto-import all installed Xbox games</div></div><button className="btn-p" onClick={onImportXbox} style={{fontSize:11,padding:"6px 14px"}}>Import</button></div>
-          <div className="sr"><div><div className="sr-l">Count Games Started Outside AURA</div><div className="sr-s">Sessions and playtime include library games you start from Steam, Epic, Xbox or a shortcut. AURA checks which are running on this PC; nothing is sent anywhere</div></div><Tog k="trackAllGames"/></div>
+          <div className="sr"><div><div className="sr-l">Count Games Started Outside AURA</div><div className="sr-s">Sessions and playtime include library games you start from Steam, Epic, Xbox or a shortcut. AURA checks which are running on this PC; nothing is sent anywhere</div></div>{tog("trackAllGames","Count games started outside AURA")}</div>
           <div className="sr"><div><div className="sr-l">Games in Library</div><div className="sr-s">{games.length} titles stored locally</div></div><span style={{fontFamily:"Rajdhani,sans-serif",fontSize:22,fontWeight:700,color:"var(--ac)"}}>{games.length}</span></div>
           <div className="sr"><div><div className="sr-l">Reset Library</div><div className="sr-s">Remove every game from AURA (the games stay installed)</div></div><button className="btn-d" onClick={()=>{if(window.confirm("Remove every game from your AURA library? The games themselves stay installed, and you can import them again."))onReset();}} style={{fontSize:11,padding:"5px 12px"}}>Reset</button></div>{/* (Added by aura-no-demo-setup.cjs) */}
         </div>
       </div>
+      </SetGroup>
+      </SetCategory>
+
+      <SetCategory id="performance" title="Performance" note="Lighter effects for older PCs and integrated graphics">
+      <SetGroup id="performance" title="PERFORMANCE">
+      <div className="ss">
+        <div className="ss-t">PERFORMANCE</div>
+        <div className="ss-card">
+          <div className="sr"><div><div className="sr-l">Reduce Animations</div><div className="sr-s">Turn off motion, hover lifts and transitions</div></div>{tog("reduceMotion","Reduce animations")}</div>
+          <div className="sr"><div><div className="sr-l">Disable Blur Effects</div><div className="sr-s">Faster on older PCs and integrated graphics</div></div>{tog("noBlur","Disable blur effects")}</div>
+        </div>
+      </div>
+      </SetGroup>
+      </SetCategory>
+
+      <SetCategory id="privacy" title="Privacy" note="What AURA keeps about you, and who can see it">
+      <SetGroup id="privacy" title="PRIVACY">
+      <div className="ss">
+        <div className="ss-t">PRIVACY</div>
+        <div className="ss-card">
+          <div className="sr"><div><div className="sr-l">Privacy</div><div className="sr-s">What AURA stores about you and who can see it</div></div><PrivacyButton/></div>
+          {import.meta.env.DEV && <div className="sr"><div><div className="sr-l">Error log</div><div className="sr-s">If something goes wrong, AURA notes it in a file on this PC. Nothing is sent anywhere. (This row only shows while developing.)</div></div><ErrorLogButton/></div>}
+        </div>
+      </div>
+      </SetGroup>
+      </SetCategory>
+
+      <SetCategory id="about" title="About" note="Version, updates, credits and feedback">
+      <SetGroup id="about" title="ABOUT">
       <div className="ss">
         <div className="ss-t">ABOUT</div>
         <div className="ss-card">
           <div className="sr"><div><div className="sr-l">AURA Game Launcher</div><div className="sr-s">React + Electron · <AppVersion/></div></div><UpdateButton/></div>
-          <div className="sr"><div><div className="sr-l">Privacy</div><div className="sr-s">What AURA stores about you and who can see it</div></div><PrivacyButton/></div>
           <div className="sr"><div><div className="sr-l">Credits</div><div className="sr-s">Game info and covers from IGDB, streams from Twitch, trailers from YouTube, GIFs from KLIPY, and the open-source software in AURA</div></div><CreditsButton/></div>{/* (Added by aura-credits-setup.cjs) */}
           <div className="sr"><div><div className="sr-l">Feedback</div><div className="sr-s">Found a bug or have an idea? Tell the developer.</div></div><FeedbackButton/></div>
-          {import.meta.env.DEV && <div className="sr"><div><div className="sr-l">Error log</div><div className="sr-s">If something goes wrong, AURA notes it in a file on this PC. Nothing is sent anywhere. (This row only shows while developing.)</div></div><ErrorLogButton/></div>}
           <div className="sr"><div><div className="sr-l">Developed by Taurrean Traylor</div><div className="sr-s">Built with React + Electron</div></div></div>
         </div>
       </div>
-      </>}
+      </SetGroup>
+      </SetCategory>
+      </SettingsLayout>
     </div>
   );
 }
@@ -4270,7 +4373,7 @@ function AuraApp(){
 
           {view==="messages"&&<PageBoundary name="messages"><MessagesPage nowPlaying={nowPlaying}/></PageBoundary>}
 
-          {view==="settings"&&<PageBoundary name="settings"><Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames([]);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers} coverProgress={coverProgress}/></PageBoundary>}
+          {view==="settings"&&<PageBoundary name="settings"><Settings games={games} onReset={()=>{localStorage.removeItem("aura_games");setGames([]);toast("Library reset");}} onImportSteam={doImportSteam} onImportEpic={doImportEpic} onImportXbox={doImportXbox} onFetchCovers={doFetchCovers} coverProgress={coverProgress} profile={profile} onEditProfile={()=>setShowProfileModal(true)}/></PageBoundary>}
         </div>
 
         <FriendsPanel launching={launching} toast={toast} hidden={!friendsOpen} onToggle={()=>setFriendsOpen(o=>!o)}/>

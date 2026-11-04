@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-const UPDATED = "November 1, 2026"; // (Updated by aura-seasonal-setup.cjs)
+const UPDATED = "November 3, 2026"; // (Updated by aura-store-setup.cjs)
 const EMAIL = "aura.launcherofficial@gmail.com"; // support, privacy questions and account removal (Updated by aura-privacy-update-setup.cjs)
 const ISSUES = "https://github.com/tctray/aura-launcher/issues";
 
@@ -108,7 +108,7 @@ export const PRIVACY_SECTIONS = [
         "Discord: if you connect Discord, you sign in with Discord, and AURA can show the game you're playing on your Discord profile.",
         "Google and Cloudflare: when a call connects, their free public servers tell your PC its own internet address, so the PCs can find each other. They learn nothing else about the call.",
         "KLIPY: when you use GIF search, what you type goes through the AURA server to KLIPY to find GIFs, along with a scrambled ID that stands for you (not your name, email or AURA account). A GIF picked from the search is not copied into AURA: the message holds its address at KLIPY, and both people's AURA loads it from KLIPY when the chat is opened.",
-        "GitHub: AURA checks GitHub for new versions and downloads updates from it.",
+        "GitHub: the version of AURA from GitHub checks GitHub for new versions and downloads updates from it. The Microsoft Store version doesn't: the Microsoft Store keeps it up to date.",
         "Web3Forms: if you send feedback from Settings, your message, your AURA username, the version of AURA you're using, and an email address if you choose to give one, are sent through Web3Forms, which delivers them to the developer by email. Nothing is sent unless you press Send.",
       ],
     ],

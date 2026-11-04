@@ -81,6 +81,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // ── External links ──────────────────────────────────────────────────────────
   openExternal: (url) => ipcRenderer.invoke("open-external", url),
+  storeInfo: () => ipcRenderer.invoke("app:store-info"), // the Microsoft Store version? (Added by aura-store-setup.cjs)
+  openStartupSettings: () => ipcRenderer.invoke("app:open-startup-settings"),
   // The error log: a file on this PC, never sent anywhere
   logError:     (entry) => ipcRenderer.invoke("log-error", entry),
   openErrorLog: ()      => ipcRenderer.invoke("open-error-log"),

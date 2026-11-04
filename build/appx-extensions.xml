@@ -1,0 +1,5 @@
+        <!-- Start with Windows, for the Microsoft Store version: off until you switch it on in
+             Windows Settings > Apps > Startup. (Added by aura-store-setup.cjs) -->
+        <desktop:Extension Category="windows.startupTask" Executable="app\aura.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="AuraGamingHubStartup" Enabled="false" DisplayName="Aura Gaming Hub" />
+        </desktop:Extension>
