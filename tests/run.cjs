@@ -77,6 +77,14 @@ if (fs.existsSync(social) && fs.existsSync(path.join(sqlDir, "aura-messages-safe
         add("messages", "Database rules: group chats", "messages/sql-groups.mjs");
         add("messages", "Group chats: making, talking, changing, leaving", "messages/app-groups.cjs", [social]);
       }
+      if (fs.existsSync(path.join(sqlDir, "aura-messages-search.sql")) && fs.existsSync(path.join(sqlDir, "aura-messages-groups.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-search.mjs"))) { // (Added by aura-messages-search-setup.cjs)
+        add("messages", "Database rules: message search and friend streaks", "messages/sql-search.mjs");
+        add("messages", "Message search and friend streaks", "messages/app-search.cjs", [social]);
+      }
+      if (fs.existsSync(path.join(sqlDir, "aura-messages-emoji-voice.sql")) && fs.existsSync(path.join(sqlDir, "aura-messages-groups.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-emoji-voice.mjs"))) { // (Added by aura-messages-emoji-voice-setup.cjs)
+        add("messages", "Database rules: emoji reactions and voice messages", "messages/sql-emoji-voice.mjs");
+        add("messages", "Emoji reactions and voice messages", "messages/app-emoji-voice.cjs", [social]);
+      }
       if (fs.existsSync(path.join(sqlDir, "aura-calls-group.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-group-calls.mjs"))) { // (Added by aura-group-calls-setup.cjs)
         add("messages", "Database rules: calls with 3 people", "messages/sql-group-calls.mjs");
         add("messages", "Calls with 3 people: adding, joining, leaving", "messages/app-group-calls.cjs", [social]);
@@ -122,6 +130,8 @@ if (fs.existsSync(path.join(__dirname, "voice-window.cjs"))) add("window", "Sett
 if (fs.existsSync(path.join(__dirname, "seasonal-window.cjs"))) add("window", "Seasonal decorations and avatar decorations", "seasonal-window.cjs"); // (Added by aura-seasonal-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "credits.cjs")) && fs.existsSync(path.join(ROOT, "THIRD-PARTY-NOTICES.md"))) add("window", "Credits and licenses (IGDB, FFmpeg's GPL, open-source notices)", "credits.cjs"); // (Added by aura-credits-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "neon-cards.cjs"))) add("window", "Neon border on game cards", "neon-cards.cjs"); // (Added by aura-neon-cards-setup.cjs)
+if (fs.existsSync(path.join(__dirname, "msg-search-window.cjs"))) add("window", "Message search and friend streaks in the window", "msg-search-window.cjs"); // (Added by aura-messages-search-setup.cjs)
+if (fs.existsSync(path.join(__dirname, "emoji-voice-window.cjs"))) add("window", "Emoji reactions and voice messages in the window", "emoji-voice-window.cjs"); // (Added by aura-messages-emoji-voice-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "delete-account.cjs"))) add("window", "Deleting your account", "delete-account.cjs"); // (Added by aura-account-delete-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "twitch-favorites.cjs"))) add("window", "Twitch favorites and live notices", "twitch-favorites.cjs");
 if (fs.existsSync(path.join(__dirname, "achievements.cjs"))) add("window", "Achievements count everything", "achievements.cjs");

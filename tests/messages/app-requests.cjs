@@ -94,7 +94,7 @@ const check = (name, ok, extra) => { if (!ok) failed++; console.log((ok ? "  ok 
     r = await call("react", "dddddddd-dddd-dddd-dddd-dddddddddddd", null);
     check("taking a like back sends no feeling", r.success && JSON.stringify(last().body) === JSON.stringify({ message: "dddddddd-dddd-dddd-dddd-dddddddddddd", feeling: null }) && r.data.reaction === null, [last().body, r]);
     const before = requests.length;
-    r = await call("react", "dddddddd-dddd-dddd-dddd-dddddddddddd", "love");
+    r = await call("react", "dddddddd-dddd-dddd-dddd-dddddddddddd", "meh"); // (not "love": that's ❤️ since aura-messages-emoji-voice-setup.cjs)
     check("an unknown reaction is refused before asking Supabase", r.success === false && requests.length === before, r);
   }
   r = await call("getMessages", CONV, "2026-10-06T01:00:00.000Z");

@@ -222,6 +222,8 @@ contextBridge.exposeInMainWorld("auraSocial", {
   listConversations: () => ipcRenderer.invoke("social:listConversations"),
   openConversation: (userId) => ipcRenderer.invoke("social:openConversation", userId),
   getMessages: (conversationId, before) => ipcRenderer.invoke("social:getMessages", conversationId, before),
+  searchMessages: (words, conversationId, before) => ipcRenderer.invoke("social:searchMessages", words, conversationId, before), // (Added by aura-messages-search-setup.cjs)
+  friendStreaks: () => ipcRenderer.invoke("social:friendStreaks"),
   sendMessage: (conversationId, content, link) => ipcRenderer.invoke("social:sendMessage", conversationId, content, link),
   linkPreview: (url) => ipcRenderer.invoke("social:linkPreview", url), // a link's title and picture, looked up by the main process // (Added by aura-messages-links-setup.cjs)
   // Pictures, GIFs and videos: the file's bytes go to the main process, which uploads them

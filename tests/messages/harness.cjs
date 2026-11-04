@@ -82,7 +82,7 @@ async function createWorld(socialPath) {
       if (seen.rows.length) sub.cb({ eventType, new: row, old: {} });
     }
   }
-  const SETS = new Set(["list_friends", "list_conversations", "list_conversations_v2", "list_blocked", "current_call", "join_group", "list_groups"]);
+  const SETS = new Set(["list_friends", "list_conversations", "list_conversations_v2", "list_blocked", "current_call", "join_group", "list_groups", "search_my_messages", "friend_streaks"]); // (search and streaks: Added by aura-messages-search-setup.cjs)
   const ROWS = new Set(["start_call", "answer_call", "end_call", "add_to_call"]); // answer with one whole row
   const callsNow = async () => (process.env.NO_VOICE_SQL ? new Map() : new Map((await run(null, "select * from public.voice_calls")).rows.map((r) => [r.id, r])));
   const reactionsNow = async () => (!hasReactions ? new Map() : new Map((await run(null, "select * from public.message_reactions")).rows.map((r) => [String(r.id), r])));

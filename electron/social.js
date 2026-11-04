@@ -29,12 +29,22 @@ const MEDIA_TYPES = {
   "video/mp4":       { kind: "video", ext: "mp4",  max: 50 * 1024 * 1024 },
   "video/webm":      { kind: "video", ext: "webm", max: 50 * 1024 * 1024 },
   "video/quicktime": { kind: "video", ext: "mov",  max: 50 * 1024 * 1024 },
+  "audio/webm":      { kind: "audio", ext: "weba", max: 5 * 1024 * 1024 },  // voice messages, recorded in AURA (Added by aura-messages-emoji-voice-setup.cjs)
 };
-const MEDIA_PATH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|gif|webp|mp4|webm|mov)$/;
+const MEDIA_PATH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|gif|webp|mp4|webm|mov|weba)$/;
 const MEDIA_LINK_SECONDS = 12 * 60 * 60; // how long a viewing link works before AURA asks for a new one
 const BASIC_COLS = "id,conversation_id,sender_id,content,created_at,read_at";
 const MEDIA_EXTRA = ",media_path,media_kind,media_mime,media_size,media_width,media_height,media_name";
 const MEDIA_SETUP = "Pictures and videos aren't set up in Supabase yet. Run aura-messages-media.sql first.";
+// Voice messages and emoji reactions need one more SQL file (Added by aura-messages-emoji-voice-setup.cjs)
+const EMOJI_VOICE_SETUP = "Voice messages and emoji reactions need a one-time database update. In Supabase, open SQL Editor and run supabase/aura-messages-emoji-voice.sql.";
+const VOICE_MAX_SECONDS = 120;
+// A recording made by AURA's window: WebM with Opus sound and no picture
+function isVoiceRecording(b) {
+  if (!b || b.length < 64 || !(b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3)) return false;
+  const head = b.toString("latin1", 0, Math.min(b.length, 64 * 1024));
+  return head.includes("webm") && head.includes("A_OPUS") && !/V_(VP8|VP9|AV1|MPEG)/.test(head);
+}
 // A chat's shared background: a picture both people see behind that conversation
 const BACKGROUND_TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 const BACKGROUND_MAX = 4 * 1024 * 1024; // the window shrinks the picture first, so it is normally far smaller
@@ -55,8 +65,9 @@ const SIGNAL_MAX = 20000;
 // On networks where a direct connection is impossible a relay is needed too: the AURA server
 // hands one out if it has been set up (see callConfig below).
 const DIRECT_ONLY = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] }];
-// Likes and dislikes on messages
-const REACTIONS = ["like", "dislike"];
+// Likes and dislikes on messages, and emoji: ❤️ love, 😂 laugh, 😮 wow, 😢 sad, 😡 angry, 🔥 fire (Added by aura-messages-emoji-voice-setup.cjs)
+const REACTIONS = ["like", "dislike", "love", "laugh", "wow", "sad", "angry", "fire"];
+const FIRST_REACTIONS = ["like", "dislike"]; // the ones that work before aura-messages-emoji-voice.sql is run
 const REACTIONS_SETUP = "Likes and dislikes aren't set up in Supabase yet. Run aura-messages-reactions.sql first.";
 // GIF search. With KLIPY the AURA server does the searching and the key never leaves it. GIPHY
 // instead asks that the app itself does the searching, so then the server hands this file (never
@@ -112,6 +123,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   let listReady = true;              // same, for the newer conversation list
   let backgroundsReady = true;       // same, for shared chat backgrounds
   let deleteReady = true;
+  let voiceReady = true;             // false once we learn the voice message SQL hasn't been run yet (Added by aura-messages-emoji-voice-setup.cjs)
   let linksReady = true;             // false once we learn the link preview SQL hasn't been run yet // (Added by aura-messages-links-setup.cjs)            // same, for deleted messages
   let liveCall = null;               // id of the call you started or answered on this PC, if any
   const groupLive = new Set();      // in a call with 3 people, the other calls it is made of // (Added by aura-group-calls-setup.cjs)
@@ -171,16 +183,17 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   const shapeMessage = (m) => ({
     id: m.id, conversationId: m.conversation_id, senderId: m.sender_id, content: m.content || "", createdAt: m.created_at, readAt: m.read_at || null, deleted: !!m.deleted_at,
     link: m.link && !m.deleted_at ? links.cleanLink(m.link) : null, // a link's preview, checked again here // (Added by aura-messages-links-setup.cjs)
-    media: m.media_path ? { path: m.media_path, kind: m.media_kind, mime: m.media_mime, size: m.media_size || 0, width: m.media_width || null, height: m.media_height || null, name: m.media_name || "" } : null,
+    media: m.media_path ? { path: m.media_path, kind: m.media_kind, mime: m.media_mime, size: m.media_size || 0, width: m.media_width || null, height: m.media_height || null, name: m.media_name || "", seconds: m.media_seconds || null } : null, // (seconds: voice messages, (Added by aura-messages-emoji-voice-setup.cjs))
   });
   // The words shown where a file has no caption: in the list, in notices
-  const mediaWord = (media) => (!media ? "" : media.kind === "video" ? "Video" : media.mime === "image/gif" ? "GIF" : "Photo");
+  const mediaWord = (media) => (!media ? "" : media.kind === "audio" ? "Voice message" : media.kind === "video" ? "Video" : media.mime === "image/gif" ? "GIF" : "Photo"); // (audio: (Added by aura-messages-emoji-voice-setup.cjs))
   // Which columns a message has depends on which SQL files have been run. AURA asks for all of
   // them; if Supabase says one is missing, it remembers that and asks again without it.
-  const messageCols = () => BASIC_COLS + (mediaReady ? MEDIA_EXTRA : "") + (deleteReady ? ",deleted_at" : "") + (linksReady ? ",link" : ""); // (link: Added by aura-messages-links-setup.cjs)
+  const messageCols = () => BASIC_COLS + (mediaReady ? MEDIA_EXTRA + (voiceReady ? ",media_seconds" : "") : "") + (deleteReady ? ",deleted_at" : "") + (linksReady ? ",link" : ""); // (link: Added by aura-messages-links-setup.cjs)
   const missingColumn = (error) => String(error?.code || "") === "42703" || /(media_(path|kind|mime|size|width|height|name)|deleted_at).*does not exist/i.test(String(error?.message || ""));
   function withoutMissing(error) {
     const msg = String(error?.message || "");
+    if (voiceReady && /media_seconds/.test(msg) && (missingColumn(error) || String(error?.code || "") === "PGRST204")) { voiceReady = false; return true; } // voice messages aren't set up (Added by aura-messages-emoji-voice-setup.cjs)
     if (linksReady && /\blink\b/.test(msg) && (missingColumn(error) || String(error?.code || "") === "PGRST204")) { linksReady = false; return true; } // link previews aren't set up // (Added by aura-messages-links-setup.cjs)
     if (!missingColumn(error)) return false;
     if (deleteReady && (/deleted_at/.test(msg) || !/media_/.test(msg))) { deleteReady = false; return true; }
@@ -191,7 +204,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   // (A request that fails for a missing column changes nothing, so asking again is safe.)
   async function withColumns(run) {
     let res = await run(messageCols());
-    for (let i = 0; i < 2 && res.error && withoutMissing(res.error); i++) res = await run(messageCols());
+    for (let i = 0; i < 4 && res.error && withoutMissing(res.error); i++) res = await run(messageCols()); // (4: one more optional column since aura-messages-emoji-voice-setup.cjs)
     return res;
   }
 
@@ -385,7 +398,13 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     const mid = id(messageId, "message");
     const feeling = reaction == null || reaction === "" ? null : String(reaction);
     if (feeling !== null && !REACTIONS.includes(feeling)) throw new Error("That isn't a reaction AURA knows.");
-    await rpc(groupTitles.has(conversationId) ? "react_in_group" : "react_to_message", { message: mid, feeling }); // (groups: Added by aura-messages-groups-setup.cjs)
+    try {
+      await rpc(groupTitles.has(conversationId) ? "react_in_group" : "react_to_message", { message: mid, feeling }); // (groups: Added by aura-messages-groups-setup.cjs)
+    } catch (e) {
+      // An emoji the database doesn't know yet: its SQL hasn't been run (Added by aura-messages-emoji-voice-setup.cjs)
+      if (feeling && !FIRST_REACTIONS.includes(feeling) && /isn't a reaction AURA knows|message_reactions_reaction_check/.test(String(e?.message || ""))) throw new Error(EMOJI_VOICE_SETUP);
+      throw e;
+    }
     reactionsReady = true;
     return { messageId: mid, userId: user.id, reaction: feeling };
   }
@@ -489,23 +508,35 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     if (!raw || typeof raw === "string") throw new Error("That file couldn't be read.");
     const bytes = Buffer.isBuffer(raw) ? raw : ArrayBuffer.isView(raw) ? Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength) : Buffer.from(raw);
     if (!bytes.length) throw new Error("That file is empty.");
-    const mime = sniff(bytes);
+    const voice = !!file.voice; // a voice message recorded in AURA (Added by aura-messages-emoji-voice-setup.cjs)
+    if (voice && !isVoiceRecording(bytes)) throw new Error("That recording couldn't be read. Try recording it again.");
+    const mime = voice ? "audio/webm" : sniff(bytes);
     const type = mime && MEDIA_TYPES[mime];
+    const seconds = voice ? Math.round(Number(file.seconds)) : null;
+    if (voice && !(seconds >= 1 && seconds <= VOICE_MAX_SECONDS)) throw new Error("Voice messages can be 1 second to 2 minutes long.");
     if (!type) throw new Error("That kind of file can't be sent. Pictures (PNG, JPG, WebP), GIFs and videos (MP4, WebM, MOV) only.");
     if (!mediaReady) throw new Error(MEDIA_SETUP);
-    if (bytes.length > type.max) throw new Error((type.kind === "video" ? "Videos" : "Pictures and GIFs") + " can be up to " + megabytes(type.max) + ". This one is " + megabytes(bytes.length) + ".");
+    if (voice && !voiceReady) throw new Error(EMOJI_VOICE_SETUP);
+    if (bytes.length > type.max) throw new Error((type.kind === "audio" ? "Voice messages" : type.kind === "video" ? "Videos" : "Pictures and GIFs") + " can be up to " + megabytes(type.max) + ". This one is " + megabytes(bytes.length) + ".");
     const content = tidyContent(caption, true);
     const side = (n) => (Number.isFinite(n) && n >= 1 && n <= 20000 ? Math.round(n) : null);
-    const name = String(file.name || "").replace(/[\u0000-\u001f\\/]/g, " ").trim().slice(0, 200) || null;
+    const name = voice ? null : String(file.name || "").replace(/[\u0000-\u001f\\/]/g, " ").trim().slice(0, 200) || null;
     const path = cid + "/" + require("crypto").randomUUID() + "." + type.ext;
 
     const up = await sb().storage.from(MEDIA_BUCKET).upload(path, bytes, { contentType: mime, cacheControl: "31536000", upsert: false });
-    if (up.error) throw friendly(up.error);
+    if (up.error) throw voice && /mime type|not supported/i.test(String(up.error.message || "")) ? new Error(EMOJI_VOICE_SETUP) : friendly(up.error);
     const row = {
       conversation_id: cid, sender_id: user.id, content, media_path: path, media_kind: type.kind, media_mime: mime,
-      media_size: bytes.length, media_width: side(file.width), media_height: side(file.height), media_name: name,
+      media_size: bytes.length, media_width: voice ? null : side(file.width), media_height: voice ? null : side(file.height), media_name: name,
     };
+    if (voice) row.media_seconds = seconds;
     const { data, error } = await withColumns((cols) => sb().from("messages").insert(row).select(cols).single());
+    // A recording the database doesn't take yet: its SQL hasn't been run (the file is removed again)
+    if (error && voice && (/media_seconds|messages_media_shape|doesn't belong/.test(String(error.message || "")) || String(error.code || "") === "PGRST204" || String(error.code || "") === "42703")) {
+      try { await sb().storage.from(MEDIA_BUCKET).remove([path]); } catch {}
+      voiceReady = false;
+      throw new Error(EMOJI_VOICE_SETUP);
+    }
     if (error) throw !mediaReady || missingColumn(error) ? new Error(MEDIA_SETUP) : friendly(error);
     return shapeMessage(data);
   }
@@ -912,7 +943,7 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
   // Called by the window when it opens. Safe to call again.
   async function start() {
     const user = await currentUser();
-    mediaReady = true; listReady = true; backgroundsReady = true; deleteReady = true; reactionsReady = true; linksReady = true; // check again each time AURA starts, in case the SQL has been run since
+    mediaReady = true; voiceReady = true; listReady = true; backgroundsReady = true; deleteReady = true; reactionsReady = true; linksReady = true; // check again each time AURA starts, in case the SQL has been run since
     if (!authWatched) {
       authWatched = true;
       try { sb().auth.onAuthStateChange((event) => { if (event === "SIGNED_OUT") unsubscribe(); }); } catch {}
@@ -973,8 +1004,31 @@ function register({ ipcMain, cloudHandler, cloud, getWindow, server, messageSoun
     }
   } catch {}
 
+  // ── Searching your messages, and friend streaks (Added by aura-messages-search-setup.cjs) ──
+  // Both are database functions that run with your own permissions: only chats you're in, only
+  // your own calls (supabase/aura-messages-search.sql). Nothing is saved.
+  const NEEDS_SEARCH_SQL = "Message search and streaks need a one-time database update. In Supabase, open SQL Editor and run supabase/aura-messages-search.sql.";
+  const noSearchFn = (e) => !!e && (e.code === "PGRST202" || e.code === "42883" || /search_my_messages|friend_streaks/.test(e.message || ""));
+  async function searchMessages(words, conversationId, before) {
+    const text = typeof words === "string" ? words.replace(/\s+/g, " ").trim() : "";
+    if (text.length < 2) return { results: [] };
+    if (text.length > 100) throw new Error("That search is too long.");
+    const args = { q: text, conversation: conversationId ? id(conversationId, "conversation") : null, before: null };
+    if (before) { const d = new Date(before); if (isNaN(d.getTime())) throw new Error("That date isn't valid."); args.before = d.toISOString(); }
+    const { data, error } = await sb().rpc("search_my_messages", args);
+    if (error) throw (noSearchFn(error) ? new Error(NEEDS_SEARCH_SQL) : friendly(error));
+    return { results: (data || []).map((r) => ({ id: r.id, conversationId: r.conversation_id, senderId: r.sender_id, content: String(r.content || "").slice(0, 400), createdAt: r.created_at })) };
+  }
+  async function friendStreaks() {
+    let tz = "UTC";
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch {}
+    const { data, error } = await sb().rpc("friend_streaks", { tz });
+    if (error) { if (noSearchFn(error)) return { streaks: [], unavailable: true }; throw friendly(error); }
+    return { streaks: (data || []).map((r) => ({ userId: r.user_id, days: Math.max(0, Number(r.days) || 0), today: r.today === true })) };
+  }
+
   // ── What the window may ask for ─────────────────────────────────────────────
-  const api = { start, stop, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, deleteMessage, blockUser, unblockUser, listBlocked, reportUser, markRead, react, gifSearch, startCall, answerCall, endCall, callSignal, callState, callBeat, currentCall, callConfig, addToCall, joinGroup, linkPreview, createGroup, addGroupMembers, removeGroupMember, leaveGroup, renameGroup };
+  const api = { start, stop, searchMessages, friendStreaks, listFriends, findUser, requestFriend, acceptFriend, removeFriend, getProfile, listConversations, openConversation, getMessages, sendMessage, sendMedia, mediaUrls, setBackground, deleteMessage, blockUser, unblockUser, listBlocked, reportUser, markRead, react, gifSearch, startCall, answerCall, endCall, callSignal, callState, callBeat, currentCall, callConfig, addToCall, joinGroup, linkPreview, createGroup, addGroupMembers, removeGroupMember, leaveGroup, renameGroup };
   for (const [name, fn] of Object.entries(api)) ipcMain.handle("social:" + name, cloudHandler(fn));
   return api;
 }

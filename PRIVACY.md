@@ -29,7 +29,7 @@ These are stored with Supabase, the database service AURA uses.
 - Play sessions: the game, when it started and ended, and the game's file location on your PC. To notice a game you started outside AURA, AURA checks which programs are running on your PC and compares their names with your library. That check stays on your PC; only the sessions it finds are saved.
 - Achievements, streaks, themes, settings, and your AURA background if it is a web address.
 - Friends: the requests you send and receive, your friends, the people you block, and when you were last online. Only your friends see whether you're online.
-- Messages: the text, pictures, GIFs and videos you send, link previews (a link's title, description and a small picture), the likes and dislikes you put on messages, a chat's shared background, and whether a message has been read.
+- Messages: the text, pictures, GIFs, videos and voice messages you send, link previews (a link's title, description and a small picture), the reactions (👍, 👎 and emoji) you put on messages, a chat's shared background, and whether a message has been read.
 - Group chats: the group's name, who is in it and who made it.
 - Calls: who called whom, when, and whether the call was answered. This is kept for 30 days. The sound and picture of a call are never recorded or saved.
 - Reports you send: the reason, anything you add, and a copy of the message you reported.
@@ -39,6 +39,10 @@ These are stored with Supabase, the database service AURA uses.
 A conversation between two people, and its files, can be opened only by those two people. A group chat and its files can be opened by everyone in the group, which can include people who aren't your friends. Files have no public links.
 
 When you send a link, your PC visits that page once to make its preview, and the preview is saved with the message. The other person's AURA doesn't visit the page unless they open it.
+
+Searching your messages looks only in chats you're in, and what you search for isn't saved. Friend streaks (🔥) are worked out from the messages and calls you already have: nothing extra is stored, and only you and that friend see your streak.
+
+Voice messages are recorded only while the red dot shows, using the microphone you picked for calls. Each one is a private file, like a picture, that only the people in that chat can play. It's deleted when you delete the message or your account.
 
 Messages are protected on their way to and from AURA, but they are not end-to-end encrypted. The developer can access the database to keep AURA running and to look into reports. Don't send passwords, card numbers or anything else you'd need to keep secret.
 

@@ -50,7 +50,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   console.log("3. What is refused");
   check("a made-up id is refused before asking Supabase", /isn't valid/.test(await err(A.call("react", "nope", "like"))));
-  check("only like and dislike exist", /isn't a reaction AURA knows/.test(await err(A.call("react", m1.id, "love"))) && /isn't a reaction AURA knows/.test(await err(A.call("react", m1.id, { reaction: "like" }))));
+  check("a made-up reaction is refused", /isn't a reaction AURA knows/.test(await err(A.call("react", m1.id, "meh"))) && /isn't a reaction AURA knows/.test(await err(A.call("react", m1.id, { reaction: "like" }))));
   A.events.length = 0; B.events.length = 0;
   check("someone outside the chat can't react to a message in it", /isn't in one of your conversations/.test(await err(C.call("react", m1.id, "like"))));
   check("a stranger can't either", /isn't in one of your conversations/.test(await err(D.call("react", m2.id, "dislike"))));

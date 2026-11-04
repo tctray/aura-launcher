@@ -145,7 +145,7 @@ function savePrefs(next) {
   prefs = { ...prefs, ...next };
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {}
 }
-async function openMic(deviceId = prefs.mic) {
+export async function openMic(deviceId = prefs.mic) { // (export: voice messages use the same microphone, Added by aura-messages-emoji-voice-setup.cjs)
   const want = (id) => ({ audio: { ...(id ? { deviceId: { exact: id } } : {}), echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
   try { return await navigator.mediaDevices.getUserMedia(want(deviceId)); }
   catch (e) {

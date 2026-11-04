@@ -21,7 +21,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createPortal } from "react-dom";
 import { PrivacyButton } from "./privacy";
 import { chime } from "./sounds"; // your message sound (Settings > Calls and messages)
-import { CallButton, IconPhone, MISSED_CALL, callActions, callHooks, callsAvailable, mountCallLayer, useCall } from "./calls";
+import { CallButton, IconPhone, MISSED_CALL, callActions, callHooks, callsAvailable, mountCallLayer, openMic, useCall } from "./calls"; // (openMic: voice messages, Added by aura-messages-emoji-voice-setup.cjs)
 import { DecoratedAvatar } from "./avatardecor"; // seasonal avatar decorations (Added by aura-seasonal-setup.cjs)
 
 // ── Talking to the main process ───────────────────────────────────────────────
@@ -42,6 +42,8 @@ const blank = () => ({
   media: {},            // file path -> { url, at, life } viewing links, fetched as files come on screen
   blocked: [],          // people you have blocked
   activeId: null, pageOpen: false,
+  streaks: {},          // friend's user id -> { days, today } (Added by aura-messages-search-setup.cjs)
+  jump: null,           // { cid, mid, ready } a search result being opened
 });
 let state = blank();
 const listeners = new Set();
@@ -55,6 +57,8 @@ const sortByNewest = (list) => [...list].sort((a, b) => Date.parse(b.lastMessage
 const isLooking = (conversationId) => state.pageOpen && state.activeId === conversationId && document.hasFocus();
 
 let tempCounter = 0;
+let streakTimer = 0;
+const scheduleStreaks = () => { clearTimeout(streakTimer); streakTimer = setTimeout(() => actions.refreshStreaks(), 2500); }; // (Added by aura-messages-search-setup.cjs)
 const readTimers = {};
 const lastNotice = {};
 
@@ -170,6 +174,28 @@ const actions = {
     } catch (e) { setThread(conversationId, { loading: false, error: e.message }); }
   },
 
+  // Friend streaks: days in a row you've both messaged (Added by aura-messages-search-setup.cjs)
+  async refreshStreaks() {
+    if (typeof window.auraSocial?.friendStreaks !== "function") return;
+    try {
+      const r = await call("friendStreaks");
+      const streaks = {};
+      for (const x of r?.streaks || []) if (x && x.userId) streaks[x.userId] = { days: x.days, today: x.today };
+      set({ streaks });
+    } catch {}
+  },
+  // Open a search result: its chat, and earlier messages until it's there
+  async jumpTo(conversationId, messageId) {
+    set({ jump: { cid: conversationId, mid: messageId, ready: false } });
+    await actions.open(conversationId);
+    for (let i = 0; i < 30; i++) {
+      const t = thread(conversationId);
+      if (t.items.some((m) => m.id === messageId) || !t.hasMore) break;
+      await actions.loadOlder(conversationId);
+    }
+    if (state.jump?.mid === messageId) set({ jump: { ...state.jump, ready: true } });
+  },
+
   async loadOlder(conversationId) {
     const t = thread(conversationId);
     if (!t.hasMore || t.loadingOlder || !t.items.length) return;
@@ -212,12 +238,12 @@ const actions = {
     const tempId = retryOf || `sending-${++tempCounter}`;
     const draft = {
       id: tempId, conversationId, senderId: state.me.id, content, createdAt: new Date().toISOString(), readAt: null, pending: true, failed: false, attachment,
-      media: { path: "", kind: attachment.kind, mime: attachment.mime, size: attachment.size, width: attachment.width, height: attachment.height, name: attachment.name, local: attachment.url },
+      media: { path: "", kind: attachment.kind, mime: attachment.mime, size: attachment.size, width: attachment.width, height: attachment.height, name: attachment.name, local: attachment.url, seconds: attachment.seconds || null }, // (seconds: voice messages, Added by aura-messages-emoji-voice-setup.cjs)
     };
     setThread(conversationId, (t) => ({ items: [...t.items.filter((m) => m.id !== tempId), draft] }));
     try {
       const bytes = new Uint8Array(await attachment.file.arrayBuffer());
-      const saved = await call("sendMedia", conversationId, { name: attachment.name, bytes, width: attachment.width, height: attachment.height }, content);
+      const saved = await call("sendMedia", conversationId, { name: attachment.name, bytes, width: attachment.width, height: attachment.height, ...(attachment.voice ? { voice: true, seconds: attachment.seconds } : {}) }, content); // (voice: Added by aura-messages-emoji-voice-setup.cjs)
       // You already have the file, so show your own copy instead of downloading it back
       if (saved.media?.path) set((s) => ({ media: { ...s.media, [saved.media.path]: { url: attachment.url, at: Date.now(), life: Infinity } } }));
       setThread(conversationId, (t) => ({ items: mergeMessage(t.items.filter((m) => m.id !== tempId), saved) }));
@@ -376,7 +402,7 @@ function onReaction(event) {
   lastNotice["r-" + message.conversationId] = now;
   const where = state.conversations.find((c) => c.id === message.conversationId);
   const name = where?.isGroup ? memberName(where, event.userId) : where?.username; // (in a group, who it was: Added by aura-messages-groups-setup.cjs)
-  if (name) hooks.toast?.(`${name} ${event.reaction === "like" ? "liked" : "disliked"} your message${where?.isGroup ? " in " + where.title : ""}`);
+  if (name) hooks.toast?.(`${name} ${didWord(event.reaction)} your message${where?.isGroup ? " in " + where.title : ""}`); // (emoji: Added by aura-messages-emoji-voice-setup.cjs)
 }
 
 function applyBackground(conversationId, background) {
@@ -402,7 +428,7 @@ async function fetchMedia() {
 }
 
 // "Photo", "GIF" or "Video": what a file is called where there are no words to show
-const mediaWord = (media) => (!media ? "" : media.kind === "video" ? "Video" : media.mime === "image/gif" ? "GIF" : "Photo");
+const mediaWord = (media) => (!media ? "" : media.kind === "audio" ? "Voice message" : media.kind === "video" ? "Video" : media.mime === "image/gif" ? "GIF" : "Photo"); // (audio: Added by aura-messages-emoji-voice-setup.cjs)
 const sizeText = (n) => (n >= 1048576 ? (n / 1048576).toFixed(n >= 10485760 ? 0 : 1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
 
 // What can be attached. The main process checks again from the file's own bytes.
@@ -462,6 +488,7 @@ function touchConversation(message, countUnread) {
 }
 
 function onMessage(message) {
+  scheduleStreaks(); // a new message may start or keep a streak (Added by aura-messages-search-setup.cjs)
   const mine = message.senderId === state.me.id;
   const conversation = state.conversations.find((c) => c.id === message.conversationId);
   // In a group: a line like "added Cam" may mean the name or the people changed; someone you blocked stays quiet (Added by aura-messages-groups-setup.cjs)
@@ -577,12 +604,14 @@ export function useAuraSocial({ view, goTo, toast }) {
         set({ me, ready: true, live: !!me.live, everLive: !!me.live });
         await Promise.all([actions.refreshFriends(), actions.refreshConversations(), actions.refreshBlocked()]);
         if (alive) callActions.resume(); // a call may already be ringing for you
+        if (alive) actions.refreshStreaks(); // (Added by aura-messages-search-setup.cjs)
       } catch (e) {
         if (alive) set({ ready: true, friendsLoaded: true, conversationsLoaded: true, friendsError: e.message, conversationsError: e.message });
       }
     })();
     // If live updates are down, check for new messages now and then until they're back
     const fallback = setInterval(() => { if (state.me && !state.live) actions.catchUp(); }, 20000);
+    const streakClock = setInterval(() => { if (state.me && !window.__auraHidden) actions.refreshStreaks(); }, 10 * 60 * 1000); // streaks change at midnight too (Added by aura-messages-search-setup.cjs)
     // Coming back to AURA: mark what you're looking at as read, and freshen online dots
     let lastFresh = Date.now();
     const onFocus = () => {
@@ -598,6 +627,7 @@ export function useAuraSocial({ view, goTo, toast }) {
       off?.();
       removeCallBar(); // hangs up, if a call is going on
       clearInterval(fallback);
+      clearInterval(streakClock); clearTimeout(streakTimer);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("online", onOnline);
       Object.values(readTimers).forEach(clearTimeout);
@@ -636,8 +666,13 @@ const IconPhoto = () => <Svg d={<><rect x="3" y="5" width="18" height="14" rx="2
 const IconTrash = () => <Svg d={<path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.9 12.2h9.2L17.5 7M10 10.5v5.5M14 10.5v5.5"/>} size={15} />;
 const IconFlag = () => <Svg d={<path d="M5.5 21V4M5.5 4.5h11l-2.2 3.7 2.2 3.8h-11"/>} size={15} />;
 const IconLike = ({ size = 15 }) => <Svg d={<path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>} size={size} />;
-const IconDislike = ({ size = 15 }) => <Svg d={<path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/>} size={size} />;
 const IconSearch = () => <Svg d={<><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></>} size={15} />;
+// Emoji reactions and voice messages (Added by aura-messages-emoji-voice-setup.cjs)
+const IconSmile = () => <Svg d={<><circle cx="12" cy="12" r="9"/><path d="M8.5 14.2a4.3 4.3 0 0 0 7 0"/><path d="M9 9.6h.01M15 9.6h.01" strokeWidth="2.6"/></>} size={15} />;
+const IconMic = () => <Svg d={<><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></>} />;
+const IconStop = () => <Svg d={<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/>} />;
+const IconPause = () => <Svg d={<path d="M8 5.5v13M16 5.5v13" strokeWidth="3.2"/>} />;
+const IconPlaySmall = () => <Svg d={<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/>} />;
 const IconGame = () => <Svg d={<><rect x="2.5" y="7" width="19" height="10" rx="5"/><path d="M7.5 10.5v3M6 12h3M15.5 11h.01M17.5 13h.01"/></>} />;
 
 function Avatar({ name, url, size = 38, online = null, userId = null }) {
@@ -980,7 +1015,7 @@ function FriendsManager({ variant = "panel", onMessaged }) {
   const Row = ({ f, sub, children }) => (
     <div className="mx-fr">
       <Avatar name={f.username} userId={f.userId} url={f.avatarUrl} size={34} online={f.state === "friend" ? f.online : null} />
-      <div className="mx-fr-i"><div className="mx-fr-n">{f.username}</div><div className="mx-fr-s">{sub}</div></div>
+      <div className="mx-fr-i"><div className="mx-fr-n">{f.username}{f.state === "friend" && <StreakBadge userId={f.userId} name={f.username} />}</div><div className="mx-fr-s">{sub}</div></div>
       <div className="mx-fr-a">{children}</div>
     </div>
   );
@@ -1089,6 +1124,91 @@ function CallPicker({ onClose }) {
 }
 
 // ── Messages page ─────────────────────────────────────────────────────────────
+// ── Friend streaks and message search (Added by aura-messages-search-setup.cjs) ──
+const STREAK_FROM = 3; // shown from 3 days in a row
+export function StreakBadge({ userId, name }) {
+  const s = useSocial();
+  const st = userId ? s.streaks[userId] : null;
+  if (!st || st.days < STREAK_FROM) return null;
+  const late = !st.today && new Date().getHours() >= 18;
+  const who = name || "them";
+  const say = st.today
+    ? `${st.days}-day streak: you and ${who} have both messaged every day for ${st.days} days`
+    : `${st.days}-day streak. Message ${who} today to keep it going`;
+  return <span className={`mx-streak ${late ? "late" : ""}`} title={say} aria-label={say}>🔥{st.days}{late && <span aria-hidden="true">⌛</span>}</span>;
+}
+const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function Snippet({ text, words }) {
+  const flat = String(text || "").replace(/\s+/g, " ");
+  const at = flat.toLowerCase().indexOf(words.toLowerCase());
+  const from = Math.max(0, at - 50);
+  const cut = (from > 0 ? "…" : "") + flat.slice(from, from + 160) + (flat.length > from + 160 ? "…" : "");
+  const parts = cut.split(new RegExp(`(${esc(words)})`, "ig"));
+  return <>{parts.map((p, i) => (i % 2 ? <mark key={i}>{p}</mark> : p))}</>;
+}
+function SearchResults({ words, onlyIn }) {
+  const s = useSocial();
+  const [res, setRes] = useState({ list: [], busy: true, error: "", more: false });
+  useEffect(() => {
+    let live = true;
+    setRes({ list: [], busy: true, error: "", more: false });
+    const t = setTimeout(async () => {
+      try {
+        const r = await call("searchMessages", words, onlyIn || null);
+        if (live) setRes({ list: r.results || [], busy: false, error: "", more: (r.results || []).length >= 50 });
+      } catch (e) { if (live) setRes({ list: [], busy: false, error: e.message, more: false }); }
+    }, 300);
+    return () => { live = false; clearTimeout(t); };
+  }, [words, onlyIn]);
+  const more = async () => {
+    const last = res.list[res.list.length - 1];
+    if (!last) return;
+    setRes((x) => ({ ...x, busy: true }));
+    try {
+      const r = await call("searchMessages", words, onlyIn || null, last.createdAt);
+      setRes((x) => ({ list: [...x.list, ...(r.results || [])], busy: false, error: "", more: (r.results || []).length >= 50 }));
+    } catch (e) { setRes((x) => ({ ...x, busy: false, error: e.message })); }
+  };
+  const convOf = (cid) => s.conversations.find((c) => c.id === cid);
+  return (
+    <div className="mx-list mx-results" role="list" aria-label="Search results">
+      {res.error && <div className="mx-note err">{res.error}</div>}
+      {!res.error && !res.busy && !res.list.length && <div className="mx-note">No messages with “{words}”{onlyIn ? " in this chat" : ""}.</div>}
+      {res.list.map((m) => {
+        const c = convOf(m.conversationId);
+        if (!c) return null;
+        const who = s.me && m.senderId === s.me.id ? "You" : c.isGroup ? memberName(c, m.senderId) : c.username;
+        return (
+          <button key={m.id} type="button" role="listitem" className={`mx-conv mx-result ${s.jump?.mid === m.id ? "on" : ""}`} onClick={() => actions.jumpTo(m.conversationId, m.id)}>
+            {c.isGroup ? <GroupAvatar conversation={c} size={40} /> : <Avatar name={c.username} userId={c.userId} url={c.avatarUrl} size={40} />}
+            <span className="mx-conv-m">
+              <span className="mx-conv-top"><span className="mx-conv-n">{c.username}</span><span className="mx-conv-t">{new Date(m.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: new Date(m.createdAt).getFullYear() === new Date().getFullYear() ? undefined : "numeric" })}</span></span>
+              <span className="mx-result-p"><b>{who}:</b> <Snippet text={m.content} words={words} /></span>
+            </span>
+          </button>
+        );
+      })}
+      {res.busy && <div className="mx-note">Searching…</div>}
+      {!res.busy && res.more && <button type="button" className="mx-link mx-more" onClick={more}>Show older messages</button>}
+    </div>
+  );
+}
+function SearchBox({ value, onChange, onlyIn, setOnlyIn, activeName }) {
+  return (
+    <div className="mx-search">
+      <div className="mx-search-in">
+        <IconSearch />
+        <input type="search" value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") onChange(""); }}
+          placeholder="Search messages" aria-label="Search messages" maxLength={100} spellCheck={false} />
+        {value && <button type="button" className="mx-search-x" onClick={() => onChange("")} aria-label="Clear search"><IconX /></button>}
+      </div>
+      {value.trim().length >= 2 && activeName && (
+        <label className="mx-search-only"><input type="checkbox" checked={onlyIn} onChange={(e) => setOnlyIn(e.target.checked)} /> Only in {activeName}</label>
+      )}
+    </div>
+  );
+}
+
 function ConversationList() {
   const s = useSocial();
   const [, tick] = useState(0);
@@ -1116,7 +1236,7 @@ function ConversationList() {
           <button key={c.id} type="button" role="listitem" className={`mx-conv ${s.activeId === c.id ? "on" : ""} ${c.unread ? "unread" : ""}`} onClick={() => actions.open(c.id)}>
             {c.isGroup ? <GroupAvatar conversation={c} size={40} /> : <Avatar name={c.username} userId={c.userId} url={c.avatarUrl} size={40} online={c.isFriend ? c.online : null} />}
             <span className="mx-conv-m">
-              <span className="mx-conv-top"><span className="mx-conv-n">{c.username}</span><span className="mx-conv-t">{last ? shortTime(c.lastMessageAt) : ""}</span></span>
+              <span className="mx-conv-top"><span className="mx-conv-n">{c.username}{!c.isGroup && <StreakBadge userId={c.userId} name={c.username} />}</span><span className="mx-conv-t">{last ? shortTime(c.lastMessageAt) : ""}</span></span>
               <span className="mx-conv-bot">
                 <span className="mx-conv-p">{last ? (!c.isGroup && mine && !missed && (c.lastMessage || c.lastMedia) ? "You: " : "") + last : "No messages yet"}</span>
                 {c.unread > 0 && <span className="mx-badge" aria-label={`${c.unread} unread`}>{c.unread > 99 ? "99+" : c.unread}</span>}
@@ -1335,26 +1455,262 @@ function GifPicker({ onPick, onClose }) {
   );
 }
 
-// The 👍 and 👎 already on a message. Yours is filled in; click it to take it back.
+// The reactions already on a message (👍 👎 and the emoji). Yours is filled in; click it to take it back.
 function ReactionChips({ message, me, name, canAdd, onReact }) {
   const list = message.reactions || [];
   if (!list.length) return null;
   const mine = list.find((x) => x.userId === me)?.reaction || null;
   return (
     <div className="mx-reacts">
-      {["like", "dislike"].map((kind) => {
+      {EMOJI.map(({ kind, char }) => { // (every emoji: Added by aura-messages-emoji-voice-setup.cjs)
         const who = list.filter((x) => x.reaction === kind);
         if (!who.length) return null;
         const names = who.map((x) => (x.userId === me ? "You" : typeof name === "function" ? name(x.userId) : name)).sort((a) => (a === "You" ? -1 : 1)); // (a group names each person: Added by aura-messages-groups-setup.cjs)
-        const label = `${names.join(" and ")} ${kind === "like" ? "liked" : "disliked"} this`;
+        const label = `${names.join(" and ")} ${didWord(kind)} this`;
         const on = mine === kind;
         return (
           <button key={kind} type="button" className={`mx-react ${kind} ${on ? "on" : ""}`} disabled={!on && !canAdd} aria-pressed={on} onClick={() => onReact(on ? null : kind)}
             title={on ? `${label}. Click to take yours back.` : label} aria-label={label}>
-            {kind === "like" ? <IconLike size={13} /> : <IconDislike size={13} />}{who.length > 1 && <span>{who.length}</span>}
+            <span className="mx-react-e" aria-hidden="true">{char}</span>{who.length > 1 && <span>{who.length}</span>}
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// ── Emoji reactions (Added by aura-messages-emoji-voice-setup.cjs) ─────────────────────────
+// One per person per message, like 👍 and 👎 always were. The word is what Supabase saves.
+const EMOJI = [
+  { kind: "like", char: "👍", name: "Like", did: "liked" },
+  { kind: "dislike", char: "👎", name: "Dislike", did: "disliked" },
+  { kind: "love", char: "❤️", name: "Love" },
+  { kind: "laugh", char: "😂", name: "Haha" },
+  { kind: "wow", char: "😮", name: "Wow" },
+  { kind: "sad", char: "😢", name: "Sad" },
+  { kind: "angry", char: "😡", name: "Angry" },
+  { kind: "fire", char: "🔥", name: "Fire" },
+];
+function didWord(kind) {
+  const e = EMOJI.find((x) => x.kind === kind);
+  return e?.did || `reacted ${e?.char || ""} to`;
+}
+// The smiley beside a message: opens the row of emoji. Pick yours again to take it back.
+function EmojiButton({ mine, onReact }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => { if (!box.current?.contains(e.target)) setOpen(false); };
+    const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); box.current?.querySelector(".mx-act-emoji")?.focus(); } };
+    document.addEventListener("mousedown", away, true);
+    document.addEventListener("keydown", esc, true);
+    return () => { document.removeEventListener("mousedown", away, true); document.removeEventListener("keydown", esc, true); };
+  }, [open]);
+  useEffect(() => { if (open) box.current?.querySelector(".mx-emo-pop button")?.focus(); }, [open]);
+  const current = EMOJI.find((e) => e.kind === mine && e.kind !== "like");
+  return (
+    <span className={`mx-emo ${open ? "open" : ""}`} ref={box}>
+      <button type="button" className={`mx-act-react mx-act-emoji ${current ? "on" : ""}`} aria-haspopup="true" aria-expanded={open} onClick={() => setOpen((v) => !v)}
+        title="React" aria-label={current ? `Your reaction: ${current.name}. Change it` : "React with an emoji"}>{current ? <span className="mx-emo-cur" aria-hidden="true">{current.char}</span> : <IconSmile />}</button>
+      {open && (
+        <div className="mx-emo-pop" role="group" aria-label="Reactions">
+          {EMOJI.map((e) => (
+            <button key={e.kind} type="button" className={mine === e.kind ? "on" : ""} aria-pressed={mine === e.kind} data-emoji={e.kind}
+              title={mine === e.kind ? `Take back your ${e.name.toLowerCase()}` : e.name} aria-label={mine === e.kind ? `Take back your ${e.name.toLowerCase()}` : e.name}
+              onClick={() => { setOpen(false); onReact(mine === e.kind ? null : e.kind); }}>{e.char}</button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+// ── Voice messages (Added by aura-messages-emoji-voice-setup.cjs) ──────────────────────────
+// Recorded here with the microphone picked for calls, sent like a picture: a private file only the
+// people in the chat can play. Up to 2 minutes.
+const VOICE_MAX = 120;
+const voiceAvailable = () => typeof window.MediaRecorder === "function" && !!navigator.mediaDevices?.getUserMedia && typeof window.auraSocial?.sendMedia === "function";
+const mmss = (secs) => { const n = Math.max(0, Math.floor(secs || 0)); return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`; };
+let voicePlaying = null; // only one voice message plays at a time
+
+function VoicePlayer({ url, seconds, onError }) {
+  const el = useRef(null);
+  const [playing, setPlaying] = useState(false);
+  const [at, setAt] = useState(0);
+  const [length, setLength] = useState(seconds || 0);
+  useEffect(() => () => { if (voicePlaying === el.current) voicePlaying = null; el.current?.pause(); }, []);
+  const toggle = () => {
+    const a = el.current;
+    if (!a) return;
+    if (!a.paused) { a.pause(); return; }
+    if (voicePlaying && voicePlaying !== a) voicePlaying.pause();
+    voicePlaying = a;
+    a.play().catch(() => {});
+  };
+  const total = length || seconds || 0;
+  const shown = Math.min(at, total || at);
+  return (
+    <div className={`mx-voice ${playing ? "playing" : ""}`} style={{ "--mx-vp": total ? `${Math.min(100, (shown / total) * 100)}%` : "0%" }}>
+      <audio ref={el} src={url} preload="metadata"
+        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
+        onEnded={(e) => { setPlaying(false); setAt(0); try { e.currentTarget.currentTime = 0; } catch {} }}
+        onTimeUpdate={(e) => setAt(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => { const d = e.currentTarget.duration; if (Number.isFinite(d) && d > 0) setLength(d); }}
+        onError={onError} />
+      <button type="button" className="mx-voice-play" onClick={toggle} aria-label={playing ? "Pause voice message" : "Play voice message"} title={playing ? "Pause" : "Play"}>{playing ? <IconPause /> : <IconPlaySmall />}</button>
+      <input type="range" className="mx-voice-bar" min={0} max={Math.max(1, total)} step={0.1} value={shown}
+        onChange={(e) => { const v = Number(e.target.value); setAt(v); try { if (el.current) el.current.currentTime = v; } catch {} }}
+        aria-label="Position in the voice message" aria-valuetext={`${mmss(shown)} of ${mmss(total)}`} />
+      <span className="mx-voice-t">{playing || at > 0 ? mmss(shown) : mmss(total)}</span>
+    </div>
+  );
+}
+
+// A voice message in the chat: asks for its private link like a picture does
+function VoiceView({ message }) {
+  const s = useSocial();
+  const media = message.media;
+  const entry = media.path ? s.media[media.path] : null;
+  const url = media.local || entry?.url || "";
+  const [broken, setBroken] = useState(false);
+  const retried = useRef(false);
+  useEffect(() => { if (media.path && !media.local) actions.needMedia(media.path); }, [media.path, media.local]);
+  useEffect(() => { setBroken(false); }, [url]);
+  const failed = () => {
+    if (media.local || retried.current || !media.path) { setBroken(true); return; }
+    retried.current = true;
+    actions.needMedia(media.path, true);
+  };
+  const again = () => { retried.current = false; setBroken(false); actions.needMedia(media.path, true); };
+  const gone = !media.local && entry?.missing;
+  const trouble = !media.local && (broken || (entry && !entry.url && !entry.missing));
+  return (
+    <div className="mx-voice-box" data-voice>
+      {gone ? <div className="mx-voice-note">This voice message is no longer available.</div>
+        : trouble ? <div className="mx-voice-note">Couldn't load this voice message. <button type="button" className="mx-link" onClick={again}>Try again</button></div>
+        : !url ? <div className="mx-voice-note wait"><IconMic /> Loading…</div>
+        : <VoicePlayer url={url} seconds={media.seconds} onError={failed} />}
+      {message.pending && <span className="mx-voice-busy"><i className="mx-spin" /> Sending…</span>}
+    </div>
+  );
+}
+
+// Recording one. Stop to listen to it first, or send it straight away. Esc throws it away.
+function VoiceRecorder({ onSend, onCancel }) {
+  const [phase, setPhase] = useState("starting"); // starting, recording, stopped, error
+  const [secs, setSecs] = useState(0);
+  const [levels, setLevels] = useState(() => Array(28).fill(0));
+  const [error, setError] = useState("");
+  const [clip, setClip] = useState(null);        // { blob, url, seconds } once stopped
+  const r = useRef({ chunks: [], sendAfter: false, gone: false });
+  const finish = useCallback(() => {
+    const st = r.current;
+    clearInterval(st.timer); cancelAnimationFrame(st.raf);
+    try { st.ctx?.close(); } catch {}
+    st.stream?.getTracks().forEach((t) => t.stop());
+    st.ctx = null; st.stream = null;
+  }, []);
+  const stop = useCallback((andSend) => {
+    const st = r.current;
+    st.sendAfter = !!andSend;
+    if (st.mr && st.mr.state !== "inactive") st.mr.stop();
+  }, []);
+  useEffect(() => {
+    const st = r.current;
+    (async () => {
+      let stream;
+      try { stream = await openMic(); }
+      catch (e) {
+        if (st.gone) return;
+        setPhase("error");
+        setError(e?.name === "NotAllowedError" ? "AURA isn't allowed to use your microphone. Turn it on in Windows Settings > Privacy & security > Microphone."
+          : e?.name === "NotFoundError" ? "No microphone found. Plug one in and try again."
+          : "Your microphone couldn't be opened. Close other apps using it and try again.");
+        return;
+      }
+      if (st.gone) { stream.getTracks().forEach((t) => t.stop()); return; }
+      st.stream = stream;
+      const type = "audio/webm;codecs=opus";
+      let mr;
+      try { mr = new MediaRecorder(stream, { ...(MediaRecorder.isTypeSupported(type) ? { mimeType: type } : {}), audioBitsPerSecond: 32000 }); }
+      catch { finish(); setPhase("error"); setError("Recording isn't available on this PC."); return; }
+      st.mr = mr;
+      mr.ondataavailable = (e) => { if (e.data && e.data.size) st.chunks.push(e.data); };
+      mr.onstop = () => {
+        const seconds = Math.min(VOICE_MAX, (performance.now() - st.started) / 1000);
+        finish();
+        if (st.gone) return;
+        const blob = new Blob(st.chunks, { type: "audio/webm" });
+        if (seconds < 1 || !blob.size) { setPhase("error"); setError("That was too short. Hold on a little longer before you stop."); return; }
+        const made = { blob, url: URL.createObjectURL(blob), seconds: Math.max(1, Math.round(seconds)) };
+        if (st.sendAfter) { onSend(made); return; }
+        setClip(made);
+        setPhase("stopped");
+      };
+      try {
+        const ctx = new AudioContext();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        st.ctx = ctx;
+        const buf = new Uint8Array(analyser.fftSize);
+        let last = 0;
+        const tick = (now) => {
+          if (now - last > 90) {
+            last = now;
+            analyser.getByteTimeDomainData(buf);
+            let peak = 0;
+            for (const v of buf) peak = Math.max(peak, Math.abs(v - 128));
+            setLevels((l) => [...l.slice(1), Math.min(1, peak / 60)]);
+          }
+          st.raf = requestAnimationFrame(tick);
+        };
+        st.raf = requestAnimationFrame(tick);
+      } catch {} // no meter, the recording still works
+      st.started = performance.now();
+      mr.start(250);
+      setPhase("recording");
+      st.timer = setInterval(() => {
+        const t = (performance.now() - st.started) / 1000;
+        setSecs(t);
+        if (t >= VOICE_MAX) stop(false); // the limit: it stops, and waits for you to send it
+      }, 200);
+    })();
+    return () => {
+      st.gone = true;
+      if (st.mr && st.mr.state !== "inactive") { try { st.mr.stop(); } catch {} }
+      finish();
+    };
+  }, [finish, stop, onSend]);
+  useEffect(() => () => { if (clip?.url && !r.current.sent) URL.revokeObjectURL(clip.url); }, [clip]);
+  const send = () => {
+    if (phase === "recording") stop(true);
+    else if (phase === "stopped" && clip) { r.current.sent = true; onSend(clip); }
+  };
+  useEffect(() => {
+    const key = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onCancel(); }
+      else if (e.key === "Enter" && !e.shiftKey && !/^(BUTTON|INPUT)$/.test(e.target?.tagName || "") && (phase === "recording" || phase === "stopped")) { e.preventDefault(); send(); }
+    };
+    document.addEventListener("keydown", key, true);
+    return () => document.removeEventListener("keydown", key, true);
+  });
+  return (
+    <div className={`mx-rec ${phase}`} role="group" aria-label="Voice message">
+      <button type="button" className="mx-attach mx-rec-x" onClick={onCancel} title="Delete recording (Esc)" aria-label="Delete recording"><IconTrash /></button>
+      {phase === "error" ? <div className="mx-rec-err" role="alert">{error}</div>
+        : phase === "stopped" && clip ? <VoicePlayer url={clip.url} seconds={clip.seconds} />
+        : (
+          <div className="mx-rec-live" role="status" aria-live="off">
+            <i className="mx-rec-dot" aria-hidden="true" />
+            <span className="mx-rec-t">{phase === "starting" ? "Starting…" : mmss(secs)}<em> / {mmss(VOICE_MAX)}</em></span>
+            <span className="mx-rec-wave" aria-hidden="true">{levels.map((v, i) => <i key={i} style={{ height: `${Math.max(8, v * 100)}%` }} />)}</span>
+            <span className="mx-hide">{phase === "recording" ? "Recording" : ""}</span>
+          </div>
+        )}
+      {phase === "recording" && <button type="button" className="mx-attach mx-rec-stop" onClick={() => stop(false)} title="Stop and listen first" aria-label="Stop recording"><IconStop /></button>}
+      {phase !== "error" && <button type="button" className="mx-send" onClick={send} disabled={phase === "starting"} aria-label="Send voice message" title="Send (Enter)"><IconSend /></button>}
     </div>
   );
 }
@@ -1697,6 +2053,7 @@ function Thread({ conversation, nowPlaying }) {
   const [showProfile, setShowProfile] = useState(false);
   const [newBelow, setNewBelow] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);     // the GIF search, above the typing box
+  const [recording, setRecording] = useState(false); // recording a voice message (Added by aura-messages-emoji-voice-setup.cjs)
   const [linkDraft, setLinkDraft] = useState(null);  // { url, link } the preview of a link you're typing (Added by aura-messages-links-setup.cjs)
   const noPreview = useRef(new Set());               // links whose preview you removed
   const [groupCall, setGroupCall] = useState(false); // picking who to call from a group (Added by aura-messages-groups-setup.cjs)
@@ -1709,6 +2066,21 @@ function Thread({ conversation, nowPlaying }) {
   const stick = useRef(true);        // are we at the bottom?
   const before = useRef(null);       // scroll position saved while older messages load
   const lastId = useRef(null);
+
+  // A search result: scroll to it and light it up for a moment (Added by aura-messages-search-setup.cjs)
+  useEffect(() => {
+    const j = s.jump;
+    if (!j || j.cid !== conversation.id) return;
+    stick.current = false;
+    if (!j.ready) return;
+    const el = scroller.current?.querySelector(`[data-mid="${j.mid}"]`);
+    if (el) {
+      el.scrollIntoView({ block: "center" });
+      el.classList.add("mx-hl");
+      setTimeout(() => el.classList.remove("mx-hl"), 2600);
+    } else hooks.toast?.("That message isn't in this chat any more.");
+    set({ jump: null });
+  }, [s.jump, t.items, conversation.id]);
 
   // One draft per conversation
   useEffect(() => {
@@ -1851,6 +2223,14 @@ function Thread({ conversation, nowPlaying }) {
   };
   const closeGifs = useCallback(() => setGifOpen(false), []);
   const sendGif = (g) => { setGifOpen(false); send(g.send.url); }; // what you were typing stays in the box
+  // A voice message: sent like a picture, with how long it is (Added by aura-messages-emoji-voice-setup.cjs)
+  const stopRecording = useCallback(() => { setRecording(false); setTimeout(() => input.current?.focus(), 0); }, []);
+  const sendVoice = useCallback((clip) => {
+    setRecording(false);
+    stick.current = true;
+    actions.sendMedia(conversation.id, { id: `att-${++attachmentCounter}`, file: clip.blob, url: clip.url, name: "", size: clip.blob.size, kind: "audio", mime: "audio/webm", width: null, height: null, seconds: clip.seconds, voice: true }, "");
+    setTimeout(() => input.current?.focus(), 0);
+  }, [conversation.id]);
   const meId = s.me?.id || null;
   const canReact = reactionsAvailable();
   const retry = (m) => (m.attachment ? actions.sendMedia(conversation.id, m.attachment, m.content, m.id) : actions.send(conversation.id, m.content, m.id, m.link)); // (its preview too: Added by aura-messages-links-setup.cjs)
@@ -1875,7 +2255,7 @@ function Thread({ conversation, nowPlaying }) {
       <header className="mx-head">
         <button type="button" className="mx-who" data-mx-profile onClick={() => setShowProfile((v) => !v)} title="View profile" aria-expanded={showProfile}>
           {group ? <GroupAvatar conversation={conversation} size={40} /> : <Avatar name={conversation.username} userId={conversation.userId} url={conversation.avatarUrl} size={40} online={conversation.isFriend ? conversation.online : null} />}
-          <span><span className="mx-who-n">{conversation.username}</span><span className="mx-who-s">{group
+          <span><span className="mx-who-n">{conversation.username}{!group && <StreakBadge userId={conversation.userId} name={conversation.username} />}</span><span className="mx-who-s">{group
             ? `${conversation.members.length} people · ${conversation.members.filter((m) => m.userId !== s.me?.id).map((m) => m.username).join(", ")}`
             : conversation.isFriend ? (conversation.online ? "Online" : "Offline") : "Not in your friends"}</span></span>
         </button>
@@ -1920,9 +2300,9 @@ function Thread({ conversation, nowPlaying }) {
               const reactable = settled && canReact && m.content !== MISSED_CALL;
               const mine = reactable ? (m.reactions || []).find((x) => x.userId === meId)?.reaction || null : null;
               return (
-                <div key={m.id} className={`mx-msg ${m.pending ? "pending" : ""} ${m.failed ? "failed" : ""} ${m.media || gif ? "has-media" : ""} ${m.deleted ? "gone" : ""}`}>
+                <div key={m.id} data-mid={m.id} className={`mx-msg ${m.pending ? "pending" : ""} ${m.failed ? "failed" : ""} ${(m.media && m.media.kind !== "audio") || gif ? "has-media" : ""} ${m.media?.kind === "audio" ? "has-voice" : ""} ${m.deleted ? "gone" : ""}`}>
                   {m.deleted && <div className="mx-bubble">{s.me && m.senderId === s.me.id ? "You deleted this message" : "This message was deleted"}</div>}
-                  {m.media && <MediaView message={m} onOpen={setViewing} />}
+                  {m.media && (m.media.kind === "audio" ? <VoiceView message={m} /> : <MediaView message={m} onOpen={setViewing} />)}{/* (voice: Added by aura-messages-emoji-voice-setup.cjs) */}
                   {gif ? <GifView url={gif} pending={m.pending} /> : m.content && (m.content === MISSED_CALL
                     ? <div className="mx-bubble mx-missed"><IconPhone size={15} /> {callNote(m.content, !!s.me && m.senderId === s.me.id)}</div>
                     : <div className="mx-bubble"><Linked text={m.content} /></div>)}
@@ -1935,7 +2315,7 @@ function Thread({ conversation, nowPlaying }) {
                     <div className="mx-acts">
                       {reactable && conversation.isFriend && <>
                         <button type="button" className={`mx-act-react ${mine === "like" ? "on" : ""}`} aria-pressed={mine === "like"} onClick={() => actions.react(conversation.id, m.id, mine === "like" ? null : "like")} title={mine === "like" ? "Take back your like" : "Like"} aria-label={mine === "like" ? "Take back your like" : "Like"}><IconLike /></button>
-                        <button type="button" className={`mx-act-react ${mine === "dislike" ? "on" : ""}`} aria-pressed={mine === "dislike"} onClick={() => actions.react(conversation.id, m.id, mine === "dislike" ? null : "dislike")} title={mine === "dislike" ? "Take back your dislike" : "Dislike"} aria-label={mine === "dislike" ? "Take back your dislike" : "Dislike"}><IconDislike /></button>
+                        <EmojiButton mine={mine} onReact={(kind) => actions.react(conversation.id, m.id, kind)} />{/* 👎 and the emoji (Added by aura-messages-emoji-voice-setup.cjs) */}
                       </>}
                       {s.me && m.senderId === s.me.id
                         ? <button type="button" className="mx-act-del" onClick={() => remove(m)} title="Delete message" aria-label="Delete message"><IconTrash /></button>
@@ -1972,14 +2352,17 @@ function Thread({ conversation, nowPlaying }) {
           {linkDraft && !linkDraft.none && (linkDraft.link
             ? <LinkCard link={linkDraft.link} draft onRemove={() => { noPreview.current.add(linkDraft.url); setLinkDraft(null); }} />
             : <div className="mx-link-card draft loading" role="status">Getting a preview of the link…</div>)}{/* (Added by aura-messages-links-setup.cjs) */}
+          {recording ? <VoiceRecorder onSend={sendVoice} onCancel={stopRecording} /> : (
           <div className="mx-compose-row">
             <button type="button" className="mx-attach" onClick={() => picker.current?.click()} disabled={tray.length >= MAX_ATTACHMENTS} title="Attach a picture, GIF or video" aria-label="Attach a picture, GIF or video"><IconClip /></button>
             {gifsAvailable() && <button type="button" className={`mx-attach mx-gifbtn ${gifOpen ? "on" : ""}`} data-mx-gifs onClick={() => setGifOpen((v) => !v)} title="Send a GIF" aria-label="Send a GIF" aria-expanded={gifOpen}>GIF</button>}
             <input ref={picker} type="file" accept={MEDIA_ACCEPT} multiple hidden data-mx-file onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; addFiles(files); }} />
             <textarea ref={input} rows={1} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onPaste={onPaste} placeholder={tray.length ? "Add a message (optional)" : `Message ${conversation.username}`} aria-label={`Message ${conversation.username}`} />
             {ready.length > MAX_LENGTH - 400 && <span className="mx-count">{ready.length} / {MAX_LENGTH}</span>}
+            {voiceAvailable() && !ready && !tray.length && <button type="button" className="mx-attach mx-micbtn" data-mx-mic onClick={() => { setGifOpen(false); setRecording(true); }} title="Record a voice message" aria-label="Record a voice message"><IconMic /></button>}
             <button type="button" className="mx-send" onClick={() => send()} disabled={!canSend} aria-label="Send message" title="Send (Enter)"><IconSend /></button>
           </div>
+          )}{/* (voice messages: Added by aura-messages-emoji-voice-setup.cjs) */}
         </div>
       ) : (
         <div className="mx-compose off">You and {conversation.username} aren't friends any more, so you can't send messages. Your history stays here.</div>
@@ -1998,6 +2381,8 @@ export default function MessagesPage({ nowPlaying }) {
   const [drawer, setDrawer] = useState(false);
   const [calling, setCalling] = useState(false); // the "Call a friend" list
   const [grouping, setGrouping] = useState(false); // making a group (Added by aura-messages-groups-setup.cjs)
+  const [finding, setFinding] = useState(""); // Search messages (Added by aura-messages-search-setup.cjs)
+  const [onlyHere, setOnlyHere] = useState(false);
   useEffect(() => {
     ensureStyles();
     // While this page is open and in front, freshen the online dots now and then
@@ -2036,8 +2421,11 @@ export default function MessagesPage({ nowPlaying }) {
             <div className="mx-drawer"><FriendsManager variant="glass" onMessaged={() => setDrawer(false)} /></div>
           ) : (
             <>
+              {typeof window.auraSocial?.searchMessages === "function" && <SearchBox value={finding} onChange={setFinding} onlyIn={onlyHere} setOnlyIn={setOnlyHere} activeName={active?.username} />}{/* (Added by aura-messages-search-setup.cjs) */}
+              {finding.trim().length >= 2 ? <SearchResults words={finding.trim()} onlyIn={onlyHere && active ? active.id : null} /> : <>
               {groupsAvailable() && <button type="button" className="mx-newgroup" onClick={() => setGrouping(true)} aria-label="New group"><IconGroupAdd /> New group</button>}{/* (Added by aura-messages-groups-setup.cjs) */}
               <ConversationList />
+              </>}
             </>
           )}
         </aside>
@@ -2108,6 +2496,21 @@ const CSS = `
 .mx-side-h{position:relative;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:18px 16px 12px 20px}
 .mx-side-h h1{margin:0;font-family:'Rajdhani',sans-serif;font-size:24px;font-weight:700;letter-spacing:.6px;line-height:1}
 .mx-side-a{display:flex;gap:6px}
+.mx-search{padding:0 16px 10px 20px;display:grid;gap:6px}
+.mx-search-in{display:flex;align-items:center;gap:8px;padding:0 10px;height:36px;border-radius:12px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:var(--mx-ink2)}
+.mx-search-in:focus-within{border-color:color-mix(in srgb,var(--mx-b) 70%,transparent)}
+.mx-search-in input{flex:1;min-width:0;border:none;outline:none;background:transparent;color:#fff;font:13px 'DM Sans',sans-serif}
+.mx-search-in input::-webkit-search-cancel-button{display:none}
+.mx-search-x{display:flex;border:none;background:transparent;color:var(--mx-ink2);cursor:pointer;padding:2px;border-radius:6px}
+.mx-search-x:hover{color:#fff}
+.mx-search-only{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mx-ink2);cursor:pointer}
+.mx-result-p{display:block;font-size:12px;line-height:1.4;color:var(--mx-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mx-result-p b{color:var(--mx-ink1,#fff);font-weight:600}
+.mx-result-p mark{background:color-mix(in srgb,var(--mx-b) 45%,transparent);color:#fff;border-radius:3px;padding:0 2px}
+.mx-more{margin:8px 20px}
+.mx-streak{display:inline-flex;align-items:center;gap:1px;margin-left:6px;font-size:11.5px;font-weight:700;color:#ffb36b;vertical-align:middle;white-space:nowrap}
+.mx-streak.late{color:#ffd28a}
+.mx-msg.mx-hl .mx-bubble,.mx-msg.mx-hl .mx-media,.mx-msg.mx-hl .mx-gif{box-shadow:0 0 0 2px var(--mx-b),0 0 18px color-mix(in srgb,var(--mx-b) 60%,transparent);transition:box-shadow .3s}
 .mx-icon{position:relative;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:var(--mx-ink2);transition:background .15s,color .15s}
 .mx-icon:hover,.mx-icon.on{background:rgba(255,255,255,.15);color:#fff}
 .mx-pip{position:absolute;top:-1px;right:-1px;width:10px;height:10px;border-radius:50%;background:var(--mx-a);border:2px solid var(--mx-base)}
@@ -2458,10 +2861,58 @@ const LINK_CSS = `
 .mx-link-x:hover{background:rgba(0,0,0,.7)}
 .mx-link-pic:focus-visible,.mx-link-text:focus-visible,.mx-link-x:focus-visible,.mx-a:focus-visible{outline:2px solid var(--mx-a);outline-offset:2px}
 `;
+// Emoji reactions and voice messages (Added by aura-messages-emoji-voice-setup.cjs)
+const EMOJI_VOICE_CSS = `
+.mx-react-e{font-size:13px;line-height:1;font-family:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif}
+.mx-emo{position:relative;display:flex}
+.mx-emo-cur{font-size:14px;line-height:1;font-family:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif}
+.mx-acts:has(.mx-emo.open){opacity:1;z-index:5}
+.mx-emo-pop{position:absolute;top:50%;transform:translateY(-50%);display:flex;gap:2px;padding:4px;border-radius:999px;background:color-mix(in srgb,var(--mx-base) 88%,#000 6%);border:1px solid rgba(255,255,255,.2);box-shadow:0 10px 30px rgba(0,0,0,.45);z-index:6;animation:mx-emo-in .14s ease}
+.mx-group.me .mx-emo-pop{right:calc(100% + 6px)}
+.mx-group.them .mx-emo-pop{left:calc(100% + 6px)}
+.mx-acts .mx-emo-pop button{width:32px;height:32px;border:1px solid transparent;background:transparent;font-size:19px;line-height:1;font-family:'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif;transition:transform .12s,background .12s}
+.mx-acts .mx-emo-pop button:hover,.mx-acts .mx-emo-pop button:focus-visible{transform:scale(1.22);background:rgba(255,255,255,.1);border-color:transparent}
+.mx-acts .mx-emo-pop button.on{background:linear-gradient(135deg,var(--mx-a),var(--mx-b));border-color:rgba(255,255,255,.3)}
+.mx-emo-pop button:focus-visible{outline:2px solid var(--mx-b);outline-offset:1px}
+@keyframes mx-emo-in{from{opacity:0;transform:translateY(-50%) scale(.9)}to{opacity:1;transform:translateY(-50%)}}
+.reduce-motion .mx-emo-pop{animation:none}
+@media (prefers-reduced-motion:reduce){.mx-emo-pop{animation:none}.mx-acts .mx-emo-pop button:hover{transform:none}}
+.mx-voice-box{position:relative;display:flex;flex-direction:column;gap:4px}
+.mx-voice{display:flex;align-items:center;gap:10px;width:260px;max-width:100%;padding:7px 14px 7px 7px;border-radius:999px}
+.mx-group.them .mx-voice{background:linear-gradient(rgba(255,255,255,.1),rgba(255,255,255,.1)),color-mix(in srgb,var(--mx-base) 60%,transparent);border:1px solid rgba(255,255,255,.12);color:#fff}
+.mx-group.me .mx-voice{background:linear-gradient(135deg,var(--mx-a),color-mix(in srgb,var(--mx-a) 52%,var(--mx-b)));border:1px solid rgba(255,255,255,.16);color:var(--mx-on)}
+.mx-voice audio{display:none}
+.mx-voice-play{width:34px;height:34px;flex-shrink:0;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.2);color:inherit!important}
+.mx-voice-play:hover{background:rgba(255,255,255,.32)}
+.mx-voice-bar{flex:1;min-width:60px;height:18px;margin:0;-webkit-appearance:none;appearance:none;background:transparent;cursor:pointer;color:inherit}
+.mx-voice-bar::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(90deg,currentColor var(--mx-vp,0%),color-mix(in srgb,currentColor 30%,transparent) var(--mx-vp,0%))}
+.mx-voice-bar::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;margin-top:-4px;border-radius:50%;background:currentColor;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.mx-voice-t{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;min-width:32px;text-align:right;opacity:.92}
+.mx-voice-note{padding:9px 14px;border-radius:18px;font-size:13px;color:var(--mx-ink2);border:1px dashed rgba(255,255,255,.28);display:flex;align-items:center;gap:6px}
+.mx-voice-busy{font-size:11.5px;color:var(--mx-ink3);display:flex;align-items:center;gap:6px;padding:0 10px}
+.mx-voice-play:focus-visible,.mx-voice-bar:focus-visible{outline:2px solid var(--mx-b);outline-offset:2px}
+.mx-msg.has-voice .mx-reacts{margin-top:-6px}
+.mx-rec{display:flex;align-items:center;gap:6px;min-height:38px}
+.mx-rec .mx-voice{flex:1;width:auto;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:#fff}
+.mx-rec-live{flex:1;min-width:0;display:flex;align-items:center;gap:10px;padding:0 6px}
+.mx-rec-dot{width:10px;height:10px;flex-shrink:0;border-radius:50%;background:#ff4d6d;box-shadow:0 0 0 0 rgba(255,77,109,.6);animation:mx-rec-pulse 1.4s ease-out infinite}
+.mx-rec.starting .mx-rec-dot{background:var(--mx-ink3);animation:none}
+@keyframes mx-rec-pulse{0%{box-shadow:0 0 0 0 rgba(255,77,109,.55)}80%,100%{box-shadow:0 0 0 9px rgba(255,77,109,0)}}
+.reduce-motion .mx-rec-dot{animation:none}
+@media (prefers-reduced-motion:reduce){.mx-rec-dot{animation:none}}
+.mx-rec-t{font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;flex-shrink:0}
+.mx-rec-t em{font-style:normal;font-weight:500;color:var(--mx-ink3)}
+.mx-rec-wave{flex:1;min-width:0;height:26px;display:flex;align-items:center;justify-content:flex-end;gap:3px;overflow:hidden}
+.mx-rec-wave i{flex:0 0 3px;border-radius:2px;background:linear-gradient(var(--mx-b),var(--mx-a));transition:height .08s linear}
+.mx-rec-err{flex:1;font-size:13px;color:#ffb3c0;padding:0 6px;line-height:1.35}
+.mx-rec-x:hover:not(:disabled){background:rgba(255,77,109,.25)!important}
+.mx-rec-stop{color:#ff8fa3!important}
+.mx-hide{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+`;
 function ensureStyles() {
   if (document.getElementById("aura-mx-styles")) return;
   const el = document.createElement("style");
   el.id = "aura-mx-styles";
-  el.textContent = CSS + GROUP_CSS + LINK_CSS; // (group chats: Added by aura-messages-groups-setup.cjs) (links: Added by aura-messages-links-setup.cjs)
+  el.textContent = CSS + GROUP_CSS + LINK_CSS + EMOJI_VOICE_CSS; // (group chats: Added by aura-messages-groups-setup.cjs) (links: Added by aura-messages-links-setup.cjs)
   document.head.appendChild(el);
 }
