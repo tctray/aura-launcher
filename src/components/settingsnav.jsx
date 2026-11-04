@@ -364,12 +364,12 @@ export function SettingsLayout({ cats, children }) {
 
 const CSS = `
 .sc:has(> .set2){padding:0;container-type:inline-size;container-name:aura-settings;scroll-padding-top:16px}
-.set2{text-align:left;display:grid;grid-template-columns:240px minmax(0,1fr);gap:0 30px;align-items:start;padding:0 28px 0 24px;min-height:100%}
+.set2{text-align:left;display:grid;grid-template-columns:240px minmax(0,1100px);justify-content:center;gap:0 32px;align-items:start;padding:0 28px;min-height:100%} /* wider, and centred on big screens (aura-settings-wide-setup.cjs) */
 .set-side{position:sticky;top:0;align-self:start;z-index:3;padding:24px 0}
 .set-side-in{max-height:calc(100vh - 110px);padding:16px 12px 12px;border-radius:var(--radius);background:var(--card);border:1px solid var(--border);display:flex;flex-direction:column;gap:14px}
 .set-nav{min-height:0;overflow-y:auto;margin:0 -4px;padding:0 4px;scrollbar-width:thin}
 .set-side-t{font-family:'Rajdhani',sans-serif;font-size:24px;font-weight:700;letter-spacing:1px;color:var(--t1);padding:0 6px}
-.set-main{padding:24px 0 40vh;max-width:880px;min-width:0}
+.set-main{padding:24px 0 40vh;min-width:0}
 /* Search */
 .set-find{position:relative}
 .set-find-box{display:flex;align-items:center;gap:8px;height:36px;padding:0 8px 0 11px;border-radius:10px;background:var(--bg);border:1px solid var(--border);color:var(--t2);transition:border-color .15s,box-shadow .15s}

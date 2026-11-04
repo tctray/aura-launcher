@@ -740,6 +740,14 @@ body,html{background:var(--bg);color:var(--t1);font-family:'DM Sans',sans-serif;
 .gm-made-for-title{font-family:'Rajdhani',sans-serif;font-size:22px;font-weight:700;letter-spacing:1.5px;color:var(--t1);}
 .gm-made-for-row{display:flex;gap:12px;padding:12px 40px 8px;overflow-x:auto;scrollbar-width:none;}
 .gm-made-for-row::-webkit-scrollbar{display:none;}
+/* Home: the tops of covers and cards aren't cut off, and the words read over a background picture (Added by aura-home-tidy-setup.cjs) */
+.gm-mf-card-img{object-position:center top;}
+.gm-made-for-hdr{text-align:left;}
+.gm-made-for-label{text-shadow:0 1px 3px rgba(0,0,0,.85);}
+.gm-made-for-title{text-shadow:0 2px 8px rgba(0,0,0,.6);}
+.twitch-shelf .twitch-empty{text-align:left;color:var(--t2);font-size:12px;text-shadow:0 1px 3px rgba(0,0,0,.85);}
+.twitch-shelf .twitch-err{color:#ffb3c0;}
+.gm-shelf-row,.gm-made-for-row{padding-top:12px;margin-top:-8px;}
 .gm-mf-card{flex-shrink:0;width:180px;height:60px;border-radius:10px;overflow:hidden;cursor:pointer;display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--border);padding:0 12px 0 0;transition:all .2s;position:relative;}
 .gm-mf-card:hover{background:var(--hover);border-color:var(--borderb);transform:translateY(-2px);}
 .gm-mf-card-img{width:60px;height:60px;object-fit:cover;flex-shrink:0;}
