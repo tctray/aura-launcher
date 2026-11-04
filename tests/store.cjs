@@ -35,13 +35,13 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
   check("...and checks inside it: identity, permissions, startup entry, notices", /TraylorDigital\.AuraGamingHub/.test(job) && /E6B56AB7-1B45-4740-A412-E234538BDD63/.test(job) && /Enabled="false"/.test(job) && /THIRD-PARTY-NOTICES\.md/.test(job));
 
   console.log("2. What the Store version does differently");
-  const main = fs.readFileSync(path.join(ROOT, "electron", "main.js"), "utf8");
+  const main = fs.readFileSync(path.join(ROOT, "electron", "main.js"), "utf8").replace(/\r\n/g, "\n"); // (Windows line endings too: Fixed by aura-store-test-fix.cjs)
   check("no GitHub updates: the Store keeps it up to date", /function setupAutoUpdater\(win\) \{\n  if \(!app\.isPackaged\) return;\n  if \(process\.windowsStore\) return;/.test(main) && /if \(process\.windowsStore\) return \{ success: true, store: true, hasUpdate: false/.test(main));
   check("...the update button opens AURA's Store page", /const STORE_PAGE = "ms-windows-store:\/\/pdp\/\?productid=" \+ STORE_ID;/.test(main) && /const STORE_ID = "9N7JVRJDPSPX";/.test(main) && /if \(process\.windowsStore\) \{ shell\.openExternal\(STORE_PAGE\)/.test(main));
   check("...so it never downloads or installs a GitHub update", /ipcMain\.handle\("download-update", async \(\) => \{\n[^\n]*\n    if \(process\.windowsStore\) \{ shell\.openExternal\(STORE_PAGE\); return \{ success: false, store: true/.test(main));
   check("Start with Windows is left to Windows Settings", /if \(process\.windowsStore\) return; \/\/ the Store version starts with Windows/.test(main) && /ms-settings:startupapps/.test(main));
   check("clips never go in the app's data folder (Windows deletes it on uninstall)", /if \(process\.windowsStore\) \{ try \{ return path\.join\(app\.getPath\("videos"\), "AURA"\);/.test(main));
-  const policy = fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8");
+  const policy = fs.readFileSync(path.join(ROOT, "PRIVACY.md"), "utf8").replace(/\r\n/g, "\n");
   check("the privacy policy says the Store version is updated by the Store", /The Microsoft Store version doesn't: the Microsoft Store keeps it up to date\./.test(policy));
 
   if (!fs.existsSync(path.join(DIST, "index.html"))) { check("the window has been built (dist/index.html)", false, "Run  npm run build  first."); return done(1); }
