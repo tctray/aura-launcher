@@ -133,6 +133,7 @@ if (fs.existsSync(path.join(__dirname, "neon-cards.cjs"))) add("window", "Neon b
 if (fs.existsSync(path.join(__dirname, "store.cjs"))) add("window", "Microsoft Store version: package, differences, Settings", "store.cjs"); // (Added by aura-store-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "msg-search-window.cjs"))) add("window", "Message search and friend streaks in the window", "msg-search-window.cjs"); // (Added by aura-messages-search-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "emoji-voice-window.cjs"))) add("window", "Emoji reactions and voice messages in the window", "emoji-voice-window.cjs"); // (Added by aura-messages-emoji-voice-setup.cjs)
+if (fs.existsSync(path.join(__dirname, "twitch-errors.cjs"))) add("window", "Live on Twitch says why when streams can't load", "twitch-errors.cjs"); // (Added by aura-twitch-errors-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "settings-layout.cjs"))) add("window", "Settings: sidebar, search, folding groups, every setting still there", "settings-layout.cjs"); // (Added by aura-settings-layout-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "delete-account.cjs"))) add("window", "Deleting your account", "delete-account.cjs"); // (Added by aura-account-delete-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "twitch-favorites.cjs"))) add("window", "Twitch favorites and live notices", "twitch-favorites.cjs");

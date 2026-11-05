@@ -94,12 +94,12 @@ const ROWS = ["UI Scale", "Card Size", "Full Screen", "Open in a Window", "Reduc
     const cats = await nav.locator(".set-nav-i").allInnerTexts();
     check("the sidebar lists the categories in order", cats.map((t) => t.trim()).join("|") === "Account|Appearance|Social & Calls|Notifications|Sound & Voice|Capture|Games & Library|Performance|Privacy|About", cats);
     const titles = await page.evaluate(() => [...document.querySelectorAll(".set-main .ss-t")].map((e) => e.textContent.trim()));
-    const want = ["ACCOUNT", "DISPLAY", "SEASONAL DECORATIONS", "CALLS AND MESSAGES", "CALL AND MESSAGE ALERTS", "SOUND DEVICES", "SOUND", "RECORDING", "CAMERA", "LIBRARY", "PERFORMANCE", "PRIVACY", "ABOUT"];
+    const want = ["ACCOUNT", "DISPLAY", "SEASONAL DECORATIONS", "CALLS AND MESSAGES", "CALL AND MESSAGE ALERTS", "SOUND", "RECORDING", "CAMERA", "LIBRARY", "PERFORMANCE", "PRIVACY", "ABOUT"];
     check("every section is there, in a sensible order", want.every((t, i) => titles.indexOf(t) >= 0 && (i === 0 || titles.indexOf(t) > titles.indexOf(want[i - 1]))), titles);
     const labels = await page.evaluate(() => [...document.querySelectorAll(".set-main .sr-l")].map((e) => (e.childNodes[0]?.textContent || e.textContent).trim()));
     const missing = ROWS.filter((r) => !labels.some((l) => l === r || l.startsWith(r)));
     check("every setting from before is still on the page", missing.length === 0, missing);
-    check("the General / Sound devices tabs are gone (Sound devices is a group now)", (await page.locator(".snd-tabs").count()) === 0);
+    check("General and Sound devices are tabs at the top, General open", (await page.locator('[role="tablist"][aria-label="Settings"] [role="tab"]').allInnerTexts()).join("|") === "General|Sound devices" && (await page.locator('[role="tablist"][aria-label="Settings"] [role="tab"][aria-selected="true"]').innerText()) === "General"); // (Added by aura-settings-sound-tab-setup.cjs)
     check("Account shows who you are, with Edit profile and Log out", /Signed in as tester/.test(await page.locator(".set-cat[data-cat=account]").innerText()) && await page.locator(".set-cat[data-cat=account]").getByRole("button", { name: "Edit profile" }).isVisible() && await page.locator(".set-cat[data-cat=account]").getByRole("button", { name: "Log out", exact: true }).isVisible());
     await shot(page, "settings-top.png");
 
@@ -136,7 +136,7 @@ const ROWS = ["UI Scale", "Card Size", "Full Screen", "Open in a Window", "Reduc
     check("...and it's remembered", await page.evaluate(() => JSON.parse(localStorage.getItem("aura_settings_groups") || "{}").display === false));
     await togDisplay.click();
     check("unfolding shows them again", await until(async () => display.locator(".sr", { hasText: "UI Scale" }).isVisible()));
-    check("Sound devices starts folded, and doesn't ask Windows about devices until opened", (await page.locator('.sg[data-sg=sound-devices]').getAttribute("class")).includes("closed") && !(await page.evaluate(() => window.__calls.includes("soundList"))));
+    check("General doesn't ask Windows about sound devices (only the Sound devices tab does)", !(await page.evaluate(() => window.__calls.includes("soundList"))));
 
     console.log("4. Search");
     const box = page.getByRole("combobox", { name: "Search settings" });
@@ -161,10 +161,11 @@ const ROWS = ["UI Scale", "Card Size", "Full Screen", "Open in a Window", "Reduc
     check("a setting in a folded group: the group opens and it's shown", await until(async () => (await page.locator('.sg[data-sg=performance]').getAttribute("class")) === "sg" && await page.locator(".sr", { hasText: "Disable Blur Effects" }).isVisible()));
     await box.fill("headset");
     await until(async () => /Sound devices/i.test(await results.first().innerText()));
-    check("finds Sound devices even while it's folded", /Sound devices/i.test(await results.first().innerText()), await results.allInnerTexts());
+    check("finds the Sound devices tab", /Sound devices/i.test(await results.first().innerText()), await results.allInnerTexts());
     await results.first().click();
-    check("...opening it shows your devices", await until(async () => page.getByText("Output · what you hear").isVisible()) && await page.evaluate(() => window.__calls.includes("soundList")), await page.evaluate(() => ({ cls: document.querySelector(".sg[data-sg=sound-devices]")?.className, html: (document.querySelector(".sg[data-sg=sound-devices] .sg-lazy")?.innerHTML || "").slice(0, 300), calls: window.__calls })));
+    check("...picking it opens the tab and shows your devices", await until(async () => page.getByText("Output · what you hear").isVisible()) && await page.evaluate(() => window.__calls.includes("soundList")), await page.evaluate(() => ({ cls: document.querySelector(".sg[data-sg=sound-devices]")?.className, html: (document.querySelector(".sg[data-sg=sound-devices] .sg-lazy")?.innerHTML || "").slice(0, 300), calls: window.__calls })));
     await shot(page, "settings-sound.png");
+    await page.locator('[role="tablist"][aria-label="Settings"]').getByRole("tab", { name: "General" }).click(); await page.waitForTimeout(500);
     await box.fill("zzqq");
     check("nothing found: it says so", await until(async () => /No settings match “zzqq”/.test(await page.locator(".set-find-pop").innerText())));
     await box.press("Escape");

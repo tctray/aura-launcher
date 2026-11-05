@@ -274,7 +274,9 @@ function Highlight({ text, q }) {
   return text.split(re).map((part, i) => (i % 2 ? <mark key={i}>{part}</mark> : part));
 }
 
-function SettingsSearch({ layout }) {
+// extras: things found by search that aren't on this page, like the Sound devices tab:
+// [{ label, desc, where, keywords, go }] (Added by aura-settings-sound-tab-setup.cjs)
+function SettingsSearch({ layout, extras = [] }) {
   const [q, setQ] = useState("");
   const [shown, setShown] = useState("");     // what the results are for (a moment after you stop typing)
   const [at, setAt] = useState(0);
@@ -286,12 +288,13 @@ function SettingsSearch({ layout }) {
     const ws = words(shown);
     const main = layout.current?.querySelector(".set-main");
     if (!ws.length || !main) return [];
-    return collect(main)
+    const more = extras.map((x) => ({ label: x.label, desc: x.desc || "", where: x.where || "", go: x.go, labelLow: x.label.toLowerCase(), hay: [x.label, x.desc, x.keywords].join(" ").toLowerCase() }));
+    return [...collect(main), ...more]
       .filter((r) => ws.every((w) => r.hay.includes(w)))
       .map((r) => ({ ...r, score: (ws.every((w) => r.labelLow.includes(w)) ? 0 : 1) + (r.labelLow.startsWith(ws[0]) ? 0 : 0.5) }))
       .sort((a, b) => a.score - b.score)
       .slice(0, 12);
-  }, [shown, layout]);
+  }, [shown, layout, extras]);
   useEffect(() => {
     if (!open) return;
     const away = (e) => { if (!box.current?.contains(e.target)) setOpen(false); };
@@ -307,6 +310,7 @@ function SettingsSearch({ layout }) {
   const pick = (r) => {
     if (!r) return;
     setOpen(false);
+    if (r.go) { r.go(); return; }
     revealSetting(r.el);
   };
   const onKey = (e) => {
@@ -346,14 +350,14 @@ function SettingsSearch({ layout }) {
 
 // ── The whole page ────────────────────────────────────────────────────────────
 // cats: [{ id, label, icon }] in the order the categories appear. children: the SetCategory sections.
-export function SettingsLayout({ cats, children }) {
+export function SettingsLayout({ cats, extras, children }) {
   const layout = useRef(null);
   return (
     <div className="set2" ref={layout}>
       <style>{CSS}</style>
       <aside className="set-side">
         <div className="set-side-in">
-          <SettingsSearch layout={layout} />
+          <SettingsSearch layout={layout} extras={extras} />
           <SettingsNav cats={cats} layout={layout} />
         </div>
       </aside>
@@ -364,6 +368,9 @@ export function SettingsLayout({ cats, children }) {
 
 const CSS = `
 .sc:has(> .set2){padding:0;container-type:inline-size;container-name:aura-settings;scroll-padding-top:16px}
+/* The General / Sound devices tabs, lined up with the sidebar (Added by aura-settings-sound-tab-setup.cjs) */
+.sc:has(> .set2) > .set-tabs{max-width:1428px;margin:0 auto;padding:22px 28px 0;box-sizing:border-box;text-align:left}
+.sc:has(> .set2) > .set-tabs .snd-tabs{margin-bottom:0}
 .set2{text-align:left;display:grid;grid-template-columns:240px minmax(0,1100px);justify-content:center;gap:0 32px;align-items:start;padding:0 28px;min-height:100%} /* wider, and centred on big screens (aura-settings-wide-setup.cjs) */
 .set-side{position:sticky;top:0;align-self:start;z-index:3;padding:24px 0}
 .set-side-in{max-height:calc(100vh - 110px);padding:16px 12px 12px;border-radius:var(--radius);background:var(--card);border:1px solid var(--border);display:flex;flex-direction:column;gap:14px}

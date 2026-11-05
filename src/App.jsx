@@ -10,7 +10,7 @@ import { achievementStats } from "./achievements"; // Added by aura-achievements
 import SocialPage from "./components/social";
 import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { ClipsAndMedia, MediaDock } from "./components/media"; // Clips > Media, and the mini player (Added by aura-media-player-setup.cjs)
-import { SoundDevicesTab, soundTabAvailable } from "./components/sounddevices"; // Settings > Sound devices (Added by aura-sound-devices-setup.cjs)
+import { SettingsTabs, SoundDevicesTab, soundTabAvailable, useSettingsTab } from "./components/sounddevices"; // Settings > Sound devices (Added by aura-sound-devices-setup.cjs)
 import { SetCategory, SetGroup, SettingsLayout } from "./components/settingsnav"; // the Settings sidebar, search and groups (Added by aura-settings-layout-setup.cjs)
 import { VoiceSettings, VoiceSign, useVoiceCommands } from "./components/voice"; // "Hey AURA" voice commands (Added by aura-voice-setup.cjs)
 import { SeasonalLayer, SeasonalLogo, SeasonalSettings, NavAccentStyle } from "./components/seasonal"; // seasonal decorations (Added by aura-seasonal-setup.cjs)
@@ -870,6 +870,7 @@ body:has(.now-playing) .streams-page{padding-bottom:72px;}
 .reduce-motion .twitch-card,.reduce-motion .twitch-thumb,.reduce-motion .twitch-tool{transition:none!important;}
 .no-blur .twitch-card{background:rgba(24,26,32,.7);}
 .twitch-empty{padding:0 40px;font-size:11px;color:var(--t3);}
+.twitch-err{color:#ffb3c0;font-size:12px}.twitch-err button{margin-left:8px;background:var(--acd);border:1px solid var(--acg);color:var(--ac);border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer}
 
 /* FRIENDS PANEL */
 .fp{width:var(--fw);min-width:var(--fw);background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;}
@@ -1577,6 +1578,11 @@ function FavoritesRow({ onWatch }) {
 function TwitchShelf({ games, onStreamClick }) {
   const [streams, setStreams] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(""); // why streams couldn't be loaded, shown instead of "none live" (Added by aura-twitch-errors-setup.cjs)
+  // If asking fails (often right as AURA starts, before your login is ready), ask again soon (Added by aura-twitch-retry-setup.cjs)
+  const retries = useRef({ n: 0, timer: null });
+  const fetchRef = useRef(null);
+  useEffect(() => () => clearTimeout(retries.current.timer), []);
   const favList = cleanFavs(useSettings().twitchFavs); // your favorites (Added by aura-twitch-favorites-setup.cjs)
   const customLogins = favList.map(f => f.login).join(",");
   const [showInput, setShowInput] = useState(false);
@@ -1602,13 +1608,22 @@ function TwitchShelf({ games, onStreamClick }) {
     setLoading(true);
     const gameNames = games.filter(g => g.cover).map(g => g.title).slice(0, 10);
     const userLogins = customLogins.split(",").map(s => s.trim()).filter(Boolean);
+    let ok = false;
     try {
       const res = await window.electronAPI.fetchTwitchStreams({ gameNames, userLogins });
-      if (res.success) { const mine = new Set(userLogins); setStreams([...res.streams].sort((x, y) => (mine.has(loginOf(y)) ? 1 : 0) - (mine.has(loginOf(x)) ? 1 : 0))); }
-      else setStreams([]);
-    } catch { setStreams([]); }
+      ok = !!res.success;
+      if (res.success) { const mine = new Set(userLogins); setStreams([...(res.streams || [])].sort((x, y) => (mine.has(loginOf(y)) ? 1 : 0) - (mine.has(loginOf(x)) ? 1 : 0))); setError(""); retries.current.n = 0; }
+      else { setStreams([]); setError(res.error || "The AURA server didn't send any streams."); }
+    } catch (e) { setStreams([]); setError(e?.message || "AURA couldn't ask its server for streams."); }
+    // Didn't work: try again in 5, 15 and 30 seconds, instead of waiting for the next minute (Added by aura-twitch-retry-setup.cjs)
+    if (!ok) {
+      const wait = [5000, 15000, 30000][retries.current.n];
+      clearTimeout(retries.current.timer);
+      if (wait) { retries.current.n++; retries.current.timer = setTimeout(() => { if (fetchRef.current) fetchRef.current(); }, wait); }
+    }
     setLoading(false);
   }, [games, customLogins]);
+  fetchRef.current = fetchStreams; // the retry uses the newest one
 
   useEffect(() => {
     fetchStreams();
@@ -1636,7 +1651,9 @@ function TwitchShelf({ games, onStreamClick }) {
       </div>
       {showInput&&<FavEditor favs={favList} onChange={list=>updateSettings({ twitchFavs: list })}/>}
       {streams.length === 0
-        ? <div className="twitch-empty">No live streams found. Add streamer names above to follow specific channels.</div>
+        ? error
+          ? <div className="twitch-empty twitch-err" role="alert">Couldn't load live streams: {error} <button type="button" onClick={fetchStreams}>Try again</button></div>
+          : <div className="twitch-empty">No live streams found. Add streamer names above to follow specific channels.</div>
         : (
           <div style={{position:"relative"}}>
             <button onClick={()=>scroll(-1)} style={{position:"absolute",left:16,top:"50%",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,.7)",border:"1px solid rgba(255,255,255,.15)",color:"#fff",borderRadius:"50%",width:36,height:36,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:18,backdropFilter:"blur(6px)"}}>‹</button>
@@ -1822,6 +1839,7 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
   }, [activeStream, chatOpen]);
   useEffect(() => () => { fullRef.current = false; }, []);
   const [searchQuery, setSearchQuery] = useState("");
+  const [loadError, setLoadError] = useState(""); // why streams couldn't be loaded (Added by aura-twitch-errors-setup.cjs)
   const [searchResults, setSearchResults] = useState(null);
   const [searching, setSearching] = useState(false);
   const fmtViewers = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : String(n);
@@ -1833,9 +1851,9 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
       const userLogins = customLogins.split(",").map(s => s.trim()).filter(Boolean);
       try {
         const res = await window.electronAPI.fetchTwitchStreams({ gameNames, userLogins });
-        if (res.success) setStreams(res.streams);
-        else setStreams([]);
-      } catch { setStreams([]); }
+        if (res.success) { setStreams(res.streams || []); setLoadError(""); }
+        else { setStreams([]); setLoadError(res.error || "The AURA server didn't send any streams."); } // (Added by aura-twitch-errors-setup.cjs)
+      } catch (e) { setStreams([]); setLoadError(e?.message || "AURA couldn't ask its server for streams."); }
     } else {
       setStreams([
         { id:"1", user:"shroud",     title:"Valorant ranked",     game:"VALORANT",      viewers:45231, thumbnail:"https://static-cdn.jtvnw.net/previews-ttv/live_user_shroud-440x248.jpg",     url:"https://twitch.tv/shroud" },
@@ -2053,8 +2071,14 @@ function StreamsView({ games, initialStream, onClear, onStreamChange }) {
           ) : streams.length === 0 ? (
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:200,gap:10,color:"var(--t3)"}}>
               <div style={{fontSize:36}}>📺</div>
+              {loadError ? <>
+                <div role="alert" style={{fontSize:14,fontWeight:600,color:"#ffb3c0"}}>Couldn't load live streams</div>
+                <div style={{fontSize:12,color:"var(--t2)",maxWidth:460,textAlign:"center"}}>{loadError}</div>
+                <button type="button" className="btn-gh" style={{fontSize:11,padding:"5px 12px"}} onClick={fetchStreams}>Try again</button>
+              </> : <>
               <div style={{fontSize:14,fontWeight:600,color:"var(--t2)"}}>No live streams found</div>
               <div style={{fontSize:11}}>Search for a streamer above and star them, or add games to your library</div>
+              </>}
             </div>
           ) : (
             <StreamWall streams={streams.filter(s => !favSet.has(loginOf(s)))} onWatch={updateStream}/>
@@ -3178,6 +3202,8 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
   const account=useAccount();
   const signedIn=!!(account.enabled&&account.user&&!account.user.offline);
   const soundDevices=soundTabAvailable();
+  const [tab,setTab]=useSettingsTab(); // General | Sound devices, a tab again (Added by aura-settings-sound-tab-setup.cjs)
+  const soundExtras=useMemo(()=>soundDevices?[{label:"Sound devices",desc:"Pick what you hear and talk through, and flip between favourites",where:"The Sound devices tab",keywords:"output input speakers headphones headset mic microphone favourites favorites quick switch ctrl alt s windows sound devices volume mute",go:()=>setTab("sound")}]:[],[soundDevices,setTab]);
   const cats=[
     account.enabled&&{id:"account",label:"Account"},
     {id:"appearance",label:"Appearance"},
@@ -3195,7 +3221,9 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
     onKeyDown:e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();set({windowMode:s.windowMode===mode?"maximized":mode});}}});
   return(
     <div className="sc">
-      <SettingsLayout cats={cats}>
+      {soundDevices&&<div className="set-tabs" style={{textAlign:"left"}}><SettingsTabs tab={tab} onTab={setTab}/></div>}
+      {soundDevices&&tab==="sound"?<SoundDevicesTab/>:
+      <SettingsLayout cats={cats} extras={soundExtras}>
       {account.enabled&&<SetCategory id="account" title="Account" note="Your AURA profile and signing in">
         <SetGroup id="account" title="ACCOUNT">
         <div className="ss">
@@ -3260,9 +3288,6 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       </SetCategory>
 
       <SetCategory id="sound" title="Sound & Voice" note="Your speakers and mic, AURA's sounds, and talking to AURA">
-      {soundDevices&&<SetGroup id="sound-devices" title="SOUND DEVICES" lazy defaultOpen={(()=>{try{return localStorage.getItem("aura_settings_tab")==="sound";}catch{return false;}})()/* open if Sound devices was the tab you used last */} note="Pick what you hear and talk through, and flip between favourites" keywords="output input speakers headphones headset mic microphone favourites favorites quick switch ctrl alt s windows sound devices volume mute">
-        <SoundDevicesTab/>{/* (Added by aura-sound-devices-setup.cjs) */}
-      </SetGroup>}
       <SetGroup id="sound-ui" title="SOUND">
       <div className="ss">
         <div className="ss-t">SOUND</div>
@@ -3364,7 +3389,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       </div>
       </SetGroup>
       </SetCategory>
-      </SettingsLayout>
+      </SettingsLayout>}
     </div>
   );
 }
