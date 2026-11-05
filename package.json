@@ -3,7 +3,7 @@
   "description": "Aura Gaming Hub: your games, friends, messages, calls, clips and voice commands in one launcher",
   "author": "Traylor Digital",
   "private": true,
-  "version": "1.38.2",
+  "version": "1.38.3",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
