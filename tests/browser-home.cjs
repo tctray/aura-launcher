@@ -109,8 +109,8 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
   try {
     console.log("1. Going Home and coming back");
     let app = await start();
-    await app.menu("Social");
-    await app.tab("Browser");
+    await app.menu("Web");
+    // (the Web page opens on the Browser: there are no site tabs since aura-web-page-setup.cjs)
     check("the Browser tab starts on AURA's start page", await app.startPage());
     await app.page.getByText("YouTube", { exact: true }).first().click({ timeout: 5000 });
     await app.page.waitForTimeout(500);
@@ -125,12 +125,12 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
     at = await place();
     p = await app.browserPage();
     check("on Home the Social page is hidden, not thrown away", !!at.keeper && at.keeper.display === "none" && !!p && p.mark === "the one I opened", { at, p });
-    await app.menu("Social");
+    await app.menu("Web");
     p = await app.browserPage();
     check("back on Social it is the very same page, still where you left it", !!p && p.mark === "the one I opened" && p.url === "https://www.youtube.com/" && !(await app.startPage()), p);
     check("and nothing was loaded again", (await app.page.evaluate(() => window.__loads.length)) === loadsBefore);
     for (const name of ["Library", "Home", "Settings", "Home", "Live Streams"]) await app.menu(name);
-    await app.menu("Social");
+    await app.menu("Web");
     p = await app.browserPage();
     at = await place();
     check("the same after a tour of other pages, Home twice", !!p && p.mark === "the one I opened" && (await app.page.evaluate(() => window.__loads.length)) === loadsBefore && at.keeper.display !== "none" && at.keeper.w === at.slot.w, { p, at });
@@ -182,7 +182,7 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
 
     const opensOn = async (saved) => {
       const a = await start({ aura_social_tab: "browser", ...saved });
-      await a.menu("Social");
+      await a.menu("Web");
       const result = { page: await a.browserPage(), start: await a.startPage() };
       await a.page.context().close();
       return result;

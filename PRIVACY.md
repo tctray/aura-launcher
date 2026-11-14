@@ -17,7 +17,7 @@ Most of what AURA does stays on your PC. If you create an AURA account, the thin
 - How you've set up the Messages page, including a background picture of your own.
 - Which camera, microphone and speakers you chose, the sound devices you picked in Settings > Sound devices, and your Quick Switch favourites.
 - Your music and video library in Clips > Media: the folders you added, your playlists, YouTube links you saved, and copies AURA converts so a file can play. None of it is uploaded.
-- Sign-ins and cookies for websites you open in AURA's Social browser (Instagram, X and others), kept the way any web browser keeps them.
+- Sign-ins and cookies for websites you open in AURA's Web page (Instagram, X and others), kept the way any web browser keeps them.
 
 ## What is saved to your account
 

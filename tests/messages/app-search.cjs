@@ -45,9 +45,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   console.log("3. Streaks");
   let st = await ok(A.call("friendStreaks"));
   check("both of you messaged today: a 1-day streak, counted today", JSON.stringify(st.streaks) === JSON.stringify([{ userId: USERS.B.id, days: 1, today: true }]), st);
-  // the two days before, as well
+  // the two days before, as well: one message from each of you on each day (Fixed by aura-web-page-setup.cjs; it used to pair them at random and sometimes failed)
   await w.run(null, `insert into public.messages (conversation_id, sender_id, content) select $1, u, 'gg' from unnest(array[$2::uuid, $3::uuid]) u, generate_series(1, 2) d`, [AB, USERS.A.id, USERS.B.id]);
-  await w.run(null, `with x as (select id, row_number() over (order by id) n from public.messages where content = 'gg') update public.messages m set created_at = now() - make_interval(days => ((x.n + 1) / 2)::int) from x where m.id = x.id`);
+  await w.run(null, `with x as (select id, row_number() over (partition by sender_id order by id) n from public.messages where content = 'gg') update public.messages m set created_at = now() - make_interval(days => x.n::int) from x where m.id = x.id`);
   st = await ok(A.call("friendStreaks"));
   check("three days in a row: 3", st.streaks[0]?.days === 3 && st.streaks[0]?.today === true, st);
   st = await ok(B.call("friendStreaks"));

@@ -954,6 +954,7 @@ const AppIcon = ({ name, size = 16 }) => (
 );
 
 const Ic = {
+    Web:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.6 3.8 5.6 3.8 9s-1.2 6.4-3.8 9c-2.6-2.6-3.8-5.6-3.8-9S9.4 5.6 12 3z"/></svg>, // the Web page (Added by aura-web-page-setup.cjs)
     Social:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M21 12a8 8 0 0 1-11.8 7L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01" strokeLinecap="round" strokeWidth="2.5"/></svg>,
   Clips:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/></svg>,
   Menu:()=><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>,
@@ -4142,7 +4143,22 @@ function AuraApp(){
   const recent=useMemo(()=>[...games].filter(g=>g.lastPlayed).sort((a,b)=>b.lastPlayed-a.lastPlayed).slice(0,20),[games]);
   const favs=useMemo(()=>games.filter(g=>g.favorite),[games]);
   const totalPlaytime=useMemo(()=>games.reduce((s,g)=>s+(g.totalTime||0),0),[games]);
-  const unlockedCount=useMemo(()=>Object.keys(unlockedAch).length,[unlockedAch]);
+  // Sidebar badges for Library, Favorites and Achievements: only what's new since you last opened
+  // that page, and gone once you open it. They used to show running totals that never cleared. (Added by aura-badges-social-setup.cjs)
+  const badgeIds=useMemo(()=>({library:games.map(g=>String(g.id)),favorites:favs.map(g=>String(g.id)),achievements:Object.keys(unlockedAch)}),[games,favs,unlockedAch]);
+  const [seenIds,setSeenIds]=useState(()=>{try{const v=JSON.parse(localStorage.getItem("aura_seen_badges")||"{}");return v&&typeof v==="object"?v:{};}catch{return {};}});
+  const markSeen=useCallback((keys)=>setSeenIds(prev=>{
+    const next={...prev};let changed=false;
+    for(const k of keys){const ids=badgeIds[k];const old=prev[k];if(!Array.isArray(old)||old.length!==ids.length||ids.some(id=>!old.includes(id))){next[k]=ids;changed=true;}}
+    if(!changed)return prev;
+    try{localStorage.setItem("aura_seen_badges",JSON.stringify(next));}catch{}
+    return next;
+  }),[badgeIds]);
+  // The page you're on counts as seen, including anything added while you're there
+  useEffect(()=>{ if(badgeIds[view]) markSeen([view]); },[view,badgeIds,markSeen]);
+  // The first time, start from what's already there (once AURA has loaded your games), so old totals don't show as new
+  useEffect(()=>{ const t=setTimeout(()=>{ const missing=Object.keys(badgeIds).filter(k=>!Array.isArray(seenIds[k])); if(missing.length) markSeen(missing); },6000); return ()=>clearTimeout(t); },[badgeIds,seenIds,markSeen]);
+  const newSince=(k)=>{ const seen=seenIds[k]; if(!Array.isArray(seen)) return null; const s=new Set(seen); const n=badgeIds[k].filter(id=>!s.has(id)).length; return n||null; };
   const sorts=["title","recent","plays","added"];
   const openEdit=g=>{setEditT(g);setModal("edit");};
   const openDel=g=>{setDelT(g);setModal("delete");};
@@ -4150,16 +4166,16 @@ function AuraApp(){
   // Nav items — shared between both layouts
   const navItems = [
     {id:"home",      icon:<Ic.Home/>,    label:"Home"},
-    {id:"library",   icon:<Ic.Lib/>,     label:"Library",         badge:games.length},
+    {id:"library",   icon:<Ic.Lib/>,     label:"Library",         badge:newSince("library")}, // (new since you last looked: (Added by aura-badges-social-setup.cjs))
     {id:"recent",    icon:<Ic.Clock/>,   label:"Recently Played"},
-    {id:"favorites", icon:<Ic.Heart/>,   label:"Favorites",       badge:favs.length||null},
+    {id:"favorites", icon:<Ic.Heart/>,   label:"Favorites",       badge:newSince("favorites")},
     {id:"streams",   icon:<Ic.Tv/>,      label:"Live Streams"},
-    {id:"social",    icon:<Ic.Social/>, label:"Social"},
+    {id:"social",    icon:<Ic.Web/>,    label:"Web"}, // (was "Social": it's just the browser now. The page's id stays "social" so nothing saved changes. (Added by aura-web-page-setup.cjs))
     {id:"messages",  icon:<MessagesIcon/>, label:"Messages",        badge:social.unread||null},
     {id:"clips",     icon:<Ic.Clips/>,  label:"Clips"},
     {id:"sessions",  icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>, label:"Sessions"},
     {id:"performance",icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="16" height="16"><path d="M4.5 17a8 8 0 1 1 15 0"/><path d="M12 13l4-4"/></svg>, label:"Performance"},
-    {id:"achievements",icon:<Ic.Trophy/>,label:"Achievements",    badge:unlockedCount||null},
+    {id:"achievements",icon:<Ic.Trophy/>,label:"Achievements",    badge:newSince("achievements")},
     {id:"customize", icon:<Ic.Palette/>, label:"Customize"},
     {id:"settings",  icon:<Ic.Gear/>,    label:"Settings"},
   ];
@@ -4325,7 +4341,7 @@ function AuraApp(){
 
         <div className="main">
           {view!=="streams"&&view!=="messages"&&<header className="hdr">
-            <div className="hdr-title">{heroGame ? heroGame.title : view.toUpperCase()}</div>
+            <div className="hdr-title">{heroGame ? heroGame.title : view==="social" ? "WEB" : view.toUpperCase()}</div>{/* (WEB: aura-web-page-setup.cjs) */}
             <div className="srch"><Ic.Search/><input value={srch} onChange={e=>setSrch(e.target.value)} placeholder="Search games…"/></div>
             <div className="hdr-r">
               <button className="btn-g" onClick={()=>setSort(sorts[(sorts.indexOf(sort)+1)%sorts.length])}><Ic.Sort/> Sort: {sort}</button>

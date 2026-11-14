@@ -47,7 +47,8 @@ const COMMANDS = {
 // Every page in the left panel: "open …" or "go to …"
 const PAGES = {
   home: ["home"], library: ["library"], recent: ["recently played", "recent"], favorites: ["favorites"], streams: ["live streams", "streams"],
-  social: ["social"], messages: ["messages"], clips: ["clips"], media: ["media"], sessions: ["sessions"], performance: ["performance"],
+  // (social is the Web page, which used to be called Social: Added by aura-web-page-setup.cjs)
+  social: ["web", "browser", "social"], messages: ["messages"], clips: ["clips"], media: ["media"], sessions: ["sessions"], performance: ["performance"],
   achievements: ["achievements"], customize: ["customize"], settings: ["settings"],
 };
 for (const [page, words] of Object.entries(PAGES)) for (const w of words) { COMMANDS["open " + w] = ["open", page]; COMMANDS["go to " + w] = ["open", page]; }

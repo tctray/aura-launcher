@@ -14,13 +14,13 @@ export const voiceAvailable = () =>
 const SAY = [
   ["Music and videos", "next song · previous song · pause · play · volume up · volume down · mute · unmute"],
   ["Recording", "start recording · stop recording"],
-  ["Getting around", "open, or go to, then any page on the left: home · library · recently played · favorites · live streams · social · messages · clips · media · sessions · performance · achievements · customize · settings. And show the bar"],
+  ["Getting around", "open, or go to, then any page on the left: home · library · recently played · favorites · live streams · web · messages · clips · media · sessions · performance · achievements · customize · settings. And show the bar"],
   ["Games", "launch, then a game's name from your library, like “launch Fortnite”"],
   ["Calls", "call, then a friend's name, like “call Jordan” · answer · decline · hang up · mute my mic · unmute my mic"],
   ["Messages", "message, then a friend's name, then say your message. Say “send” to send it or “cancel” to clear it. “start typing” types into the chat that's open"],
 ];
 const PAGES = {
-  home: "home", library: "library", recent: "recent", favorites: "favorites", streams: "streams", social: "social", messages: "messages",
+  home: "home", library: "library", recent: "recent", favorites: "favorites", streams: "streams", social: "social", web: "social", messages: "messages",
   clips: "clips", media: "clips", sessions: "sessions", performance: "performance", achievements: "achievements", customize: "customize", settings: "settings",
 };
 const WINDOWS_KEY = { next: "next", prev: "prev", pause: "playpause", play: "playpause", up: "up", down: "down", mute: "mute", unmute: "mute" };

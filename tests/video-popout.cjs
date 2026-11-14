@@ -111,8 +111,8 @@ check("those snippets are the only thing AURA runs in a page", runs.length > 0 &
     const only = (list, kind) => list.filter((a) => a.kind === kind);
 
     console.log("2. Leaving while a video plays with sound");
-    await menu("Social");
-    await page.getByRole("tab", { name: "Browser" }).click({ timeout: 5000 });
+    await menu("Web");
+    // (Social opens on the Browser: there are no site tabs to pick from since aura-web-page-setup.cjs)
     await page.waitForTimeout(300);
     await page.getByText("YouTube", { exact: true }).first().click({ timeout: 5000 }); // a quick link on the start page
     await page.waitForTimeout(500);
@@ -130,7 +130,7 @@ check("those snippets are the only thing AURA runs in a page", runs.length > 0 &
 
     console.log("3. Coming back");
     await forget();
-    await menu("Social");
+    await menu("Web");
     list = await asked();
     check("back on the Browser tab, the video is put back in the page", only(list, "in").length === 1 && (await page.evaluate(() => window.__video.out)) === false, list);
     await forget();
@@ -142,26 +142,20 @@ check("those snippets are the only thing AURA runs in a page", runs.length > 0 &
     await forget();
     await menu("Library");
     check("a video with no sound is left alone", only(await asked(), "out").length === 0, await asked());
-    await menu("Social");
+    await menu("Web");
     await video({ sound: true, playing: true });
     await page.locator(".popout-toggle").click({ timeout: 4000 });
     check("the button turns it off", (await page.locator(".popout-toggle").getAttribute("aria-pressed")) === "false" && (await page.evaluate(() => localStorage.getItem("aura_video_popout"))) === "0");
     await forget();
     await menu("Library");
     check("turned off: nothing pops out", only(await asked(), "out").length === 0, await asked());
-    await menu("Social");
+    await menu("Web");
     await page.locator(".popout-toggle").click({ timeout: 4000 });
     check("and on again", (await page.locator(".popout-toggle").getAttribute("aria-pressed")) === "true" && (await page.evaluate(() => localStorage.getItem("aura_video_popout"))) === "1");
 
     console.log("5. Other ways of leaving the page");
     await forget();
-    await page.getByRole("tab", { name: "Instagram" }).click({ timeout: 5000 });
-    await page.waitForTimeout(400);
-    list = await asked();
-    check("switching to another Social tab pops it out too", only(list, "out").length === 1, list);
-    await page.getByRole("tab", { name: "Browser" }).click({ timeout: 5000 });
-    await page.waitForTimeout(400);
-    check("and coming back to the Browser tab puts it back", only(await asked(), "in").length === 1, await asked());
+    // (Switching to another Social tab used to pop it out too; Social is only the Browser now: (Added by aura-web-page-setup.cjs))
     await forget();
     await page.locator('button[aria-label="Home"]').click({ timeout: 4000 });
     await page.waitForTimeout(400);
@@ -186,15 +180,6 @@ check("those snippets are the only thing AURA runs in a page", runs.length > 0 &
     await page.waitForTimeout(1900);
     check("and AURA stops checking on it", (await asked()).length === 0, await asked());
 
-    console.log("7. Only the Browser tab");
-    await menu("Social");
-    await page.getByRole("tab", { name: "X", exact: true }).click({ timeout: 5000 });
-    await page.waitForTimeout(300);
-    await page.evaluate(() => { window.__all = []; const run = HTMLElement.prototype.executeJavaScript; HTMLElement.prototype.executeJavaScript = function (...a) { window.__all.push((this.getAttribute("partition") || "")); return run.apply(this, a); }; });
-    await menu("Library");
-    await menu("Social");
-    const touched = await page.evaluate(() => window.__all);
-    check("Instagram, X and Facebook pages are never asked anything", touched.every((p) => p === "persist:social-browser"), touched);
     check("nothing crashed along the way", (await page.locator(".aura-fallback").count()) === 0, thrown);
   } finally {
     await browser.close();

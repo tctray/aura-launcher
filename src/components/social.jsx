@@ -27,10 +27,9 @@ function saveBookmarks(list) {
   try { localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(list)); } catch {}
 }
 
+// Social is just the Browser now: Instagram, X and Facebook no longer have their own tabs. Open them
+// in the Browser and bookmark them if you like; they stay signed in like before. (Added by aura-web-page-setup.cjs)
 const SITES = [
-  { id: "instagram", label: "Instagram", url: "https://www.instagram.com/" },
-  { id: "x",         label: "X",         url: "https://x.com/home" },
-  { id: "facebook",  label: "Facebook",  url: "https://www.facebook.com/" },
   { id: "browser",   label: "Browser",   url: "about:blank" }, // starts on AURA's start page
 ];
 
@@ -186,7 +185,7 @@ const Svg = ({ name, filled = false, size = 16 }) => (
 export default function SocialPage({ visible = true, onShow }) {
   const isElectron = !!window.electronAPI?.isElectron;
   const [active, setActive] = useState(() => {
-    try { return localStorage.getItem("aura_social_tab") || "instagram"; } catch { return "instagram"; }
+    try { const t = localStorage.getItem("aura_social_tab"); return SITES.some((s) => s.id === t) ? t : "browser"; } catch { return "browser"; } // (a saved site tab opens the Browser instead: (Added by aura-web-page-setup.cjs))
   });
   const [opened, setOpened] = useState(() => new Set());
   const [states, setStates] = useState({});
@@ -466,7 +465,7 @@ export default function SocialPage({ visible = true, onShow }) {
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px",
                     borderBottom: "1px solid var(--border)", background: "var(--panel)", flexShrink: 0 }}>
-        <div role="tablist" aria-label="Social sites" style={{ display: "flex", gap: 4 }}>
+        {SITES.length > 1 && <div role="tablist" aria-label="Social sites" style={{ display: "flex", gap: 4 }}>{/* (no tabs when there's only the Browser: (Added by aura-web-page-setup.cjs)) */}
           {SITES.map((s) => {
             const on = s.id === active;
             return (
@@ -480,7 +479,7 @@ export default function SocialPage({ visible = true, onShow }) {
               </button>
             );
           })}
-        </div>
+        </div>}
         <button style={{ ...tool, opacity: st.canGoBack && !showStart ? 1 : 0.4 }} onClick={back} disabled={!st.canGoBack || showStart}
                 title="Back" aria-label="Back"><Svg name="back" /></button>
         {isBrowser && (

@@ -154,7 +154,7 @@ const done = (code) => { console.log(code === 0 ? "\nall passed" : code === 3 ? 
     await fire(page, "command", { action: "media", detail: "down", said: "volume down" });
     check("“volume down” turns AURA's player down", (await page.locator(".md-now").getByLabel("Volume").inputValue()) === String(Math.round((0.8 - 0.1) * 100) / 100), await page.locator(".md-now").getByLabel("Volume").inputValue());
     console.log("4. Every page on the left");
-    for (const [detail, title] of [["recent", "Recently Played"], ["favorites", "Favorites"], ["streams", "Live Streams"], ["social", "Social"], ["sessions", "Sessions"], ["performance", "Performance"], ["achievements", "Achievements"], ["customize", "Customize"], ["home", "Home"]]) {
+    for (const [detail, title] of [["recent", "Recently Played"], ["favorites", "Favorites"], ["streams", "Live Streams"], ["social", "Web"], ["web", "Web"], ["sessions", "Sessions"], ["performance", "Performance"], ["achievements", "Achievements"], ["customize", "Customize"], ["home", "Home"]]) {
       await fire(page, "command", { action: "open", detail, said: "open " + detail });
       if ((await onPage(page)) !== title) { check(`“open ${detail}” opens ${title}`, false, await onPage(page)); break; }
     }
