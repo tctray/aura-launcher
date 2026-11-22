@@ -1,7 +1,7 @@
 <!-- Added by aura-messages-setup.cjs; updated by aura-privacy-update-setup.cjs. The same words are shown inside AURA (src/components/privacy.jsx). -->
 # AURA privacy policy
 
-Last updated November 3, 2026
+Last updated November 22, 2026
 
 ## The short version
 
@@ -48,7 +48,7 @@ Messages are protected on their way to and from AURA, but they are not end-to-en
 
 ## Calls
 
-You can call your AURA friends with your voice and, if you choose, your camera, and you can share your screen. AURA uses your microphone, camera or screen only while you're in a call and have them switched on, or while you record a clip with the camera on. Voice commands also use your microphone while you have them switched on (see Voice commands).
+You can call your AURA friends with your voice and, if you choose, your camera, and you can share your screen. AURA uses your microphone, camera or screen only while you're in a call and have them switched on, or while you record a clip with the camera on.
 
 When a call is accepted, the PCs connect to each other and the sound and picture travel between them, encrypted. They don't pass through AURA's database and they aren't recorded.
 
@@ -56,14 +56,7 @@ To connect, each PC is told the other's internet (IP) address. This happens only
 
 On a few networks PCs can't connect directly. If AURA has a relay set up for that, the encrypted call passes through it instead. The relay can't listen to it or watch it.
 
-## Voice commands
-
-Voice commands are off unless you switch them on in Settings. While they're on, AURA listens through your microphone for “Hey AURA” and its own short list of commands, using the speech recognition built into Windows, on your PC. Windows shows that the microphone is in use.
-
-What you say isn't recorded, saved or sent anywhere, including to the developer. To know which games you can start and which friends you can call or message by voice, AURA gives Windows the names of your games and friends, on your PC.
-
-When you type a message by voice (“Hey AURA, message …”), Windows turns everything you say into text, on your PC, until you say “send” or “cancel” or stop talking for 20 seconds. The text goes into the message box, and it's only sent when you say “send” or press Enter, like any message you type.
-
+<!-- (Voice commands removed by aura-voice-remove-setup.cjs) -->
 ## Sharing clips
 
 When you press Share on a clip, AURA uploads it to Catbox (catbox.moe), a free file host, and gives you a link. Anyone with the link can watch the clip, and AURA can't delete it afterwards. If Catbox isn't taking uploads, the clip goes to Litterbox, run by the same people, and is deleted after 3 days.

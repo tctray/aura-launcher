@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-const UPDATED = "November 3, 2026"; // (Updated by aura-store-setup.cjs)
+const UPDATED = "November 22, 2026"; // (Updated by aura-voice-remove-setup.cjs)
 const EMAIL = "aura.launcherofficial@gmail.com"; // support, privacy questions and account removal (Updated by aura-privacy-update-setup.cjs)
 const ISSUES = "https://github.com/tctray/aura-launcher/issues";
 
@@ -72,20 +72,13 @@ export const PRIVACY_SECTIONS = [
   {
     title: "Calls",
     body: [
-      "You can call your AURA friends with your voice and, if you choose, your camera, and you can share your screen. AURA uses your microphone, camera or screen only while you're in a call and have them switched on, or while you record a clip with the camera on. Voice commands also use your microphone while you have them switched on (see Voice commands).",
+      "You can call your AURA friends with your voice and, if you choose, your camera, and you can share your screen. AURA uses your microphone, camera or screen only while you're in a call and have them switched on, or while you record a clip with the camera on.",
       "When a call is accepted, the PCs connect to each other and the sound and picture travel between them, encrypted. They don't pass through AURA's database and they aren't recorded.",
       "To connect, each PC is told the other's internet (IP) address. This happens only after a call is accepted, and only with the people in the call. In a call with three people, a friend can add one of their own friends, so you may connect to, and share your IP address with, someone who isn't your friend. If you'd rather not, leave the call.",
       "On a few networks PCs can't connect directly. If AURA has a relay set up for that, the encrypted call passes through it instead. The relay can't listen to it or watch it.",
     ],
   },
-  {
-    title: "Voice commands",
-    body: [
-      "Voice commands are off unless you switch them on in Settings. While they're on, AURA listens through your microphone for “Hey AURA” and its own short list of commands, using the speech recognition built into Windows, on your PC. Windows shows that the microphone is in use.",
-      "What you say isn't recorded, saved or sent anywhere, including to the developer. To know which games you can start and which friends you can call or message by voice, AURA gives Windows the names of your games and friends, on your PC.",
-      "When you type a message by voice (“Hey AURA, message …”), Windows turns everything you say into text, on your PC, until you say “send” or “cancel” or stop talking for 20 seconds. The text goes into the message box, and it's only sent when you say “send” or press Enter, like any message you type.",
-    ],
-  },
+  // (Voice commands removed by aura-voice-remove-setup.cjs)
   {
     title: "Sharing clips",
     body: [

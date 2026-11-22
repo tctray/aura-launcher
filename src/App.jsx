@@ -12,7 +12,7 @@ import { AuthGate, LogoutButton, useAccount } from "./components/auth";
 import { ClipsAndMedia, MediaDock } from "./components/media"; // Clips > Media, and the mini player (Added by aura-media-player-setup.cjs)
 import { SettingsTabs, SoundDevicesTab, soundTabAvailable, useSettingsTab } from "./components/sounddevices"; // Settings > Sound devices (Added by aura-sound-devices-setup.cjs)
 import { SetCategory, SetGroup, SettingsLayout } from "./components/settingsnav"; // the Settings sidebar, search and groups (Added by aura-settings-layout-setup.cjs)
-import { VoiceSettings, VoiceSign, useVoiceCommands } from "./components/voice"; // "Hey AURA" voice commands (Added by aura-voice-setup.cjs)
+// (Voice commands removed by aura-voice-remove-setup.cjs)
 import { SeasonalLayer, SeasonalLogo, SeasonalSettings, NavAccentStyle } from "./components/seasonal"; // seasonal decorations (Added by aura-seasonal-setup.cjs)
 import { DecoratedAvatar, AvatarDecorations } from "./components/avatardecor";
 import { useCloudGames, useCloudProfile } from "./cloudsync";
@@ -3288,7 +3288,7 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
       </SetGroup>
       </SetCategory>
 
-      <SetCategory id="sound" title="Sound & Voice" note="Your speakers and mic, AURA's sounds, and talking to AURA">
+      <SetCategory id="sound" title="Sound & Voice" note="Your speakers and mic, and AURA's sounds">
       <SetGroup id="sound-ui" title="SOUND">
       <div className="ss">
         <div className="ss-t">SOUND</div>
@@ -3304,7 +3304,6 @@ function Settings({games,onReset,onImportSteam,onImportEpic,onImportXbox,onFetch
         </div>
       </div>
       </SetGroup>
-      <SetGroup id="voice" title="VOICE COMMANDS"><VoiceSettings/></SetGroup>{/* (Added by aura-voice-setup.cjs) */}
       </SetCategory>
 
       <SetCategory id="capture" title="Capture" note="Recording clips, shortcuts and your camera">
@@ -4037,8 +4036,6 @@ function AuraApp(){
       setTimeout(()=>{setLaunching(null);toast(`${game.title} launched!`);setNowPlaying(game);},2200);
     }
   },[toast,checkAchievements,unlockedAch]);
-  // "Hey AURA, launch …", "open library", music (Added by aura-voice-setup.cjs)
-  useVoiceCommands({games,play:doPlay,go:(id)=>{setView(id);setHeroGame(null);setSrch("");},toast});
 
   const doFav=useCallback(id=>{
     setGames(gs=>{
@@ -4279,7 +4276,6 @@ function AuraApp(){
         <ControllerHUD/>
         <CameraPanel settings={settings} onSettings={updateSettings}/>
         <MediaDock onOpen={()=>goTo("clips")}/>{/* (Added by aura-media-player-setup.cjs) */}
-        <VoiceSign/>{/* (Added by aura-voice-setup.cjs) */}
         <SeasonalLayer playing={!!nowPlaying}/><NavAccentStyle/>{/* seasonal decorations (Added by aura-seasonal-setup.cjs) */}
         {isRecording&&<RecordingIndicator game={recGame} elapsed={recElapsed} onStop={async()=>{ if(isQuickRecording()) stopQuickRecording(); else await window.electronAPI?.stopRecording(); setIsRecording(false);}}/>}
         <div className="tc">
@@ -4445,7 +4441,6 @@ function AuraApp(){
       <ControllerHUD/>
       <CameraPanel settings={settings} onSettings={updateSettings}/>
       <MediaDock onOpen={()=>goTo("clips")}/>{/* (Added by aura-media-player-setup.cjs) */}
-      <VoiceSign/>{/* (Added by aura-voice-setup.cjs) */}
       <SeasonalLayer playing={!!nowPlaying}/><NavAccentStyle/>{/* seasonal decorations (Added by aura-seasonal-setup.cjs) */}
       <div className="tc">
         {achToasts.map(t=>(<div key={t.id} className="ach-toast"><div className="ach-toast-icon">{t.achievement.icon}</div><div className="ach-toast-body"><div className="ach-toast-label">Achievement Unlocked!</div><div className="ach-toast-title">{t.achievement.title}</div></div></div>))}

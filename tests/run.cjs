@@ -36,8 +36,7 @@ if (fs.existsSync(path.join(sqlDir, "aura-account-delete.sql")) && fs.existsSync
 // Seasonal decorations and avatar decorations (Added by aura-seasonal-setup.cjs)
 if (fs.existsSync(path.join(ROOT, "electron", "decor.js")) && fs.existsSync(path.join(__dirname, "seasonal-decor.cjs"))) add("files", "Avatar decorations: what is saved and passed on", "seasonal-decor.cjs");
 if (fs.existsSync(path.join(sqlDir, "aura-seasonal.sql")) && fs.existsSync(path.join(__dirname, "messages", "sql-seasonal.mjs"))) add("messages", "Database rules: avatar decorations", "messages/sql-seasonal.mjs");
-// Voice commands (Added by aura-voice-setup.cjs)
-if (fs.existsSync(path.join(ROOT, "electron", "voice.js")) && fs.existsSync(path.join(__dirname, "voice.cjs"))) add("files", "Voice commands: what AURA listens for and does", "voice.cjs");
+// (Voice commands removed by aura-voice-remove-setup.cjs)
 // Choosing sound devices (Added by aura-sound-devices-setup.cjs)
 const soundFile = path.join(ROOT, "electron", "sounddevices.js");
 if (fs.existsSync(soundFile) && fs.existsSync(path.join(__dirname, "sound-devices.cjs"))) add("files", "Sound devices: switching, favourites, Quick Switch", "sound-devices.cjs", [soundFile]);
@@ -126,7 +125,6 @@ if (fs.existsSync(path.join(__dirname, "login.cjs"))) add("window", "Staying log
 if (fs.existsSync(path.join(__dirname, "release-window.cjs"))) add("window", "F9/F10 switches, and resting while hidden", "release-window.cjs"); // (Added by aura-release-fixes-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "media-player.cjs"))) add("window", "Clips > Media: playing, the mini player, playlists", "media-player.cjs"); // (Added by aura-media-player-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "sound-settings.cjs"))) add("window", "Settings > Sound devices, and the bar's sound button", "sound-settings.cjs"); // (Added by aura-sound-devices-setup.cjs)
-if (fs.existsSync(path.join(__dirname, "voice-window.cjs"))) add("window", "Settings > Voice Commands, and doing what you said", "voice-window.cjs"); // (Added by aura-voice-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "seasonal-window.cjs"))) add("window", "Seasonal decorations and avatar decorations", "seasonal-window.cjs"); // (Added by aura-seasonal-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "credits.cjs")) && fs.existsSync(path.join(ROOT, "THIRD-PARTY-NOTICES.md"))) add("window", "Credits and licenses (IGDB, FFmpeg's GPL, open-source notices)", "credits.cjs"); // (Added by aura-credits-setup.cjs)
 if (fs.existsSync(path.join(__dirname, "neon-cards.cjs"))) add("window", "Neon border on game cards", "neon-cards.cjs"); // (Added by aura-neon-cards-setup.cjs)

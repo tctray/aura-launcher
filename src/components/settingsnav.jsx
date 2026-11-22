@@ -213,7 +213,7 @@ const MORE_WORDS = {
   "ui sounds": "clicks effects sfx beeps",
   "ui sound volume": "clicks effects sfx loud quiet",
   "trailer volume": "video youtube sound loud",
-  "voice commands": "hey aura speech microphone talk speak dictation",
+  // (Voice commands removed by aura-voice-remove-setup.cjs)
   "recording screen": "capture monitor display screen clip record",
   "shortcuts": "hotkey keyboard keys alt shift",
   "also use f9 to record": "hotkey key shortcut",

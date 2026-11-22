@@ -58,14 +58,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   soundOpenWindows: () => ipcRenderer.invoke("sound:open-windows"),
   onSoundChanged: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("sound-changed", h); return () => ipcRenderer.removeListener("sound-changed", h); },
 
-  // Voice commands: Settings > Voice Commands (Added by aura-voice-setup.cjs)
-  voiceGet: () => ipcRenderer.invoke("voice:get"),
-  voiceSet: (on) => ipcRenderer.invoke("voice:set", on === true),
-  voiceGames: (titles) => ipcRenderer.invoke("voice:games", titles),
-  voiceFriends: (names) => ipcRenderer.invoke("voice:friends", names), // (Added by aura-voice-more-setup.cjs)
-  voiceKey: (key) => ipcRenderer.invoke("voice:key", key),
-  onVoiceStatus: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("voice-status", h); return () => ipcRenderer.removeListener("voice-status", h); },
-  onVoiceCommand: (cb) => { const h = (_e, d) => cb(d); ipcRenderer.on("voice-command", h); return () => ipcRenderer.removeListener("voice-command", h); },
+  // (Voice commands removed by aura-voice-remove-setup.cjs)
 
   // ── Game launching ──────────────────────────────────────────────────────────
   launchGame:          (exePath) => ipcRenderer.invoke("launch-game", exePath),
